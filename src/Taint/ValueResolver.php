@@ -193,7 +193,11 @@ final class ValueResolver
                 ? null
                 : dirname($first),
             'basename' => count($arguments) > 2 ? null : basename($first, $arguments[1] ?? ''),
-            'trailingslashit', 'plugin_dir_path' => rtrim(str_replace('\\', '/', $first), '/') . '/',
+            'trailingslashit' => rtrim(str_replace('\\', '/', $first), '/') . '/',
+            // plugin_dir_path() is trailingslashit( dirname( … ) ). Forgetting
+            // the dirname turned JETPACK__PLUGIN_DIR into '…/jetpack.php/' and
+            // took every include built from it with it.
+            'plugin_dir_path' => rtrim(str_replace('\\', '/', dirname($first)), '/') . '/',
             'untrailingslashit' => rtrim(str_replace('\\', '/', $first), '/'),
             'wp_normalize_path' => str_replace('\\', '/', $first),
             'ltrim' => count($arguments) > 2 ? null : ltrim($first, $arguments[1] ?? " \t\n\r\0\x0B"),
