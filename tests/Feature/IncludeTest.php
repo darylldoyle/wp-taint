@@ -254,3 +254,25 @@ it('traces an include-seeded finding back to its source', function (): void {
     expect($trace[0]->file)->toContain('index.php');
     expect(end($descriptions))->toContain('Reaches echo');
 });
+
+it('does not lose keyed taint when an array crosses a call boundary', function (): void {
+    // The false negative that per-key tracking introduced and that a corpus
+    // triage caught. A summary carries one taint set per parameter, not one per
+    // key, so an array handed to a function has to travel whole — and
+    // effectiveTaintOf() was reporting it clean because the taint sat in a
+    // keyed slot.
+    //
+    // Findings went down on the corpus, which is not the same as going right.
+    $result = scanTree([
+        'index.php' => <<<'PHP'
+            <?php
+            function acme_render($args) {
+                echo $args['default'];
+            }
+
+            acme_render(array('default' => $_GET['v']));
+            PHP,
+    ]);
+
+    expect(findingSignatures($result))->toBe(['wp.xss.unescaped-output@3']);
+});

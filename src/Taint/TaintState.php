@@ -189,9 +189,28 @@ final class TaintState
     /**
      * An operand's own taint plus anything written into it as a container.
      */
+    /**
+     * Everything this value carries, by any route.
+     *
+     * All three slots, including the per-key ones. Anywhere a value crosses a
+     * boundary that cannot carry keys — passed to a function, reached by a
+     * sink, handed to an include — the precise answer is unavailable and the
+     * whole of it has to travel.
+     *
+     * Leaving the keyed slots out of this was a false negative and a bad one:
+     * `wpforms_panel_field( …, [ 'default' => $this->form->post_title ] )` put
+     * the taint under one key, `effectiveTaintOf()` reported the array clean,
+     * and the flow disappeared at the call. Findings went *down* on the corpus,
+     * which is not the same as going right.
+     *
+     * Only {@see keyedTaintOf()} answers narrowly, and only a read that names a
+     * constant key may ask it.
+     */
     public function effectiveTaintOf(Operand $operand): TaintSet
     {
-        return $this->taintOf($operand)->union($this->containerTaintOf($operand));
+        return $this->taintOf($operand)
+            ->union($this->containerTaintOf($operand))
+            ->union($this->allKeyedTaintOf($operand));
     }
 
     public function containerProvenanceOf(Operand $operand): ?Provenance
