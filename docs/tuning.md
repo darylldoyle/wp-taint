@@ -204,6 +204,35 @@ cannot be refusing anything. A cheap syntactic proxy for "provably returns a
 constant", and named as one — being wrong now means staying quiet, which is the
 direction an authorization rule should fail in. Akismet: back to 0.
 
+### What Phase 2 cost
+
+Nothing, on the corpus. Like-for-like over the 48 plugins that completed in both
+runs: **851 findings before, 840 after — down 1.3%**, while adding the entire
+hook graph.
+
+That is not an accident of the gate. Following a filter cuts both ways, and the
+plugins that moved most moved *down*: WP Fastest Cache −8, WPForms −7, Jetpack
+−4, because a sanitizing callback is now credited where the dispatch used to be
+an opaque pass-through.
+
+Full corpus, all 50 plugins, no errors: 1,061 findings, **0 convergence
+warnings**.
+
+The one real increase was WP Super Cache, +9, and every one of them is a false
+positive of a kind the hook graph could only have exposed:
+
+```php
+$extra_str = apply_filters( 'supercache_filename_str', $extra_str );
+…
+// Filters above may return arbitrary data, so restrict it to a safe set of characters.
+$extra_str = preg_replace( '/[^a-zA-Z0-9_-]/', '', (string) $extra_str );
+```
+
+The flow is real — the registered callback reads the user agent — and the plugin
+defends against it correctly with an allowlist regex the engine models as a
+plain propagator. 146 sites across the corpus use that idiom. Recorded as its
+own piece of work rather than fixed here.
+
 ### Route options no longer have to be inline
 
 `register_rest_route( $ns, $route, $this->route_args() )` was counted as
