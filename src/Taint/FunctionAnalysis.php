@@ -236,6 +236,7 @@ final class FunctionAnalysis
                 }
 
                 $this->types->observe($op, $this->context->className);
+
                 $changed = $this->transfer($op) || $changed;
             }
         }
@@ -899,7 +900,7 @@ final class FunctionAnalysis
             $source = $this->registry->source($matcher);
 
             if ($source !== null && $this->sourceApplies($source, $call)) {
-                return $this->state->set(
+                return $this->writeResult(
                     $op->result,
                     $source->kinds,
                     new Provenance(
@@ -986,7 +987,7 @@ final class FunctionAnalysis
             return $this->writeResult($op->result, $cleared);
         }
 
-        return $this->state->set(
+        return $this->writeResult(
             $op->result,
             $cleared,
             new Provenance(
@@ -1070,7 +1071,7 @@ final class FunctionAnalysis
             );
         }
 
-        return $this->state->set(
+        return $this->writeResult(
             $op->result,
             $incoming,
             new Provenance(
@@ -1107,7 +1108,7 @@ final class FunctionAnalysis
         // array_keys() returns keys, so it reads the array's own taint and not
         // what element writes put into it. See transferArrayLiteral().
         if ($matcher->key() === 'function:array_keys' && $inputs !== []) {
-            return $this->state->set(
+            return $this->writeResult(
                 $op->result,
                 $this->state->taintOf($inputs[0]),
                 new Provenance(TraceVerb::Propagate, $op, $description, $inputs),
@@ -1205,7 +1206,7 @@ final class FunctionAnalysis
             return $this->writeResult($op->result, $result);
         }
 
-        return $this->state->set(
+        return $this->writeResult(
             $op->result,
             $result,
             new Provenance(

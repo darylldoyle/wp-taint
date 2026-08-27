@@ -114,20 +114,27 @@ final class CallResolver
             : $this->dispatched($direct, $dispatcher, $context, $types);
 
         if ($dispatched === []) {
-            // The callable could not be pinned down. When the dispatcher hands
-            // its callee's return back, that return is genuinely unknown and
-            // the call is dynamic — reporting it as an unmodelled function
-            // would lose the flow without even marking it imprecise. When the
-            // dispatcher returns its own input, its entry still knows the
-            // answer and nothing is lost.
-            return match ($dispatcher->returns) {
-                DispatchReturn::Own, DispatchReturn::Both => [$direct],
-                default => [CallTarget::dynamic($direct->arguments, $direct->name())],
-            };
+            // A hook with nothing registered on it returns the value it was
+            // handed, and that is a *known* answer rather than a failure to
+            // resolve — the catalogue's own propagator entry states it. Falling
+            // through to the dynamic case would turn every dispatch on a hook
+            // this scan happens not to see into an unresolved call.
+            if ($dispatcher->hook) {
+                return [$direct];
+            }
+
+            // For everything else an empty set means the callable could not be
+            // pinned down. When the dispatcher hands its callee's return back,
+            // that return is genuinely unknown and the call is dynamic —
+            // reporting it as an unmodelled function would lose the flow
+            // without even marking it imprecise.
+            return $dispatcher->returns === DispatchReturn::Own
+                ? [$direct]
+                : [CallTarget::dynamic($direct->arguments, $direct->name())];
         }
 
         $mode = match ($dispatcher->returns) {
-            DispatchReturn::Callee, DispatchReturn::Both => CallResultMode::Value,
+            DispatchReturn::Callee => CallResultMode::Value,
             DispatchReturn::CalleeArray => CallResultMode::Container,
             DispatchReturn::Own => CallResultMode::Discard,
         };
@@ -137,14 +144,9 @@ final class CallResolver
             $dispatched,
         );
 
-        // `array_filter()` and `apply_filters()` both still need their own
-        // entry to run: one because it puts the input array's taint on the
-        // result, the other because a filter with no callbacks returns the
-        // value it was handed.
-        return match ($dispatcher->returns) {
-            DispatchReturn::Own, DispatchReturn::Both => [$direct, ...$targets],
-            default => $targets,
-        };
+        // `array_filter()` and friends still need their own entry to run: it is
+        // what puts the input array's taint on the result.
+        return $dispatcher->returns === DispatchReturn::Own ? [$direct, ...$targets] : $targets;
     }
 
     /**

@@ -333,3 +333,30 @@ it('keeps element taint out of the own slot through a pass-through', function ()
 
     expect($result->findings)->toHaveCount(1);
 });
+
+it('converges when a filter is dispatched onto the variable it filters', function (): void {
+    // `$value = apply_filters( 'hook', $value )` is the commonest line in
+    // WordPress, and with several callbacks registered it is a call with
+    // several callees writing one operand. Five corpus functions stopped
+    // converging when those writes replaced each other instead of unioning.
+    $warnings = convergenceWarnings(<<<'PHP'
+        <?php
+        add_filter('acme_content', 'acme_wrap');
+        add_filter('acme_content', 'acme_escape');
+
+        function acme_wrap($value) { return '<p>' . $value . '</p>'; }
+        function acme_escape($value) { return esc_html($value); }
+
+        function acme_render() {
+            $value = $_GET['content'];
+
+            if (! empty($value)) {
+                $value = apply_filters('acme_content', $value);
+            }
+
+            return preg_replace('@<b>@', '', $value);
+        }
+        PHP);
+
+    expect($warnings)->toBe([]);
+});

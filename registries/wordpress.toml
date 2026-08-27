@@ -560,10 +560,14 @@ stored_write = true
 # and `add_filter()`. Everything after that is the ordinary dispatcher
 # machinery.
 #
-# `returns = "both"` for filters: a filter returns whatever its callbacks
-# return, but a hook with nothing registered returns the value it was handed, so
-# both have to count. Actions return nothing, so their callees' returns go
-# nowhere — they are analysed for the sinks inside them.
+# A filter returns what its *callbacks* return, not what it was handed: at
+# runtime each callback receives the previous one's output, so the original value
+# only survives when nothing is registered. Saying both could come out would
+# defeat every sanitizing filter. The nothing-registered case falls back to the
+# [[propagators]] entry for apply_filters, which is the pass-through.
+#
+# Actions return nothing, so their callees' returns go nowhere — they are
+# analysed for the sinks inside them.
 # ---------------------------------------------------------------------------
 
 [[dispatchers]]
@@ -572,7 +576,7 @@ callable = 0
 hook = true
 argument_start = 1
 mode = "rest"
-returns = "both"
+returns = "callee"
 
 [[dispatchers]]
 function = "apply_filters_ref_array"
@@ -580,7 +584,7 @@ callable = 0
 hook = true
 argument_start = 1
 mode = "spread"
-returns = "both"
+returns = "callee"
 
 [[dispatchers]]
 function = "do_action"
