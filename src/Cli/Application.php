@@ -18,10 +18,10 @@ final class Application extends ConsoleApplication
     {
         parent::__construct('wp-taint', self::VERSION);
 
-        $this->add(new ScanCommand());
-        $this->add(new DumpCfgCommand());
-        $this->add(new RegistryDumpCommand());
-        $this->add(new ExplainCommand());
+        $this->addCommand(new ScanCommand());
+        $this->addCommand(new DumpCfgCommand());
+        $this->addCommand(new RegistryDumpCommand());
+        $this->addCommand(new ExplainCommand());
 
         $this->setDefaultCommand('scan');
     }

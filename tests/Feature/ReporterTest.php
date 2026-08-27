@@ -171,3 +171,47 @@ it('reports the suppressed count so the debt stays visible', function (): void {
     expect($report)->toContain('3 findings suppressed by baseline');
     expect($report)->toContain('2 findings suppressed inline');
 });
+
+it('points at a command that exists, with the scope it needs', function (): void {
+    // The footer used to read "run with --verbose for the full path, or
+    // --explain for why", which is wrong twice: `explain` is a command rather
+    // than a scan option, so `scan --explain` fails outright, and without
+    // --scope it analyses the one file alone and calls anything clean whose
+    // taint arrives through an include or a hook.
+    $report = (new ConsoleReporter(new Ansi(false)))->render(reportableScan(), new ReportOptions());
+
+    expect($report)->not->toContain('--explain');
+    expect($report)->toContain('wp-taint explain ');
+    expect($report)->toContain('--scope=');
+
+    // The hint is a real invocation, so parse it back and run it through the
+    // same application the binary uses. A hint that stops working fails here.
+    expect($report)->toMatch('/wp-taint explain (\S+):(\d+) --scope=(\S+)/');
+    preg_match('/wp-taint explain (\S+):(\d+) --scope=(\S+)/', $report, $matches);
+
+    expect(is_file($matches[1]))->toBeTrue();
+
+    $application = new Enshrined\WpTaint\Cli\Application();
+    $application->setAutoExit(false);
+    $application->setCatchExceptions(false);
+
+    $tester = new Symfony\Component\Console\Tester\ApplicationTester($application);
+
+    $tester->run([
+        'command' => 'explain',
+        'location' => $matches[1] . ':' . $matches[2],
+        '--scope' => $matches[3],
+    ]);
+
+    expect($tester->getStatusCode())->toBe(0);
+    expect($tester->getDisplay())->toContain('Taint at this point');
+});
+
+it('omits the explain hint when there is nothing to explain', function (): void {
+    $report = (new ConsoleReporter(new Ansi(false)))->render(
+        scanCode('<?php echo esc_html( $_GET["x"] );'),
+        new ReportOptions(),
+    );
+
+    expect($report)->not->toContain('wp-taint explain');
+});

@@ -16,8 +16,19 @@ HIGH      wp.xss.unescaped-output
     sink      :47:10  echo $this->build_header( $filter );
 
   Untrusted input reaches output without HTML escaping.
-  Run with --verbose for the full path, or --explain for why.
+  Run with --verbose for the full path.
+─────────────────────────────────────────────────────────────
+  0 critical   1 high   0 medium   0 low
+  1 finding in 1 file · 18 files scanned · 0.2s
+─────────────────────────────────────────────────────────────
+
+  Why is a value tainted? Ask about the line:
+  wp-taint explain ./src/includes/class-report-renderer.php:47 --scope=./src
 ```
+
+`explain` is a command, not a scan flag, and `--scope` is not optional: without
+it the file is analysed alone, and anything whose taint arrives through an
+include or a hook comes back clean.
 
 ## Why this exists
 

@@ -32,7 +32,7 @@ final class ConsoleReporter implements Reporter
             }
         }
 
-        return $out . $this->renderSummary($result);
+        return $out . $this->renderSummary($result, $options);
     }
 
     private function renderFinding(Finding $finding, ReportOptions $options): string
@@ -100,7 +100,7 @@ final class ConsoleReporter implements Reporter
             ) . "\n";
         }
 
-        $out .= '  ' . $this->ansi->dim('Run with --verbose for the full path, or --explain for why.') . "\n";
+        $out .= '  ' . $this->ansi->dim('Run with --verbose for the full path.') . "\n";
 
         return $out;
     }
@@ -210,7 +210,7 @@ final class ConsoleReporter implements Reporter
         return $out;
     }
 
-    private function renderSummary(ScanResult $result): string
+    private function renderSummary(ScanResult $result, ReportOptions $options): string
     {
         $counts = $result->findings->countsBySeverity();
         $rule = str_repeat('─', 61);
@@ -273,7 +273,37 @@ final class ConsoleReporter implements Reporter
             $out .= '  ' . $this->ansi->red('warning: ' . $warning->message) . "\n";
         }
 
-        return $out . $rule . "\n";
+        return $out . $rule . "\n" . $this->renderExplainHint($result, $options);
+    }
+
+    /**
+     * How to ask why, spelled out with a location that exists.
+     *
+     * This used to read "run with --verbose for the full path, or --explain for
+     * why", which is wrong twice over: `explain` is a command rather than an
+     * option, so `scan --explain` fails outright, and it needs `--scope` or it
+     * analyses the one file alone and reports clean on anything whose taint
+     * arrives through an include or a hook.
+     *
+     * So the hint is built from the first finding rather than described. A
+     * command someone can paste cannot be wrong about its own syntax.
+     */
+    private function renderExplainHint(ScanResult $result, ReportOptions $options): string
+    {
+        $findings = $result->findings->all();
+        $first = $findings[0] ?? null;
+
+        if ($first === null || $options->verbose) {
+            return '';
+        }
+
+        return "\n" . $this->ansi->dim('  Why is a value tainted? Ask about the line:') . "\n"
+            . $this->ansi->dim(sprintf(
+                "  wp-taint explain %s:%d --scope=%s",
+                rtrim($result->root, '/') . '/' . ltrim($first->file, '/'),
+                $first->line,
+                $result->root,
+            )) . "\n";
     }
 
     private function wrap(string $text, int $width, string $indent): string
