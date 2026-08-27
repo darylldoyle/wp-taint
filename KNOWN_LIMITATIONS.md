@@ -174,15 +174,48 @@ could not be resolved" count so the gap stays visible.
 
 ### An unmodelled function returns clean
 
-A call to something the catalogue does not know and the scan cannot see —
-a function from another plugin, a Composer dependency outside the scan path —
+A call to something the catalogue does not know and the scan cannot see — a
+function from another plugin, a Composer dependency outside the scan path —
 returns untainted.
 
 Treating unknown returns as tainted would be correct and unusable: every
 `wp_something()` not yet in the registry would light up.
 
-**Direction:** under-approximating. The fix is to add the function to the
-registry, which is a TOML edit, not a code change.
+**Direction:** under-approximating. Two fixes: add the function to the registry,
+which is a TOML edit rather than a code change; or point `--include-path` at the
+tree it lives in.
+
+### `--include-path` is powerful, and not yet tuned
+
+```bash
+wp-taint scan ./src --include-path=./vendor --include-path=/path/to/wordpress
+```
+
+Files under an include path are parsed and summarised so their symbols exist and
+their taint behaviour is known, but findings inside them are never reported —
+neither dataflow nor structural, because a missing `permission_callback` in
+WordPress core is not your bug.
+
+Pointing it at a Composer dependency is straightforwardly useful. **Pointing it
+at WordPress core is a much larger change than it looks**, and has not had the
+triage pass the rest of the engine has had. Measured across four small plugins,
+findings went from 10 to 38.
+
+Some of that is real: core knowledge turns documented false negatives into
+findings, which is the point. Some is not. Two mechanisms found so far:
+
+- A learned summary can be technically sound and practically useless. `_n()`
+  ends in `apply_filters( 'ngettext', $translation, $single, $plural, $number )`,
+  so with the hook graph following that filter the *number* can reach the
+  return. Fixed by cataloguing the translation family, whose hand-written entry
+  wins over the learned one.
+- Property keys collide at scale. The property map falls back to matching by
+  property *name* across classes when a class-keyed lookup misses — a pragmatic
+  fix for traits — and loading 786 core files makes name collisions far more
+  likely.
+
+So: use it against your dependencies, and expect to spend time on a baseline if
+you point it at core. It is off unless you ask for it.
 
 ### References are followed
 

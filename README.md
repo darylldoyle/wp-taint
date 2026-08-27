@@ -107,6 +107,7 @@ wp-taint scan <paths...>
   --no-structural-rules
   --dynamic-calls=POLICY           clean | propagate (default) | tainted
   --no-follow-includes
+  --include-path=PATH              analyse for symbols, never report (repeatable)
   --exclude=GLOB                   repeatable
   --jobs=N                         worker processes (default 1; needs pcntl)
   --parse-report
