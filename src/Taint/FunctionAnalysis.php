@@ -74,6 +74,46 @@ final class FunctionAnalysis
      */
     private CallResultMode $resultMode = CallResultMode::Value;
 
+    /**
+     * Pairs of operands that name the same storage.
+     *
+     * `$a = &$b` and `foreach ( $x as &$v )` both make two names for one slot
+     * for the rest of the function, and SSA has no way to say so — it versions
+     * assignments, not aliases. Rather than teach every write about aliasing,
+     * each pass ends by unioning taint across the pairs.
+     *
+     * @var list<array{0: Operand, 1: Operand, 2: bool}> the two operands, and whether the link is into the
+     *                                                   element slot rather than the value
+     */
+    private array $aliases = [];
+
+    /** Set when a pair is discovered, so the pass that found it reports a change. */
+    private bool $aliasChanged = false;
+
+    /**
+     * Every named operand in the body, grouped by variable name.
+     *
+     * An alias binds a *variable*, not one SSA version of it. `foreach ( $x as
+     * &$v )` lowers to an `AssignRef` onto `$v`, and the `$v = …` inside the
+     * loop writes a different version; without grouping by name the link breaks
+     * at exactly the write that matters.
+     *
+     * Over-approximate by construction — a name aliased anywhere is treated as
+     * aliased throughout the function — and contained, because PHP variables
+     * are function-scoped anyway.
+     *
+     * @var array<string, list<Operand>>
+     */
+    private array $operandsByName = [];
+
+    /**
+     * Iterator values bound by reference, paired with the collection they write
+     * back into. Consumed by the `AssignRef` that names the loop variable.
+     *
+     * @var list<array{0: Operand, 1: Operand}>
+     */
+    private array $writesBackInto = [];
+
     private TraceBuilder $traces;
 
     /** @var list<Block> */
@@ -242,7 +282,155 @@ final class FunctionAnalysis
             }
         }
 
+        return $this->mergeAliases() || $changed;
+    }
+
+    /**
+     * Make every alias pair agree.
+     *
+     * Run once at the end of each pass rather than at each write, because the
+     * two halves of an alias are written by ops that may be blocks apart and
+     * neither knows about the other. Only ever grows, so it converges along with
+     * everything else.
+     */
+    private function mergeAliases(): bool
+    {
+        $changed = $this->aliasChanged;
+        $this->aliasChanged = false;
+
+        foreach ($this->aliases as [$left, $right, $intoContainer]) {
+            if ($intoContainer) {
+                // Every SSA version of the bound variable, because the write
+                // that matters — `$v = …` inside the loop — is a fresh version
+                // that the binding itself never mentions.
+                foreach ($this->versionsOf($left) as $value) {
+                    $changed = $this->mergeElementAlias($value, $right) || $changed;
+                }
+
+                continue;
+            }
+
+            $changed = $this->mergeOperandAlias($left, $right) || $changed;
+        }
+
         return $changed;
+    }
+
+    /**
+     * Every SSA version of the variable an operand names, or just the operand
+     * when it has no name.
+     *
+     * @return list<Operand>
+     */
+    private function versionsOf(Operand $operand): array
+    {
+        $name = OperandHelper::variableName($operand);
+
+        if ($name === null) {
+            return [$operand];
+        }
+
+        if ($this->operandsByName === []) {
+            $this->indexOperandsByName();
+        }
+
+        return $this->operandsByName[$name] ?? [$operand];
+    }
+
+    private function indexOperandsByName(): void
+    {
+        foreach ($this->blocks as $block) {
+            foreach ($block->children as $op) {
+                if (! $op instanceof Op) {
+                    continue;
+                }
+
+                foreach (OperandHelper::operandsOf($op) as $operand) {
+                    $name = OperandHelper::variableName($operand);
+
+                    if ($name === null) {
+                        continue;
+                    }
+
+                    if (! in_array($operand, $this->operandsByName[$name] ?? [], true)) {
+                        $this->operandsByName[$name][] = $operand;
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * A loop variable bound by reference is one element of the collection: what
+     * it holds belongs in the element slot, and what the collection holds comes
+     * back out of it.
+     */
+    private function mergeElementAlias(Operand $value, Operand $collection): bool
+    {
+        $held = $this->state->effectiveTaintOf($value);
+
+        if ($held->isEmpty()) {
+            return false;
+        }
+
+        $provenance = $this->state->provenanceOf($value)
+            ?? $this->state->containerProvenanceOf($value);
+
+        if ($provenance === null) {
+            return false;
+        }
+
+        // One way only. The collection's element slot is never *set* by
+        // anything — writes into it all go through addContainerTaint, which
+        // grows — so adding here cannot start a fight. Pushing back the other
+        // way would, because an ordinary assignment to the loop variable owns
+        // that operand and would reset it every pass.
+        return $this->state->addContainerTaint($collection, $held, $provenance);
+    }
+
+    /**
+     * `$a = &$b`: one slot under two names, both halves.
+     */
+    private function mergeOperandAlias(Operand $left, Operand $right): bool
+    {
+        $changed = false;
+        $own = $this->state->taintOf($left)->union($this->state->taintOf($right));
+
+        if (! $own->isEmpty()) {
+            $provenance = $this->state->provenanceOf($left) ?? $this->state->provenanceOf($right);
+            $changed = $this->state->add($left, $own, $provenance);
+            $changed = $this->state->add($right, $own, $provenance) || $changed;
+        }
+
+        $elements = $this->state->containerTaintOf($left)->union($this->state->containerTaintOf($right));
+
+        if (! $elements->isEmpty()) {
+            $provenance = $this->state->containerProvenanceOf($left)
+                ?? $this->state->containerProvenanceOf($right);
+
+            if ($provenance !== null) {
+                $changed = $this->state->addContainerTaint($left, $elements, $provenance) || $changed;
+                $changed = $this->state->addContainerTaint($right, $elements, $provenance) || $changed;
+            }
+        }
+
+        return $changed;
+    }
+
+    /**
+     * Record that two operands name one slot. Idempotent: `pass()` walks the
+     * same ops on every iteration.
+     */
+    private function alias(Operand $left, Operand $right, bool $intoContainer): void
+    {
+        foreach ($this->aliases as [$a, $b, $c]) {
+            if ($a === $left && $b === $right && $c === $intoContainer) {
+                return;
+            }
+        }
+
+        $this->aliases[] = [$left, $right, $intoContainer];
+        $this->aliasChanged = true;
     }
 
     /**
@@ -351,11 +539,7 @@ final class FunctionAnalysis
                 $op->expr,
                 'Cast to a string keeps the value intact.',
             ),
-            $op instanceof Op\Iterator\Value => $this->transferContainerRead(
-                $op,
-                $op->var,
-                'Iterating a tainted collection yields tainted values.',
-            ),
+            $op instanceof Op\Iterator\Value => $this->transferIteratorValue($op),
             // Keys, not values: `foreach ( $_GET as $k => $v )` has an
             // attacker-controlled key, but `foreach ( $rows as $k => $v )` after
             // `$rows[$i] = $tainted` does not.
@@ -386,6 +570,22 @@ final class FunctionAnalysis
 
     private function transferAssign(Op\Expr\Assign|Op\Expr\AssignRef $op): bool
     {
+        if ($op instanceof Op\Expr\AssignRef) {
+            // `$a = &$b` is not a copy. From here on the two names are one
+            // slot, and a later write through either has to be visible through
+            // the other.
+            $this->alias($op->var, $op->expr, false);
+
+            // `foreach ( $x as &$v )` lowers to an AssignRef binding `$v` to the
+            // iterator's value, so this is where the loop variable gets its
+            // name. Link every version of it into the collection.
+            foreach ($this->writesBackInto as [$value, $collection]) {
+                if ($value === $op->expr) {
+                    $this->alias($op->var, $collection, true);
+                }
+            }
+        }
+
         $value = $op->expr;
         $taint = $this->state->taintOf($value);
 
@@ -396,8 +596,15 @@ final class FunctionAnalysis
             [$value],
         );
 
-        $changed = $this->state->set($op->var, $taint, $provenance);
-        $changed = $this->state->set($op->result, $taint, $provenance) || $changed;
+        // `$a = &$b` binds rather than copies, so it unions like the alias
+        // merge does. Setting would undo what the merge added and the two would
+        // take turns forever.
+        $changed = $op instanceof Op\Expr\AssignRef
+            ? $this->state->add($op->var, $taint, $provenance)
+            : $this->state->set($op->var, $taint, $provenance);
+        $changed = ($op instanceof Op\Expr\AssignRef
+            ? $this->state->add($op->result, $taint, $provenance)
+            : $this->state->set($op->result, $taint, $provenance)) || $changed;
 
         // `$a = $b` where `$b` is an array with taint written into its elements
         // has to carry that across, or the taint is lost at the assignment.
@@ -511,6 +718,26 @@ final class FunctionAnalysis
      * A read out of a container: its own taint plus anything written into it
      * through an element.
      */
+    /**
+     * `foreach ( $items as $item )`, and `foreach ( $items as &$item )`.
+     *
+     * Reading the collection either way. Bound by reference, the loop variable
+     * is also a *write* into the collection — `$item = $_GET['x']` taints
+     * `$items` — which the alias pass carries back.
+     */
+    private function transferIteratorValue(Op\Iterator\Value $op): bool
+    {
+        if ($op->byRef) {
+            $this->writesBackInto[] = [$op->result, $op->var];
+        }
+
+        return $this->transferContainerRead(
+            $op,
+            $op->var,
+            'Iterating a tainted collection yields tainted values.',
+        );
+    }
+
     private function transferContainerRead(Op\Expr $op, Operand $container, string $description): bool
     {
         // A read out of a container flattens both slots: the value that comes
