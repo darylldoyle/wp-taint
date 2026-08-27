@@ -48,6 +48,10 @@ Calls are followed through the value that names them: a callable in a variable,
 `add_filter()` that reads `$_GET` taints the filter's result at every
 `apply_filters()` site; one that escapes is credited.
 
+Writes that go back through an argument are followed too — `preg_match()` into
+`$matches`, `parse_str()` into an array, a user function's `&$out` parameter, and
+the aliases created by `$a = &$b` and by-reference `foreach`.
+
 **Broken authorization**, via structural rules, which taint analysis
 structurally cannot find:
 

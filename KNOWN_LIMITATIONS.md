@@ -169,20 +169,38 @@ Treating unknown returns as tainted would be correct and unusable: every
 **Direction:** under-approximating. The fix is to add the function to the
 registry, which is a TOML edit, not a code change.
 
-### References are not aliased
+### References are followed
 
 ```php
 function fill( array &$out ) { $out[] = $_GET['x']; }
 
 $values = [];
 fill( $values );
-echo $values[0];   // not reported
+echo $values[0];                          // reported
+
+preg_match( '/(\d+)/', $_GET['q'], $m );  // reported
+parse_str( $_SERVER['QUERY_STRING'], $q ); // reported
+
+$sink = &$values;                          // aliased
+foreach ( $items as &$item ) { … }         // aliased
 ```
 
-By-reference parameters are analysed as ordinary parameters. The write to the
-caller's variable is not modelled.
+Three mechanisms. A `[[byref]]` catalogue section covers the built-ins that
+write through an argument. `FunctionSummary` carries `paramToParam` and
+`sourcesToParam`, so a user function's out-parameters are applied back onto the
+caller's arguments — the first intersected with what the caller actually passed,
+so a parameter that only ever carries HTML does not hand back SQL. And an alias
+pass unions taint across the pairs that `$a = &$b` and by-reference `foreach`
+create.
 
-**Direction:** under-approximating.
+Everything here only ever *adds*. SSA gives a by-reference write no operand of
+its own, so the caller's argument is the slot, shared with whatever else writes
+that variable; only growing keeps the fixed point monotone.
+
+**Direction:** over-approximating, in two places. A call that genuinely
+overwrites its argument with something clean cannot be modelled as clearing it.
+And a variable aliased anywhere in a function is treated as aliased throughout
+it, rather than only after the binding.
 
 ### `wp_json_encode()` context-sensitivity is approximated
 
