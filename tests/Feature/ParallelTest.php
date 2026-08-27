@@ -94,6 +94,26 @@ function parallelFixtureTree(): string
         function acme_b() { update_option('acme', $_POST['v']); }
         PHP);
 
+    // One property written from four different methods. Shards are assigned by
+    // position in the sorted function list, so these land in different workers
+    // at every job count above one — which is what it takes to expose an origin
+    // trace chosen by "whichever arrived first". Elementor hit this in the wild:
+    // the same finding came back with a seven-step trace at --jobs=1 and a
+    // five-step one at --jobs=2.
+    file_put_contents($directory . '/store.php', <<<'PHP'
+        <?php
+        class AcmeStore
+        {
+            private $slug;
+
+            public function fromQuery() { $this->slug = $_GET['slug']; }
+            public function fromPost() { $this->slug = $_POST['slug']; }
+            public function fromRequest() { $this->slug = $_REQUEST['slug']; }
+            public function fromServer() { $this->slug = $_SERVER['QUERY_STRING']; }
+            public function show() { echo $this->slug; }
+        }
+        PHP);
+
     return $directory;
 }
 

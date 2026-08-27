@@ -62,6 +62,88 @@ where flattening belongs.
 **Every corpus function now converges.** Eleven plugins were affected; the last
 two were Jetpack and WooCommerce.
 
+## Following the value that names the call
+
+The largest remaining source of false negatives was not a bug but a refusal:
+the engine stopped at every indirection. WordPress routes an enormous amount of
+control flow through a callable in a variable, so that is precisely where the
+interesting flows were.
+
+What now resolves: a callable that traces back to a literal, a phi of literals,
+or a concatenation of resolvable parts; `array( $object, 'method' )` and
+`array( 'Class', 'method' )`; a closure; an object with `__invoke`; and
+`new $class()`. Dispatchers — `call_user_func()`, `array_map()`, `usort()` and
+the rest — resolve to their callee rather than to themselves, declared as data
+under `[[dispatchers]]` so a project can add its own.
+
+Two decisions worth recording.
+
+**A callable that resolves to several names reaches all of them.** Picking one
+would be a guess. Both are analysed and the effects unioned, so a sink in either
+is reported and a flow is proved safe only when *every* callee escapes it.
+
+**A name nobody can find a body for counts as unresolved.** Resolving
+`'render_a'` to a function that exists in neither the catalogue nor the scanned
+code, and then reporting it clean, would lose the flow without even marking it
+imprecise — strictly worse than admitting defeat.
+
+### What the default costs
+
+`--dynamic-calls` replaced `--assume-dynamic-tainted` with three settings, and
+the default moved to `propagate`. Measured on Duplicator, the corpus plugin with
+the most unresolved calls:
+
+| `--dynamic-calls` | Findings |
+| --- | --- |
+| `clean` | 92 |
+| `propagate` *(default)* | 96 |
+| `tainted` | 170 |
+
+Four extra findings for the default, against eighty-five for the pessimistic
+upper bound. On four smaller plugins the delta between `clean` and `propagate`
+was zero. The resolution work is what made the default affordable: the calls
+still unresolved after it are mostly ones whose return value never reaches a
+sink.
+
+Across the whole corpus the total fell from 1,046 findings to **851**, because
+resolving a dispatcher cuts both ways: `array_map( 'esc_html', $items )` and
+`call_user_func( 'esc_html', $v )` are now real sanitizer applications rather
+than opaque calls. The fixture suite stayed at 100% on both halves throughout,
+so none of that was bought with false negatives.
+
+Findings resting on an assumption are counted: 395 of the 851 carry
+`imprecise`. That is not 395 guesses — the flag marks any finding in a function
+where the engine lost the thread anywhere, so it is an upper bound on doubt
+rather than a measure of it.
+
+## Determinism across `--jobs`, again
+
+Elementor reported the same finding with a seven-step trace at `--jobs=1` and a
+five-step one at `--jobs=2`.
+
+`PropertyTaintMap` kept the *first* origin trace recorded for a property, on the
+reasoning that writes are visited in a fixed order. True within one worker.
+Across workers, a property written in two places has those writes split between
+shards, so which arrives first depends on the worker count.
+
+The obvious fix — keep the longest trace, since it explains most — does not
+terminate:
+
+```php
+$this->value = $this->value . $i;   // inside a loop
+```
+
+The origin trace for `$value` splices in its own previous origin, so it grows by
+a step every interprocedural round. "Longest wins" never reaches a fixed point.
+
+The rule is the lexicographically smallest signature instead. Total, so the
+choice cannot depend on arrival order; and stable, because a trace that extends
+another sorts after it and so can never displace the one already chosen.
+
+Worth recording that the parallel test suite passed throughout. Its fixture was
+too small to split a property's writes across two shards, which is exactly the
+condition the bug needed.
+
 ## Six false positive classes
 
 Ordered by how many findings each accounted for.

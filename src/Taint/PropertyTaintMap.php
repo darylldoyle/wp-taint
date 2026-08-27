@@ -122,11 +122,8 @@ final class PropertyTaintMap
 
         $key = self::key($class, $property);
 
-        // Keep the first origin recorded for a property. Writes are visited in
-        // a fixed order, so this is deterministic; taking the newest would
-        // change with whichever round the write happened to land in.
-        if ($origin !== [] && ! isset($this->origins[$key])) {
-            $this->origins[$key] = $origin;
+        if ($origin !== []) {
+            $this->origins[$key] = self::preferredOrigin($this->origins[$key] ?? [], $origin);
         }
         $existing = $this->taint[$key] ?? TaintSet::empty();
         $merged = $existing->union($taint);
@@ -143,9 +140,9 @@ final class PropertyTaintMap
     /**
      * Fold another map into this one.
      *
-     * Used to merge what each `--jobs` worker recorded. Both halves only ever
-     * grow, so the merge is a union and the order it happens in cannot change
-     * the result.
+     * Used to merge what each `--jobs` worker recorded. Every half only ever
+     * grows and the origin tie-break is total, so the order the merge happens
+     * in cannot change the result.
      */
     public function mergeFrom(self $other): bool
     {
@@ -159,8 +156,16 @@ final class PropertyTaintMap
         }
 
         foreach ($other->origins as $key => $origin) {
-            if (! isset($this->origins[$key])) {
-                $this->origins[$key] = $origin;
+            $current = $this->origins[$key] ?? [];
+            $preferred = self::preferredOrigin($current, $origin);
+
+            // By signature, never by identity. Two workers analysing the same
+            // write produce equal traces made of *different* TraceStep objects,
+            // and `!==` on arrays of objects compares those by identity — so
+            // every round would report a change and the fixed point would never
+            // settle.
+            if (self::signature($preferred) !== self::signature($current)) {
+                $this->origins[$key] = $preferred;
                 $changed = true;
             }
         }
@@ -176,6 +181,58 @@ final class PropertyTaintMap
         }
 
         return $changed;
+    }
+
+    /**
+     * Which of two traces for the same property to keep.
+     *
+     * "Whichever arrived first" is the obvious rule and it is wrong: a property
+     * written in two places has its writes split across `--jobs` shards, so
+     * which one arrives first depends on the worker count. Elementor's
+     * `Base::$path` produced a seven-step trace at `--jobs=1` and a five-step
+     * one at `--jobs=2` — the same finding, explained less well, for no reason
+     * the reader could see.
+     *
+     * The rule is the lexicographically smallest signature. Not the longest,
+     * which is what the finding dedup prefers and what the reader would rather
+     * read: `$this->value = $this->value . $i` in a loop grows its own origin
+     * by a step every round, so "longest wins" never reaches a fixed point and
+     * the interprocedural loop runs to its cap.
+     *
+     * Smallest is stable. A trace that extends another sorts after it, so a
+     * later, longer origin cannot displace the one already chosen, and the
+     * choice is the same however the writes were sharded.
+     *
+     * @param list<TraceStep> $current
+     * @param list<TraceStep> $candidate
+     *
+     * @return list<TraceStep>
+     */
+    private static function preferredOrigin(array $current, array $candidate): array
+    {
+        if ($current === []) {
+            return $candidate;
+        }
+
+        if ($candidate === []) {
+            return $current;
+        }
+
+        return self::signature($current) <= self::signature($candidate) ? $current : $candidate;
+    }
+
+    /**
+     * @param list<TraceStep> $origin
+     */
+    private static function signature(array $origin): string
+    {
+        $parts = [];
+
+        foreach ($origin as $step) {
+            $parts[] = implode(':', [$step->file, (string) $step->line, (string) $step->column, $step->description]);
+        }
+
+        return implode("\0", $parts);
     }
 
     private static function key(?string $class, string $property): string
