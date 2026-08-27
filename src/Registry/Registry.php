@@ -25,6 +25,7 @@ final class Registry
      * @param array<string, SafeCall>     $safeCalls
      * @param array<string, Dispatcher>   $dispatchers
      * @param array<string, ByRefEffect>  $byRef         calls that write back through an argument
+     * @param array<string, TemplateLoader> $templates   calls that load a theme template by name
      * @param list<string>                $authorization matcher identities that check a capability or a nonce
      * @param array<string, RuleMetadata> $rules
      * @param list<string>                $safeDatabaseIdentifiers
@@ -38,6 +39,7 @@ final class Registry
         private readonly array $safeCalls,
         private readonly array $dispatchers,
         private readonly array $byRef,
+        private readonly array $templates,
         private readonly array $authorization,
         private readonly array $rules,
         private readonly array $safeDatabaseIdentifiers,
@@ -78,6 +80,22 @@ final class Registry
     public function dispatchers(): array
     {
         return $this->dispatchers;
+    }
+
+    /**
+     * The template this call loads, if it loads one by name.
+     */
+    public function templateLoader(Matcher $matcher): ?TemplateLoader
+    {
+        return $this->templates[$matcher->key()] ?? null;
+    }
+
+    /**
+     * @return array<string, TemplateLoader>
+     */
+    public function templateLoaders(): array
+    {
+        return $this->templates;
     }
 
     /**
@@ -266,6 +284,7 @@ final class Registry
             $this->safeCalls,
             $this->dispatchers,
             $this->byRef,
+            $this->templates,
             $this->authorization,
             $this->rules,
             $this->safeDatabaseIdentifiers,
@@ -288,6 +307,7 @@ final class Registry
             $this->safeCalls,
             $this->dispatchers,
             $this->byRef,
+            $this->templates,
             $this->authorization,
             $this->rules,
             $this->safeDatabaseIdentifiers,

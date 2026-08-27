@@ -7,6 +7,7 @@ namespace Enshrined\WpTaint\Cfg;
 use Enshrined\WpTaint\Support\PathHelper;
 use Enshrined\WpTaint\Taint\ValueResolver;
 use PHPCfg\Op;
+use PHPCfg\Operand;
 
 /**
  * Works out which file an `include` or `require` actually loads.
@@ -79,7 +80,17 @@ final class IncludeResolver
      */
     public function resolve(Op\Expr\Include_ $op, string $includingFile): array
     {
-        $candidates = $this->values->strings($op->expr);
+        return $this->resolvePath($op->expr, $includingFile);
+    }
+
+    /**
+     * The files a path operand can name.
+     *
+     * @return list<string>
+     */
+    public function resolvePath(Operand $path, string $includingFile): array
+    {
+        $candidates = $this->values->strings($path);
 
         if ($candidates === [] || count($candidates) > self::MAX_TARGETS) {
             return [];
@@ -89,8 +100,73 @@ final class IncludeResolver
         $resolved = [];
 
         foreach ($candidates as $candidate) {
-            foreach ($this->expand($candidate, $base) as $path) {
-                if (isset($this->known[$path]) && ! in_array($this->known[$path], $resolved, true)) {
+            foreach ($this->expand($candidate, $base) as $absolute) {
+                if (isset($this->known[$absolute]) && ! in_array($this->known[$absolute], $resolved, true)) {
+                    $resolved[] = $this->known[$absolute];
+                }
+            }
+        }
+
+        sort($resolved);
+
+        return $resolved;
+    }
+
+    /**
+     * Candidate files for `get_template_part( $slug, $name )`.
+     *
+     * WordPress tries `{$slug}-{$name}.php` and then `{$slug}.php`, searching
+     * the child theme before the parent. Only the shapes present in the scan
+     * matter, so both candidates are offered and whichever exists wins — a
+     * theme that ships only the general template still resolves.
+     *
+     * A slug that will not fold to a string returns nothing, and the caller
+     * records the site as unresolved rather than guessing at a filename.
+     *
+     * @param list<string> $slugs
+     * @param list<string> $names
+     *
+     * @return list<string>
+     */
+    public function resolveTemplate(array $slugs, array $names, string $callingFile): array
+    {
+        if ($slugs === []) {
+            return [];
+        }
+
+        $candidates = [];
+
+        foreach ($slugs as $slug) {
+            $slug = trim($slug, '/');
+
+            if ($slug === '') {
+                continue;
+            }
+
+            // The variant first, exactly as the template hierarchy orders it.
+            foreach ($names as $name) {
+                $name = trim($name);
+
+                if ($name !== '') {
+                    $candidates[] = $slug . '-' . $name . '.php';
+                }
+            }
+
+            $candidates[] = $slug . '.php';
+        }
+
+        if (count($candidates) > self::MAX_TARGETS) {
+            return [];
+        }
+
+        $base = dirname($callingFile);
+        $resolved = [];
+
+        foreach ($candidates as $candidate) {
+            foreach ($this->themeRoots($base) as $root) {
+                $path = realpath($root . '/' . $candidate);
+
+                if ($path !== false && isset($this->known[$path]) && ! in_array($this->known[$path], $resolved, true)) {
                     $resolved[] = $this->known[$path];
                 }
             }
@@ -99,6 +175,44 @@ final class IncludeResolver
         sort($resolved);
 
         return $resolved;
+    }
+
+    /**
+     * Directories a template slug could be relative to.
+     *
+     * A template path is relative to the theme root, which is not necessarily
+     * the scan root — someone scanning a whole `wp-content` has several. Walking
+     * up from the calling file to the nearest directory holding `style.css` or
+     * `functions.php` finds it; the scan root and the calling file's own
+     * directory are offered as well, because a theme under analysis is often
+     * scanned directly and a partial often sits beside its caller.
+     *
+     * @return list<string>
+     */
+    private function themeRoots(string $base): array
+    {
+        $roots = [$base];
+        $directory = $base;
+
+        for ($depth = 0; $depth < 8; $depth++) {
+            if (is_file($directory . '/style.css') || is_file($directory . '/functions.php')) {
+                $roots[] = $directory;
+
+                break;
+            }
+
+            $parent = dirname($directory);
+
+            if ($parent === $directory || ! str_starts_with($parent, $this->projectRoot)) {
+                break;
+            }
+
+            $directory = $parent;
+        }
+
+        $roots[] = $this->projectRoot;
+
+        return array_values(array_unique($roots));
     }
 
     /**

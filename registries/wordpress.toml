@@ -701,6 +701,53 @@ args = [0, 1]
 function = "translate_nooped_plural"
 arg = 0
 
+# ---------------------------------------------------------------------------
+# Template loading.
+#
+# `get_template_part( 'parts/content', get_post_type(), [ 'title' => $title ] )`
+# is the idiomatic form in a theme, and the shape a theme-heavy codebase is made
+# of. Following `include` covers a plugin; this covers the other half.
+#
+# **Not an include.** A plain include shares the includer's entire variable
+# scope; these go through load_template(), so the template body sees globals and
+# the $args array and *not* the caller's locals. Modelling them as includes would
+# connect every variable in the calling file to every template it loads, which
+# would manufacture findings in exactly the files a theme puts its output in.
+#
+# `slug` is fixed where the function has no slug argument: get_header( 'shop' )
+# loads header-shop.php, falling back to header.php.
+# ---------------------------------------------------------------------------
+
+[[templates]]
+function = "get_template_part"
+slug_arg = 0
+name_arg = 1
+args_arg = 2
+
+[[templates]]
+function = "get_header"
+slug = "header"
+name_arg = 0
+args_arg = 1
+
+[[templates]]
+function = "get_footer"
+slug = "footer"
+name_arg = 0
+args_arg = 1
+
+[[templates]]
+function = "get_sidebar"
+slug = "sidebar"
+name_arg = 0
+args_arg = 1
+
+[[templates]]
+function = "load_template"
+path_arg = 0
+args_arg = 2
+note = "Already resolved by locate_template(); the path is the argument."
+
 [[rules]]
 id = "wp.sqli.wpdb-query"
 title = "Untrusted input reaches a database query without preparation"

@@ -69,4 +69,16 @@ final class IncludeGraph
     {
         return $file . ':' . $line . ':' . $offset;
     }
+
+    /**
+     * A `get_template_part()` site.
+     *
+     * Kept in its own key space because a template call is not an include: the
+     * template sees `$args` and the globals, never the caller's locals, and the
+     * analysis has to be able to tell the two apart at the call site.
+     */
+    public static function templateSiteKey(string $file, int $line, int $offset): string
+    {
+        return 'tpl:' . $file . ':' . $line . ':' . $offset;
+    }
 }

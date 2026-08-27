@@ -174,6 +174,8 @@ final class ExplainCommand extends Command
             ? (new IncludeGraphBuilder(
                 new IncludeResolver($values, (new FileFinder())->find([$scope]), $root),
                 $root,
+                $registry,
+                $values,
             ))->build($contexts)
             : null;
 

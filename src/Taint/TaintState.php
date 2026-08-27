@@ -98,6 +98,16 @@ final class TaintState
         return $set;
     }
 
+    /**
+     * Every keyed slot of an operand, for handing an array across a boundary.
+     *
+     * @return array<string, TaintSet>
+     */
+    public function keyedTaintMapOf(Operand $operand): array
+    {
+        return $this->keyedTaint[$operand] ?? [];
+    }
+
     public function keyedProvenanceOf(Operand $operand, string $key): ?Provenance
     {
         $keys = $this->keyedProvenance[$operand] ?? [];

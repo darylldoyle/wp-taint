@@ -219,6 +219,8 @@ final class Scanner
             ? (new IncludeGraphBuilder(
                 new IncludeResolver($values->withConstants($constants), $files, $this->root),
                 $this->root,
+                $this->registry,
+                $values,
             ))->build($contexts)
             : null;
 
@@ -322,6 +324,17 @@ final class Scanner
             static fn (object $hook): string => (string) $hook->describe(),
             $ruleContext->unresolvedHooks(),
         );
+
+        // An include or template call the engine could not follow is a hole in
+        // the analysis exactly as large as the file behind it. The graph has
+        // recorded these since includes were first followed; nothing was
+        // reporting them, which made the gap invisible — the one thing this
+        // tool is not allowed to do with a gap.
+        foreach ($includes?->unresolved() ?? [] as $site) {
+            $unresolvedHooks[] = sprintf('%s:%d  include — %s', $site['file'], $site['line'], $site['reason']);
+        }
+
+        sort($unresolvedHooks);
 
         return new ScanResult(
             $collection,

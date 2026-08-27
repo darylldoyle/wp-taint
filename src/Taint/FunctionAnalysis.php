@@ -94,6 +94,9 @@ final class FunctionAnalysis
     /** Distinguishes several include sites sharing one line. Reset each pass. */
     private int $includeOffset = 0;
 
+    /** The same, for template calls, which have their own key space. */
+    private int $templateOffset = 0;
+
     /**
      * Every named operand in the body, grouped by variable name.
      *
@@ -307,6 +310,8 @@ final class FunctionAnalysis
             return;
         }
 
+        $keyed = $this->scopes->keyedInto($originKey);
+
         foreach ($this->blocks as $block) {
             foreach ($block->children as $op) {
                 if (! $op instanceof Op) {
@@ -320,12 +325,27 @@ final class FunctionAnalysis
                         continue;
                     }
 
-                    $this->state->add($operand, $scope[$name], new Provenance(
+                    $provenance = new Provenance(
                         TraceVerb::Propagate,
                         $op,
                         sprintf($description, $name),
                         prefix: $this->scopes->originOf($originKey, $name),
-                    ));
+                    );
+
+                    // Per-key first: when the caller's array had precise keys,
+                    // seeding only the flat union would throw that away at the
+                    // boundary and every key would read as tainted again.
+                    $keys = $keyed[$name] ?? [];
+
+                    if ($keys !== []) {
+                        foreach ($keys as $index => $taint) {
+                            $this->state->addKeyedTaint($operand, $index, $taint, $provenance);
+                        }
+
+                        continue;
+                    }
+
+                    $this->state->add($operand, $scope[$name], $provenance);
                 }
             }
         }
@@ -580,6 +600,7 @@ final class FunctionAnalysis
         $changed = false;
 
         $this->includeOffset = 0;
+        $this->templateOffset = 0;
 
         foreach ($this->blocks as $block) {
             foreach ($block->phi as $phi) {
@@ -1359,7 +1380,45 @@ final class FunctionAnalysis
 
         $changed = $this->transferUnion($op, $keys, 'Used as a key in an array literal.');
 
-        $valueTaint = $this->state->unionOf($values);
+        // Pair each value with its key, so `array( 'title' => $_GET['t'], 'id' => 7 )`
+        // taints one slot rather than the whole array. This is the commoner
+        // construction of the two — a literal is how most tainted arrays are
+        // built, and an element write is how they are amended.
+        $unkeyed = [];
+
+        foreach ($values as $index => $value) {
+            $taint = $this->state->effectiveTaintOf($value);
+
+            if ($taint->isEmpty()) {
+                continue;
+            }
+
+            $key = isset($op->keys[$index]) && $op->keys[$index] instanceof Operand
+                ? OperandHelper::literalString($op->keys[$index])
+                : null;
+
+            if ($key === null) {
+                // A computed key, or a list with no keys at all: the value
+                // could be at any index, so it goes to the whole-array slot.
+                $unkeyed[] = $value;
+
+                continue;
+            }
+
+            $changed = $this->state->addKeyedTaint(
+                $op->result,
+                $key,
+                $taint,
+                new Provenance(
+                    TraceVerb::Propagate,
+                    $op,
+                    sprintf("Placed into an array literal under '%s'.", $key),
+                    [$value],
+                ),
+            ) || $changed;
+        }
+
+        $valueTaint = $this->state->unionOf($unkeyed);
 
         if ($valueTaint->isEmpty()) {
             return $changed;
@@ -1368,7 +1427,7 @@ final class FunctionAnalysis
         return $this->state->addContainerTaint(
             $op->result,
             $valueTaint,
-            new Provenance(TraceVerb::Propagate, $op, 'Placed into an array literal.', $values),
+            new Provenance(TraceVerb::Propagate, $op, 'Placed into an array literal.', $unkeyed),
         ) || $changed;
     }
 
@@ -1553,6 +1612,7 @@ final class FunctionAnalysis
         // a call can write back through an argument *and* be a sanitizer,
         // propagator or sink in its own right. Every branch below returns.
         $changed = $matcher === null ? false : $this->applyByRefEffect($op, $call, $matcher);
+        $changed = ($matcher === null ? false : $this->joinTemplateScope($op, $call, $matcher)) || $changed;
 
         if ($matcher !== null) {
             $sink = $this->registry->sink($matcher);
@@ -1674,6 +1734,75 @@ final class FunctionAnalysis
         return $effect->asContainer
             ? $this->state->addContainerTaint($target, $taint, $provenance)
             : $this->state->add($target, $taint, $provenance);
+    }
+
+    /**
+     * `get_template_part()`: hand the template its `$args`, and nothing else.
+     *
+     * Deliberately not the include join. A template loaded this way runs inside
+     * `load_template()`, so it sees the globals and the `$args` array — never
+     * the caller's locals. Sharing the caller's whole scope would connect every
+     * variable in a theme's `index.php` to every partial it renders, which is
+     * over-approximation in exactly the files a theme puts its output in.
+     */
+    private function joinTemplateScope(Op\Expr $op, CallTarget $call, Matcher $matcher): bool
+    {
+        if ($this->includes === null) {
+            return false;
+        }
+
+        $loader = $this->registry->templateLoader($matcher);
+
+        if ($loader === null) {
+            return false;
+        }
+
+        $site = IncludeGraph::templateSiteKey(
+            $this->context->file->relativePath,
+            $op->getLine(),
+            $this->templateOffset++,
+        );
+
+        $targets = $this->includes->targetsFor($site);
+
+        if ($targets === []) {
+            $this->imprecise = true;
+
+            return false;
+        }
+
+        $args = $loader->argsArgument === null ? null : $call->argument($loader->argsArgument);
+        $scope = [];
+        $origins = [];
+        $keyed = [];
+
+        if ($args !== null) {
+            $taint = $this->state->effectiveTaintOf($args)
+                ->union($this->state->allKeyedTaintOf($args));
+
+            if (! $taint->isEmpty()) {
+                $scope['args'] = $taint;
+                $origin = $this->scopeTrace($op, $args, 'args', $taint);
+
+                if ($origin !== []) {
+                    $origins['args'] = $origin;
+                }
+
+                // The keys travel too, so a template reading `$args['id']` is
+                // no more a finding than reading `$context['id']` in the file
+                // that built the array.
+                $keyed['args'] = $this->state->keyedTaintMapOf($args);
+            }
+        }
+
+        $changed = false;
+
+        foreach ($targets as $target) {
+            $key = strtolower($target . '::{main}');
+            $changed = $this->scopes->addInto($key, $scope, $origins, $keyed) || $changed;
+        }
+
+        return $changed;
     }
 
     private function sourceApplies(Source $source, CallTarget $call): bool

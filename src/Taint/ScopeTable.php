@@ -72,6 +72,18 @@ final class ScopeTable
     private array $origins = [];
 
     /**
+     * Per-key taint for a variable that crosses the boundary as an array.
+     *
+     * `get_template_part( 'card', null, [ 'title' => $_GET['t'], 'id' => 7 ] )`
+     * hands the template an array whose keys are separately tainted, and the
+     * template reading `$args['id']` should be no more a finding than reading
+     * `$context['id']` in the file that built it.
+     *
+     * @var array<string, array<string, array<string, TaintSet>>> file => name => key => taint
+     */
+    private array $keyed = [];
+
+    /**
      * How many names to track per file.
      *
      * A `{main}` body with hundreds of locals is a procedural script, not a
@@ -97,14 +109,37 @@ final class ScopeTable
     }
 
     /**
-     * @param array<string, TaintSet>        $scope
-     * @param array<string, list<TraceStep>> $origins
+     * @param array<string, TaintSet>                     $scope
+     * @param array<string, list<TraceStep>>               $origins
+     * @param array<string, array<string, TaintSet>>       $keyed
      */
-    public function addInto(string $key, array $scope, array $origins = []): bool
+    public function addInto(string $key, array $scope, array $origins = [], array $keyed = []): bool
     {
         $this->recordOrigins($key, $origins);
+        $this->recordKeyed($key, $keyed);
 
         return self::merge($this->in, $key, $scope);
+    }
+
+    /**
+     * @return array<string, array<string, TaintSet>>
+     */
+    public function keyedInto(string $key): array
+    {
+        return $this->keyed[$key] ?? [];
+    }
+
+    /**
+     * @param array<string, array<string, TaintSet>> $keyed
+     */
+    private function recordKeyed(string $key, array $keyed): void
+    {
+        foreach ($keyed as $name => $keys) {
+            foreach ($keys as $index => $taint) {
+                $existing = $this->keyed[$key][$name][$index] ?? TaintSet::empty();
+                $this->keyed[$key][$name][$index] = $existing->union($taint);
+            }
+        }
     }
 
     /**
@@ -182,6 +217,10 @@ final class ScopeTable
 
         foreach ($other->origins as $key => $origins) {
             $this->recordOrigins($key, $origins);
+        }
+
+        foreach ($other->keyed as $key => $keyed) {
+            $this->recordKeyed($key, $keyed);
         }
 
         return $changed;

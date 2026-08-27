@@ -33,6 +33,9 @@ final class RegistryAccumulator
     /** @var array<string, ByRefEffect> */
     private array $byRef = [];
 
+    /** @var array<string, TemplateLoader> */
+    private array $templates = [];
+
     /** @var array<string, true> */
     private array $authorization = [];
 
@@ -80,6 +83,11 @@ final class RegistryAccumulator
         $this->dispatchers[$dispatcher->matcher->key()] = $dispatcher;
     }
 
+    public function addTemplateLoader(TemplateLoader $loader): void
+    {
+        $this->templates[$loader->matcher->key()] = $loader;
+    }
+
     public function addByRefEffect(ByRefEffect $effect): void
     {
         $this->byRef[$effect->matcher->key()] = $effect;
@@ -118,6 +126,7 @@ final class RegistryAccumulator
         ksort($this->safeCalls);
         ksort($this->dispatchers);
         ksort($this->byRef);
+        ksort($this->templates);
         ksort($this->authorization);
         ksort($this->rules);
 
@@ -133,6 +142,7 @@ final class RegistryAccumulator
             $this->safeCalls,
             $this->dispatchers,
             $this->byRef,
+            $this->templates,
             array_keys($this->authorization),
             $this->rules,
             $identifiers,

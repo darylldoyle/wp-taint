@@ -52,13 +52,18 @@ final class RegistryLoader
         'function', 'class', 'method', 'static_method', 'writes', 'from', 'as_container', 'note',
     ];
 
+    private const TEMPLATE_KEYS = [
+        'function', 'class', 'method', 'static_method',
+        'slug_arg', 'slug', 'name_arg', 'args_arg', 'path_arg', 'note',
+    ];
+
     private const AUTHORIZATION_KEYS = ['function', 'class', 'method', 'static_method', 'note'];
 
     private const RULE_KEYS = ['id', 'title', 'description', 'remediation', 'cwe', 'message'];
 
     private const TABLE_KEYS = [
         'meta', 'sources', 'sanitizers', 'propagators', 'sinks', 'safe', 'dispatchers', 'byref',
-        'authorization', 'rules', 'options',
+        'templates', 'authorization', 'rules', 'options',
     ];
 
     private const OPTION_KEYS = ['safe_database_identifiers'];
@@ -138,6 +143,7 @@ final class RegistryLoader
         $this->loadSafeCalls($canonical, $data['safe'] ?? [], $accumulator);
         $this->loadDispatchers($canonical, $data['dispatchers'] ?? [], $accumulator);
         $this->loadByRefEffects($canonical, $data['byref'] ?? [], $accumulator);
+        $this->loadTemplateLoaders($canonical, $data['templates'] ?? [], $accumulator);
         $this->loadAuthorization($canonical, $data['authorization'] ?? [], $accumulator);
         $this->loadRules($canonical, $data['rules'] ?? [], $accumulator);
         $this->loadOptions($canonical, $data['options'] ?? [], $accumulator);
@@ -451,6 +457,46 @@ final class RegistryLoader
         sort($indexes);
 
         return $indexes;
+    }
+
+    private function loadTemplateLoaders(string $file, mixed $entries, RegistryAccumulator $accumulator): void
+    {
+        foreach ($this->tableList($file, 'templates', $entries) as $index => $entry) {
+            $context = sprintf('[[templates]] #%d', $index + 1);
+            $this->rejectUnknownKeys($file, $context, $entry, self::TEMPLATE_KEYS);
+
+            $slugArgument = isset($entry['slug_arg'])
+                ? $this->intValue($file, $context . ' slug_arg', $entry['slug_arg'])
+                : null;
+            $slug = $this->optionalString($file, $context . ' slug', $entry['slug'] ?? null);
+            $pathArgument = isset($entry['path_arg'])
+                ? $this->intValue($file, $context . ' path_arg', $entry['path_arg'])
+                : null;
+
+            // Either it names a template, or it is handed one already resolved.
+            // An entry that does neither would silently load nothing.
+            if ($pathArgument === null && $slugArgument === null && $slug === null) {
+                throw RegistryException::at(
+                    $file,
+                    $context,
+                    'must set one of slug, slug_arg or path_arg; without one it names no template.',
+                );
+            }
+
+            $accumulator->addTemplateLoader(new TemplateLoader(
+                $this->matcherFor($file, $context, $entry, allowConstruct: false, allowSuperglobal: false),
+                $slugArgument,
+                $slug,
+                isset($entry['name_arg'])
+                    ? $this->intValue($file, $context . ' name_arg', $entry['name_arg'])
+                    : null,
+                isset($entry['args_arg'])
+                    ? $this->intValue($file, $context . ' args_arg', $entry['args_arg'])
+                    : null,
+                $pathArgument,
+                $this->optionalString($file, $context . ' note', $entry['note'] ?? null),
+            ));
+        }
     }
 
     private function loadAuthorization(string $file, mixed $entries, RegistryAccumulator $accumulator): void
