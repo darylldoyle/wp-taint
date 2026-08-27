@@ -158,6 +158,7 @@ final class FunctionAnalysis
         $this->types->seedFromFunction($this->context);
         $this->seedSources();
         $this->seedIncludedScope();
+        $this->seedIncludeResults();
 
         $iterations = 0;
 
@@ -236,8 +237,23 @@ final class FunctionAnalysis
             return;
         }
 
-        $scope = $this->scopes->scopeOf($this->context->key);
+        $this->seedScope(
+            $this->scopes->scopeOf($this->context->key),
+            '$%s was in scope at the include that loaded this file.',
+        );
+    }
 
+    /**
+     * Put a scope onto this body's named variables, once.
+     *
+     * Before the propagation loop, never during it. A variable seeded here is
+     * still owned by whatever assigns it: if the included file sets `$title`
+     * itself, that assignment wins, which is exactly right.
+     *
+     * @param array<string, TaintSet> $scope
+     */
+    private function seedScope(array $scope, string $description): void
+    {
         if ($scope === []) {
             return;
         }
@@ -258,7 +274,7 @@ final class FunctionAnalysis
                     $this->state->add($operand, $scope[$name], new Provenance(
                         TraceVerb::Propagate,
                         $op,
-                        sprintf('$%s was in scope at the include that loaded this file.', $name),
+                        sprintf($description, $name),
                     ));
                 }
             }
@@ -301,54 +317,57 @@ final class FunctionAnalysis
             return false;
         }
 
+        // Only the outbound half runs here, and it writes nothing this body
+        // owns — just the shared table, which is union-only. The inbound halves
+        // are one-time seeds before the loop: writing to a variable during a
+        // pass would fight the assignment that owns that operand, which is how
+        // this oscillated the first time.
         $changed = false;
         $visible = $this->namedScope();
 
         foreach ($targets as $target) {
-            $key = strtolower($target . '::{main}');
-            $changed = $this->scopes->addAll($key, $visible) || $changed;
-            $changed = $this->applyIncludedScope($op, $key, $target) || $changed;
+            $changed = $this->scopes->addAll(strtolower($target . '::{main}'), $visible) || $changed;
         }
 
         return $changed;
     }
 
     /**
-     * What the included file left behind, back onto the includer's variables.
+     * Seed what each file this body includes left behind.
+     *
+     * `include 'config.php'` and the settings it assigned are in scope
+     * afterwards. Read from the table rather than by descending into the
+     * includee, so a cycle terminates; seeded once, before the loop, so no
+     * assignment in this body has to fight it.
      */
-    private function applyIncludedScope(Op\Expr\Include_ $op, string $key, string $target): bool
+    private function seedIncludeResults(): void
     {
-        $scope = $this->scopes->scopeOf($key);
-
-        if ($scope === []) {
-            return false;
+        if ($this->includes === null) {
+            return;
         }
 
-        $changed = false;
+        $offset = 0;
 
         foreach ($this->blocks as $block) {
-            foreach ($block->children as $inner) {
-                if (! $inner instanceof Op) {
+            foreach ($block->children as $op) {
+                if (! $op instanceof Op\Expr\Include_) {
                     continue;
                 }
 
-                foreach (OperandHelper::operandsOf($inner) as $operand) {
-                    $name = OperandHelper::variableName($operand);
+                $site = IncludeGraph::siteKey(
+                    $this->context->file->relativePath,
+                    $op->getLine(),
+                    $offset++,
+                );
 
-                    if ($name === null || ! isset($scope[$name])) {
-                        continue;
-                    }
-
-                    $changed = $this->state->add($operand, $scope[$name], new Provenance(
-                        TraceVerb::Propagate,
-                        $op,
-                        sprintf('$%s was left in scope by %s.', $name, $target),
-                    )) || $changed;
+                foreach ($this->includes->targetsFor($site) as $target) {
+                    $this->seedScope(
+                        $this->scopes->scopeOf(strtolower($target . '::{main}')),
+                        sprintf('$%%s was left in scope by %s.', $target),
+                    );
                 }
             }
         }
-
-        return $changed;
     }
 
     /**

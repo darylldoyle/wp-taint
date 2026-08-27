@@ -87,6 +87,8 @@ final class ValueResolver
         return match (true) {
             $definition instanceof Op\Expr\Assign => $this->strings($definition->expr, $depth + 1),
             $definition instanceof Op\Expr\ConstFetch => $this->fromConstant($definition),
+            $definition instanceof Op\Expr\FuncCall,
+            $definition instanceof Op\Expr\NsFuncCall => $this->fromPureCall($definition, $depth),
             $definition instanceof Op\Phi => $this->fromPhi($definition, $depth),
             $definition instanceof Op\Expr\ConcatList => $this->fromParts($definition->list, $depth),
             $definition instanceof Op\Expr\BinaryOp\Concat => $this->fromParts(
@@ -94,6 +96,113 @@ final class ValueResolver
                 $depth,
             ),
             default => [],
+        };
+    }
+
+    /**
+     * Path helpers whose result depends on nothing but their arguments.
+     *
+     * `define( 'WPCF7_PLUGIN_DIR', untrailingslashit( dirname( WPCF7_PLUGIN ) ) )`
+     * is how WordPress plugins declare their own directory, and without these
+     * the constant is unresolvable and so is every path built from it — Contact
+     * Form 7 resolved none of its 61 includes.
+     *
+     * Only functions that are total, deterministic and free of filesystem
+     * access. `realpath()` is deliberately absent: it answers a question about
+     * the machine running the scan, not about the code.
+     *
+     */
+    private const PURE = [
+        'dirname', 'basename', 'trailingslashit', 'untrailingslashit',
+        'plugin_dir_path', 'wp_normalize_path', 'ltrim', 'rtrim', 'trim',
+        'strtolower', 'strtoupper', 'str_replace',
+    ];
+
+    /**
+     * Evaluate a call whose arguments all resolve and whose result depends on
+     * nothing else.
+     *
+     * @return list<string>
+     */
+    private function fromPureCall(Op\Expr\FuncCall|Op\Expr\NsFuncCall $op, int $depth): array
+    {
+        $name = $this->pureFunctionName($op);
+
+        if ($name === null) {
+            return [];
+        }
+
+        $arguments = [];
+
+        foreach ($op->args as $argument) {
+            if (! $argument instanceof Operand) {
+                return [];
+            }
+
+            $resolved = $this->strings($argument, $depth + 1);
+
+            // One value per argument. A set would mean a cross product, and a
+            // path helper applied to an ambiguous path is not worth the
+            // combinatorics.
+            if (count($resolved) !== 1) {
+                return [];
+            }
+
+            $arguments[] = $resolved[0];
+        }
+
+        $value = self::applyPure($name, $arguments);
+
+        return $value === null ? [] : [$value];
+    }
+
+    private function pureFunctionName(Op\Expr\FuncCall|Op\Expr\NsFuncCall $op): ?string
+    {
+        $names = $op instanceof Op\Expr\NsFuncCall
+            ? [OperandHelper::literalString($op->nsName), OperandHelper::literalString($op->name)]
+            : [OperandHelper::literalString($op->name)];
+
+        foreach ($names as $candidate) {
+            if ($candidate === null) {
+                continue;
+            }
+
+            $lower = strtolower(ltrim($candidate, '\\'));
+
+            if (in_array($lower, self::PURE, true)) {
+                return $lower;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param list<string> $arguments
+     */
+    private static function applyPure(string $name, array $arguments): ?string
+    {
+        $first = $arguments[0] ?? null;
+
+        if ($first === null) {
+            return null;
+        }
+
+        return match ($name) {
+            'dirname' => count($arguments) > 1
+                ? null
+                : dirname($first),
+            'basename' => count($arguments) > 2 ? null : basename($first, $arguments[1] ?? ''),
+            'trailingslashit', 'plugin_dir_path' => rtrim(str_replace('\\', '/', $first), '/') . '/',
+            'untrailingslashit' => rtrim(str_replace('\\', '/', $first), '/'),
+            'wp_normalize_path' => str_replace('\\', '/', $first),
+            'ltrim' => count($arguments) > 2 ? null : ltrim($first, $arguments[1] ?? " \t\n\r\0\x0B"),
+            'rtrim' => count($arguments) > 2 ? null : rtrim($first, $arguments[1] ?? " \t\n\r\0\x0B"),
+            'trim' => count($arguments) > 2 ? null : trim($first, $arguments[1] ?? " \t\n\r\0\x0B"),
+            'strtolower' => count($arguments) > 1 ? null : strtolower($first),
+            'strtoupper' => count($arguments) > 1 ? null : strtoupper($first),
+            'str_replace' => count($arguments) === 3 ? str_replace($first, $arguments[1], $arguments[2]) : null,
+            default => null,
         };
     }
 
