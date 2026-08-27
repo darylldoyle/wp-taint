@@ -52,6 +52,11 @@ Writes that go back through an argument are followed too — `preg_match()` into
 `$matches`, `parse_str()` into an array, a user function's `&$out` parameter, and
 the aliases created by `$a = &$b` and by-reference `foreach`.
 
+And `include`/`require` join the two files' scopes, so the theme shape works:
+`$title = $_GET['title']; include 'header.php';` connects to the template that
+echoes it. Paths fold from `__DIR__`, constants, and the pure path helpers
+WordPress builds them with. `--no-follow-includes` turns it off.
+
 **Broken authorization**, via structural rules, which taint analysis
 structurally cannot find:
 
@@ -101,6 +106,7 @@ wp-taint scan <paths...>
   --stored-taint-writes
   --no-structural-rules
   --dynamic-calls=POLICY           clean | propagate (default) | tainted
+  --no-follow-includes
   --exclude=GLOB                   repeatable
   --jobs=N                         worker processes (default 1; needs pcntl)
   --parse-report

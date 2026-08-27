@@ -104,21 +104,36 @@ when auditing the auditor. Every finding produced under an assumption is marked
 `--assume-dynamic-tainted` is the old spelling of `--dynamic-calls=tainted` and
 still works.
 
-### `include` and `require` are not followed
-
-A template file included at runtime is analysed as its own file, but the
-variables in scope at the include site do not flow into it, and vice versa.
+### `include` and `require` are followed
 
 ```php
 $title = $_GET['title'];
-include 'template.php';     // template.php echoing $title is not connected
+include __DIR__ . '/parts/header.php';   // header.php echoing $title is connected
+require ACME_DIR . 'config.php';         // and what config.php assigns comes back
 ```
 
-This is the classic WordPress theme shape and it is a real gap. Following it
-properly needs include-path resolution and a scope model, which is a
-disproportionate amount of machinery for a v1.
+Paths are folded from literals, `__DIR__`/`__FILE__`, constants declared anywhere
+in the scan, and the pure path helpers WordPress builds them with — `dirname()`,
+`untrailingslashit()`, `plugin_dir_path()` and friends. A resolved path is looked
+up in the set of files being scanned rather than on disk, so two machines with
+the same checkout resolve the same set.
 
-**Direction:** under-approximating.
+Scopes join both ways, and converge in the interprocedural loop alongside the
+property map. Cycles terminate because the return direction reads the table
+rather than descending.
+
+**What is still missed.** An include whose path will not fold — about half the
+sites in the corpus — is counted rather than followed. `get_template_part()`,
+`load_template()` and `locate_template()` are not resolved through the template
+hierarchy yet. And the include path itself is not modelled: PHP would search it
+before the calling file's directory, but that is runtime configuration the
+analysis cannot see.
+
+**Direction:** under-approximating at the unresolved paths, over-approximating at
+the resolved ones — a file's inbound scope is unioned over every site that
+includes it, so a template included from two places sees either caller's state.
+
+`--no-follow-includes` turns the whole thing off.
 
 ### Filter and action callbacks are followed
 

@@ -288,6 +288,85 @@ Two corrections, both found as convergence warnings rather than wrong answers:
 The loader caught one bad entry of my own: `settype( $var, $type )` writes the
 argument it reads, which in an add-only model is a no-op.
 
+## Following includes
+
+5,996 include sites in the corpus, and the plan's highest false-positive risk:
+it connects request data to template files that have never been analysed in
+context. Budget was +25%.
+
+**It came in at +0.6%** — 1,071 findings to 1,077, 0 convergence warnings. Two
+plugins moved: All in One SEO +4 and Wordfence +2.
+
+### Why it was cheap, and where it would not be
+
+Include resolution is doing real work. Roughly half of all include sites resolve:
+
+| Plugin | Resolved | Unresolved |
+| --- | --- | --- |
+| Jetpack | 631 | 478 |
+| WooCommerce | 266 | 446 |
+| Wordfence | 196 | 73 |
+| Contact Form 7 | 43 | 18 |
+
+Findings barely moved because most of those are bootstrap — `require_once` of a
+file that defines a class or a function, with no variables in scope to carry.
+The theme shape, where a template echoes a variable the includer set, is a
+minority of include sites *in a plugin*. The corpus is plugin-heavy, which the
+plan noted; on a theme-heavy codebase this number would be larger, and the +25%
+budget was not unreasonable for one.
+
+### The unlock was pure path helpers, not includes
+
+Contact Form 7 resolved **none** of its 61 includes at first, because every one
+is built from a constant declared like this:
+
+```php
+define( 'WPCF7_PLUGIN_DIR', untrailingslashit( dirname( WPCF7_PLUGIN ) ) );
+```
+
+Constants come from a table built over the whole scan, and `__DIR__`/`__FILE__`
+fold at parse time — but the constant itself needed two function calls
+evaluated. With `dirname()`, `untrailingslashit()`, `trailingslashit()`,
+`plugin_dir_path()` and a few string helpers, CF7 resolves 43 of 61.
+
+Only functions that are total, deterministic and free of filesystem access.
+`realpath()` is deliberately absent: it answers a question about the machine
+running the scan, not about the code.
+
+### A cross-file taint leak that nearly shipped
+
+Jetpack gained 29 findings, twenty of them tracing to:
+
+```
+$page_routes was left in scope by .../build/constants.php
+```
+
+`constants.php` never mentions `$page_routes`. It is a *parameter* of a function
+that requires that file. With one scope entry per file, a variable pushed **in**
+by one includer came straight back **out** to every other, and a shared partial
+neither of them wrote became a channel between them.
+
+The table has two halves now: **in** is what a file may find on entry, unioned
+over every site that includes it; **out** is what the file's own top-level code
+leaves, and only for names it actually assigns. Jetpack went back to 94, its
+figure before includes were followed — all 29 were the leak.
+
+The inbound union across includers stays, because it is the honest
+over-approximation: a template included from two places really can see either
+caller's state.
+
+### The fourth oscillation of the same kind
+
+wp-super-cache's `{main}` stopped converging, because the scope join was writing
+to variables during a pass and fighting the assignments that own those operands.
+Every scope write is now a one-time seed before the propagation loop — which is
+also more correct, since an included file that assigns `$title` itself should win
+over what its includer had.
+
+That is four separate non-convergences across the five phases, every one of them
+two ops writing one operand with different answers. It is the recurring cost of
+building on an SSA form that does not version everything.
+
 ## Determinism across `--jobs`, again
 
 Elementor reported the same finding with a seven-step trace at `--jobs=1` and a
