@@ -63,6 +63,24 @@ final class OperandHelper
     }
 
     /**
+     * A constant array key, as PHP would store it.
+     *
+     * Strings and integers both, because `$rows[0]` is as common a shape as
+     * `$context['title']` and treating a numeric index as unresolvable would
+     * send every list back to the whole-array slot.
+     *
+     * A float, bool or null key is legal PHP and vanishingly rare; those return
+     * null and fall back, rather than the helper reproducing the language's
+     * coercion rules.
+     */
+    public static function literalKey(?Operand $operand): string|int|null
+    {
+        $value = self::literalValue($operand);
+
+        return is_string($value) || is_int($value) ? $value : null;
+    }
+
+    /**
      * The op that produced this operand's value.
      *
      * Not simply "the only writer". An operand can legitimately have two:

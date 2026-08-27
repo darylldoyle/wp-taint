@@ -79,7 +79,7 @@ final class ScopeTable
      * template reading `$args['id']` should be no more a finding than reading
      * `$context['id']` in the file that built it.
      *
-     * @var array<string, array<string, array<string, TaintSet>>> file => name => key => taint
+     * @var array<string, array<string, array<array-key, TaintSet>>> file => name => key => taint
      */
     private array $keyed = [];
 
@@ -111,7 +111,7 @@ final class ScopeTable
     /**
      * @param array<string, TaintSet>                     $scope
      * @param array<string, list<TraceStep>>               $origins
-     * @param array<string, array<string, TaintSet>>       $keyed
+     * @param array<string, array<array-key, TaintSet>>   $keyed
      */
     public function addInto(string $key, array $scope, array $origins = [], array $keyed = []): bool
     {
@@ -122,7 +122,7 @@ final class ScopeTable
     }
 
     /**
-     * @return array<string, array<string, TaintSet>>
+     * @return array<string, array<array-key, TaintSet>>
      */
     public function keyedInto(string $key): array
     {
@@ -130,7 +130,7 @@ final class ScopeTable
     }
 
     /**
-     * @param array<string, array<string, TaintSet>> $keyed
+     * @param array<string, array<array-key, TaintSet>> $keyed
      */
     private function recordKeyed(string $key, array $keyed): void
     {

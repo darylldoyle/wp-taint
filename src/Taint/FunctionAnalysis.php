@@ -990,7 +990,7 @@ final class FunctionAnalysis
         }
 
         if ($target instanceof Op\Expr\ArrayDimFetch) {
-            $key = $target->dim === null ? null : OperandHelper::literalString($target->dim);
+            $key = $target->dim === null ? null : OperandHelper::literalKey($target->dim);
 
             // A literal key is precise, and a read naming the same key sees
             // only this. `$context['id'] = 42` no longer taints
@@ -1067,7 +1067,7 @@ final class FunctionAnalysis
             return $this->transferSuperglobalFetch($op, $source, $superglobal ?? '');
         }
 
-        $key = $op->dim === null ? null : OperandHelper::literalString($op->dim);
+        $key = $op->dim === null ? null : OperandHelper::literalKey($op->dim);
 
         if ($key !== null) {
             return $this->transferKeyedRead($op, $key);
@@ -1087,7 +1087,7 @@ final class FunctionAnalysis
      * key, because a computed write could have been this one. What it does not
      * see is another key's taint, which is the whole point.
      */
-    private function transferKeyedRead(Op\Expr\ArrayDimFetch $op, string $key): bool
+    private function transferKeyedRead(Op\Expr\ArrayDimFetch $op, string|int $key): bool
     {
         $keyed = $this->state->keyedTaintOf($op->var, $key);
         $fallback = $this->state->containerTaintOf($op->var)
@@ -1394,7 +1394,7 @@ final class FunctionAnalysis
             }
 
             $key = isset($op->keys[$index]) && $op->keys[$index] instanceof Operand
-                ? OperandHelper::literalString($op->keys[$index])
+                ? OperandHelper::literalKey($op->keys[$index])
                 : null;
 
             if ($key === null) {

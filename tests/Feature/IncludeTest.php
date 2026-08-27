@@ -276,3 +276,23 @@ it('does not lose keyed taint when an array crosses a call boundary', function (
 
     expect(findingSignatures($result))->toBe(['wp.xss.unescaped-output@3']);
 });
+
+it('handles a numeric array key', function (): void {
+    // PHP silently converts a numeric string key to an int on storage, so
+    // `$a['0']` and `$a[0]` are one slot and a read hands back an int. Typing
+    // the keyed API as string crashed on the first real plugin that used one —
+    // a fatal, not a wrong answer, and no fixture had a numeric key.
+    $result = scanTree([
+        'index.php' => <<<'PHP'
+            <?php
+            $rows = array();
+            $rows[0] = $_GET['first'];
+            $rows[1] = 'safe';
+
+            echo $rows[1];
+            echo $rows[0];
+            PHP,
+    ]);
+
+    expect(findingSignatures($result))->toBe(['wp.xss.unescaped-output@7']);
+});

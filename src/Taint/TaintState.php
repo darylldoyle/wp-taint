@@ -70,14 +70,19 @@ final class TaintState
      * moment either is dynamic the whole-array slot takes over, which is what
      * the analysis did for every array until now.
      *
-     * @var SplObjectStorage<Operand, array<string, TaintSet>>
+     * Keys are `array-key`, not `string`: PHP silently converts a numeric
+     * string key to an int on storage, so `$a['0']` and `$a[0]` are one slot
+     * and a read hands back an int. Typing these as `string` crashed on the
+     * first plugin that used a numeric key.
+     *
+     * @var SplObjectStorage<Operand, array<array-key, TaintSet>>
      */
     private SplObjectStorage $keyedTaint;
 
-    /** @var SplObjectStorage<Operand, array<string, Provenance>> */
+    /** @var SplObjectStorage<Operand, array<array-key, Provenance>> */
     private SplObjectStorage $keyedProvenance;
 
-    public function keyedTaintOf(Operand $operand, string $key): TaintSet
+    public function keyedTaintOf(Operand $operand, string|int $key): TaintSet
     {
         $keys = $this->keyedTaint[$operand] ?? [];
 
@@ -101,21 +106,21 @@ final class TaintState
     /**
      * Every keyed slot of an operand, for handing an array across a boundary.
      *
-     * @return array<string, TaintSet>
+     * @return array<array-key, TaintSet>
      */
     public function keyedTaintMapOf(Operand $operand): array
     {
         return $this->keyedTaint[$operand] ?? [];
     }
 
-    public function keyedProvenanceOf(Operand $operand, string $key): ?Provenance
+    public function keyedProvenanceOf(Operand $operand, string|int $key): ?Provenance
     {
         $keys = $this->keyedProvenance[$operand] ?? [];
 
         return $keys[$key] ?? null;
     }
 
-    public function addKeyedTaint(Operand $operand, string $key, TaintSet $taint, Provenance $provenance): bool
+    public function addKeyedTaint(Operand $operand, string|int $key, TaintSet $taint, Provenance $provenance): bool
     {
         if ($taint->isEmpty()) {
             return false;
