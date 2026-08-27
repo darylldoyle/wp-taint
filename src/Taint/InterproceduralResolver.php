@@ -18,18 +18,21 @@ use Enshrined\WpTaint\Scan\WorkerPool;
  * `$this->value = $_GET['x']` in one method and `echo $this->value` in another
  * is a single flow the per-function analysis cannot see on its own.
  *
- * ## Why each round reads a frozen table
+ * ## What each round is allowed to see
  *
- * Every function in a round is summarised against the *previous* round's
- * summaries, not against summaries other functions produced earlier in the same
- * round. Reading them as they land would converge in fewer rounds, but it makes
- * the result depend on the order functions are visited — and the moment the
- * round is sharded across worker processes, that order is whatever the
- * scheduler picked.
+ * A worker reads the previous round's summaries plus **its own** results from
+ * the current round. It never sees another worker's, because that would make
+ * the answer depend on the order the scheduler happened to run them in.
  *
- * The transfer functions are monotone, so both orders reach the same least
- * fixed point. Freezing the table costs a round or two and buys a guarantee
- * that `--jobs=8` and `--jobs=1` produce byte-identical output.
+ * Reading its own results back is what keeps the round count down. Freezing the
+ * table completely was correct but slow: it pushed real plugins from five or
+ * six rounds to nine or ten, and eleven of the corpus fifty straight past the
+ * cap into silently incomplete summaries.
+ *
+ * Determinism survives because the transfer functions are monotone, so every
+ * schedule reaches the same least fixed point, and because the merge is in
+ * shard order rather than completion order. With `--jobs=1` there is one shard,
+ * so this is plain in-place iteration.
  */
 final class InterproceduralResolver
 {
@@ -63,8 +66,8 @@ final class InterproceduralResolver
         while ($changed && $rounds < $this->options->maxInterproceduralRounds) {
             $rounds++;
 
-            // The frozen inputs for this round. Workers read these and never
-            // write them, so no worker can observe another's output.
+            // This round's shared starting point. Each worker copies it and
+            // adds only its own results, so no worker sees another's.
             $previousSummaries = $summaries;
             $previousProperties = $properties;
 
@@ -130,16 +133,26 @@ final class InterproceduralResolver
         $roundProperties = clone $properties;
         $produced = [];
 
+        // A private view: the previous round's summaries, plus whatever this
+        // worker produces as it goes. Another worker's output never lands here.
+        $visible = new SummaryTable();
+
+        foreach ($summaries->all() as $summary) {
+            $visible->set($summary);
+        }
+
         foreach ($ordered as $index => $context) {
             if ($index % $shardCount !== $shard) {
                 continue;
             }
 
-            $produced[] = $this->extractor->extract($context, $summaries, $roundProperties);
+            $summary = $this->extractor->extract($context, $visible, $roundProperties);
+            $visible->set($summary);
+            $produced[] = $summary;
 
             // A pass with no parameter seeded, purely so property writes in the
             // body land in the map. Findings are discarded.
-            $this->analyzer->analyze($context, $summaries, $roundProperties, null, false);
+            $this->analyzer->analyze($context, $visible, $roundProperties, null, false);
         }
 
         return ['summaries' => $produced, 'properties' => $roundProperties];
