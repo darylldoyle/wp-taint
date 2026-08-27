@@ -87,7 +87,7 @@ wp-taint scan <paths...>
   --no-stored-taint
   --stored-taint-writes
   --no-structural-rules
-  --assume-dynamic-tainted
+  --dynamic-calls=POLICY           clean | propagate (default) | tainted
   --exclude=GLOB                   repeatable
   --jobs=N                         worker processes (default 1; needs pcntl)
   --parse-report
@@ -138,9 +138,11 @@ includes/class-report-renderer.php:58
 ```
 
 The important case is the third one, where the engine says a path was
-*abandoned* — a dynamic call it could not resolve — rather than proved clean.
-`--assume-dynamic-tainted` then gives an upper bound on what might be missing,
-which is what you want when auditing the auditor.
+*abandoned* — a call it could not resolve — rather than proved clean.
+`--dynamic-calls=tainted` then gives an upper bound on what might be missing,
+which is what you want when auditing the auditor. `--dynamic-calls=clean` is the
+other end: no assumptions, and a documented false negative wherever the engine
+lost the thread. See KNOWN_LIMITATIONS.md § dynamic calls.
 
 ## Suppressing findings
 

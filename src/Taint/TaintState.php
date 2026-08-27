@@ -124,6 +124,49 @@ final class TaintState
     }
 
     /**
+     * Union of the taint written into several operands *as containers*.
+     *
+     * Kept separate from {@see unionOf()} so that a value flowing through a
+     * pass-through does not have its element taint promoted into its own slot.
+     * Promoting it put two ops into disagreement over the same operand — one
+     * computing the own slot, the other the union — and the fixed point
+     * oscillated.
+     *
+     * @param list<Operand|null> $operands
+     */
+    public function unionOfContainers(array $operands): TaintSet
+    {
+        $set = TaintSet::empty();
+
+        foreach ($operands as $operand) {
+            if ($operand !== null) {
+                $set = $set->union($this->containerTaintOf($operand));
+            }
+        }
+
+        return $set;
+    }
+
+    /**
+     * Union of the operands' own taint, ignoring anything written into them as
+     * containers.
+     *
+     * @param list<Operand|null> $operands
+     */
+    public function unionOfOwn(array $operands): TaintSet
+    {
+        $set = TaintSet::empty();
+
+        foreach ($operands as $operand) {
+            if ($operand !== null) {
+                $set = $set->union($this->taintOf($operand));
+            }
+        }
+
+        return $set;
+    }
+
+    /**
      * Record the taint of an operand.
      *
      * Returns true when the value changed, which is how the fixed point knows

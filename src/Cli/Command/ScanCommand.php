@@ -87,10 +87,16 @@ final class ScanCommand extends Command
                 'Report untrusted data written to options and meta',
             )
             ->addOption(
+                'dynamic-calls',
+                null,
+                InputOption::VALUE_REQUIRED,
+                'How to treat a call whose callee cannot be resolved: clean, propagate (default) or tainted',
+            )
+            ->addOption(
                 'assume-dynamic-tainted',
                 null,
                 InputOption::VALUE_NONE,
-                'Treat unresolved dynamic calls as propagating all taint',
+                'Deprecated alias for --dynamic-calls=tainted',
             )
             ->addOption('no-structural-rules', null, InputOption::VALUE_NONE, 'Run taint analysis only')
             ->addOption(
@@ -194,7 +200,7 @@ final class ScanCommand extends Command
             ! $reader->bool('no-interprocedural'),
             ! $reader->bool('no-stored-taint'),
             $reader->bool('stored-taint-writes'),
-            $reader->bool('assume-dynamic-tainted'),
+            $reader->dynamicCallPolicy(),
             $reader->bool('parse-report'),
             $reader->nullableString('dump-taint-graph'),
             ! $reader->bool('no-structural-rules'),

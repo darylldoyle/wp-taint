@@ -62,24 +62,47 @@ on the corpus with no plausible attack behind any of them.
 a low-privilege user write a path into an option, add a project-local
 `[[sources]]` entry with `kinds = ["path"]`.
 
-### Dynamic calls are not followed
+### Dynamic calls are followed as far as the value can be traced
 
 ```php
 $callback = $_GET['action'] === 'x' ? 'render_x' : 'render_y';
-$callback( $value );        // unresolved
-call_user_func( $fn, $v );  // unresolved
+$callback( $value );                       // both, unioned
+call_user_func( array( $this, 'run' ), $v ); // resolved
+array_map( 'esc_html', $items );             // a real sanitizer application
 ```
 
-A closure assigned to a variable *is* followed, through assignments. Everything
-else — a variable function name, `call_user_func()` with a variable callee, a
-variable method name — is left unresolved, marked imprecise, and its return
-value treated as clean.
+What resolves: a callable that traces back to a literal string, a phi of
+literals, a concatenation of resolvable parts, an `array( $object, 'method' )`
+pair, a class-name pair, a closure, or an object with `__invoke`. Calls made on
+your behalf by `call_user_func()`, `call_user_func_array()`, `array_map()`,
+`usort()` and the rest resolve to the callee, not to the dispatcher; the list
+lives under `[[dispatchers]]` in the catalogue, so a project can add its own.
+A callable that resolves to several names reaches all of them and the effects
+are unioned, because picking one would be a guess.
 
-**Direction:** under-approximating. This is the biggest source of false
-negatives in the tool. `--assume-dynamic-tainted` flips it: every unresolved
-call propagates all taint from its arguments, which is noisy but gives an upper
-bound on what might be missing. That is exactly what you want when auditing the
-auditor.
+What does not: a callable arriving as a parameter, read from a property, or
+returned by a call the engine cannot see into. A name that resolves to a
+function nobody can find a body for also counts as unresolved, rather than
+resolving to nothing and reporting clean.
+
+**Direction:** configurable, because there is no correct answer — only a choice
+about which way to be wrong.
+
+| `--dynamic-calls` | An unresolved call | Wrong when |
+| --- | --- | --- |
+| `clean` | returns nothing tainted | the callee passes its arguments through |
+| `propagate` *(default)* | passes its arguments to its return value | the callee escapes them |
+| `tainted` | returns everything tainted | almost always, deliberately |
+
+`propagate` is the default because an unresolved callee is nearly always code
+in the same project, and code in the same project transforms its arguments
+rather than conjuring request data out of nothing. `tainted` is the upper bound
+on what the engine might be missing — noisy on purpose, and the right setting
+when auditing the auditor. Every finding produced under an assumption is marked
+`imprecise` so it can be filtered back out.
+
+`--assume-dynamic-tainted` is the old spelling of `--dynamic-calls=tainted` and
+still works.
 
 ### `include` and `require` are not followed
 

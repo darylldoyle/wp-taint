@@ -40,12 +40,27 @@ shapes that actually broke.
 The scans got substantially faster because the wasted iterations disappeared:
 All in One SEO went from 56.4s to 16.4s.
 
-**Seventeen functions still do not converge**, across 11 plugins, concentrated
-in WooCommerce (5) and Jetpack (3). Those are whatever is left of the same
-pattern, and they are the only known correctness problem remaining in the
-engine. The method that found the first three — lower the iteration cap, log
-which operand changes on the final passes, find the two ops fighting over it —
-applies directly.
+### The fourth, found the same way
+
+Seventeen functions still did not converge after those three. The same method
+found the cause: lower the iteration cap, log which operand changes on the final
+passes, find the two ops fighting over it.
+
+```php
+if ( is_callable( array( $this->post, $name ) ) ) { … }
+```
+
+`Op\Expr\Array_` and `Op\Expr\Assertion` write the same operand. The array
+literal set its own slot from the keys alone — empty, for a list — while the
+assertion over it set the same slot from the *union* of both slots, promoting
+the element taint into it. Each pass undid the other.
+
+The fix is that pass-throughs now propagate slot-wise: own taint to own,
+element taint to element. Reads out of a container still flatten both, which is
+where flattening belongs.
+
+**Every corpus function now converges.** Eleven plugins were affected; the last
+two were Jetpack and WooCommerce.
 
 ## Six false positive classes
 

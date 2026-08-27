@@ -539,6 +539,91 @@ rule_id = "wp.ldap.injection"
 # RULE METADATA
 # =============================================================================
 
+# ---------------------------------------------------------------------------
+# Dispatchers: functions that call something else on your behalf.
+#
+# `call_user_func( $cb, $x )` is not a call to `call_user_func`. Modelling it as
+# one loses every flow that passes through it, and PHP code passes a great deal
+# through it.
+#
+# `callable` is which argument holds the callee. `mode` says how the remaining
+# arguments map onto the callee's parameters, and `returns` says what the
+# dispatcher hands back. An entry that also appears under [[propagators]] falls
+# back to that entry whenever the callee cannot be resolved, so a dispatcher
+# never makes the analysis worse than not having one.
+# ---------------------------------------------------------------------------
+
+[[dispatchers]]
+function = "call_user_func"
+callable = 0
+mode = "rest"
+returns = "callee"
+
+[[dispatchers]]
+function = "call_user_func_array"
+callable = 0
+mode = "spread"
+returns = "callee"
+note = "The argument array is one SSA operand, so its element taint feeds every parameter."
+
+[[dispatchers]]
+function = "array_map"
+callable = 0
+argument_start = 1
+mode = "elements"
+returns = "callee_array"
+
+[[dispatchers]]
+function = "array_filter"
+callable = 1
+argument_start = 0
+mode = "elements"
+returns = "own"
+note = "Returns a subset of its input, not the predicate's boolean."
+
+[[dispatchers]]
+function = "array_walk"
+callable = 1
+argument_start = 0
+mode = "elements"
+returns = "own"
+
+[[dispatchers]]
+function = "array_reduce"
+callable = 1
+argument_start = 0
+mode = "elements"
+returns = "callee"
+
+[[dispatchers]]
+function = "usort"
+callable = 1
+argument_start = 0
+mode = "elements"
+returns = "own"
+
+[[dispatchers]]
+function = "uasort"
+callable = 1
+argument_start = 0
+mode = "elements"
+returns = "own"
+
+[[dispatchers]]
+function = "uksort"
+callable = 1
+argument_start = 0
+mode = "elements"
+returns = "own"
+
+[[dispatchers]]
+class = "Closure"
+method = "call"
+callable = 0
+argument_start = 1
+mode = "rest"
+returns = "callee"
+
 [[rules]]
 id = "wp.xss.unescaped-output"
 title = "Untrusted input reaches output without HTML escaping"

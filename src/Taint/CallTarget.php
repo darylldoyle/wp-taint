@@ -16,6 +16,10 @@ use PHPCfg\Operand;
  * models, and the registry wins.
  *
  * When neither is set the call is dynamic and the analysis is imprecise there.
+ *
+ * One call op can produce several of these. `call_user_func( $cb, $x )` where
+ * `$cb` holds one of two names on either side of a branch reaches both, and
+ * choosing one would be a guess; the analysis unions their effects instead.
  */
 final class CallTarget
 {
@@ -28,7 +32,26 @@ final class CallTarget
         public readonly ?string $userFunctionKey,
         public readonly ?string $displayName,
         public readonly bool $dynamic,
+        public readonly CallResultMode $resultMode = CallResultMode::Value,
     ) {
+    }
+
+    /**
+     * The same callee, with its return value going somewhere else.
+     *
+     * Only a dispatcher sets this: it knows whether it hands its callee's
+     * return back, collects it into an array, or discards it.
+     */
+    public function returningTo(CallResultMode $mode): self
+    {
+        return new self(
+            $this->arguments,
+            $this->matcher,
+            $this->userFunctionKey,
+            $this->displayName,
+            $this->dynamic,
+            $mode,
+        );
     }
 
     /**
@@ -69,5 +92,41 @@ final class CallTarget
     public function name(): string
     {
         return $this->displayName ?? 'unknown';
+    }
+
+    /**
+     * The same callee reached twice through different syntax.
+     *
+     * Two branches assigning the same callback name produce two identical
+     * targets, and analysing both would double every finding on that line.
+     */
+    public function identity(): string
+    {
+        return implode('|', [
+            $this->dynamic ? 'dynamic' : 'resolved',
+            $this->matcher?->identity() ?? '',
+            $this->userFunctionKey ?? '',
+            $this->displayName ?? '',
+        ]);
+    }
+
+    /**
+     * The same callee, called with different arguments.
+     *
+     * A dispatcher resolves the callee from one argument and passes the rest
+     * along, so the target is built before its real arguments are known.
+     *
+     * @param list<Operand> $arguments
+     */
+    public function withArguments(array $arguments): self
+    {
+        return new self(
+            $arguments,
+            $this->matcher,
+            $this->userFunctionKey,
+            $this->displayName,
+            $this->dynamic,
+            $this->resultMode,
+        );
     }
 }

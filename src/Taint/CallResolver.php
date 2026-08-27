@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Taint;
 
+use Enshrined\WpTaint\Registry\Dispatcher;
+use Enshrined\WpTaint\Registry\DispatchMode;
+use Enshrined\WpTaint\Registry\DispatchReturn;
 use Enshrined\WpTaint\Registry\Matcher;
 use Enshrined\WpTaint\Registry\Registry;
 use PHPCfg\Op;
@@ -13,8 +16,13 @@ use PHPCfg\Operand;
  * Turns a call op into something the analyser can look up.
  *
  * Direct calls, static calls and method calls on a receiver whose class is
- * statically obvious all resolve. Everything else is left unresolved and marked
- * imprecise, rather than guessed at.
+ * statically obvious all resolve. So do calls through a variable holding a
+ * callable, and calls made on your behalf by a dispatcher such as
+ * `call_user_func()`.
+ *
+ * Everything left over is unresolved and marked imprecise, rather than guessed
+ * at. What happens to an unresolved call is the caller's decision, not this
+ * class's — see `--dynamic-calls`.
  */
 final class CallResolver
 {
@@ -23,12 +31,210 @@ final class CallResolver
      * handle. `$wpdb` is a global; the others are the two names plugins almost
      * universally use when they stash it on an object.
      */
-    private const WPDB_RECEIVER_NAMES = ['wpdb', 'db'];
-
     public function __construct(
         private readonly Registry $registry,
         private readonly UserFunctionTable $functions,
+        private readonly CallableResolver $callables,
+        private readonly ValueResolver $values,
+        private readonly ReceiverResolver $receivers,
     ) {
+    }
+
+    /**
+     * Every callee a call op can reach.
+     *
+     * Usually one. Several when a callable variable holds a different name on
+     * each side of a branch, or when a dispatcher's callable resolves that way.
+     * None when the op is not a call at all.
+     *
+     * @return list<CallTarget>
+     */
+    public function resolveAll(Op $op, FunctionContext $context, ClassTypeMap $types): array
+    {
+        $direct = $this->resolve($op, $context, $types);
+
+        if ($direct === null) {
+            return [];
+        }
+
+        // `$callback( $x )` where `$callback` holds a name rather than a
+        // closure. The direct resolver cannot see through it, but the value
+        // resolver can.
+        if ($direct->dynamic && $op instanceof Op\Expr\FuncCall) {
+            $indirect = $this->callables->resolve(
+                $op->name,
+                $direct->arguments,
+                $context,
+                $types,
+                $this->receivers,
+            );
+
+            if ($indirect !== []) {
+                return $indirect;
+            }
+        }
+
+        // `new $handler()` where `$handler` holds a class name.
+        if ($direct->dynamic && $op instanceof Op\Expr\New_) {
+            $constructed = $this->constructorsFor($op->class, $direct->arguments);
+
+            if ($constructed !== []) {
+                return $constructed;
+            }
+        }
+
+        return $this->withDispatched($direct, $context, $types);
+    }
+
+    /**
+     * A call, plus whatever it runs on your behalf.
+     *
+     * The dispatcher's own catalogue entry does not simply step aside. Whether
+     * it stays depends on what the dispatcher does with its callee's return:
+     * `call_user_func()` hands it straight back, so the callee replaces it,
+     * while `array_filter()` returns a subset of its *input*, so its propagator
+     * entry is the one that decides the result and the predicate is analysed
+     * only for its sinks.
+     *
+     * @return list<CallTarget>
+     */
+    private function withDispatched(CallTarget $direct, FunctionContext $context, ClassTypeMap $types): array
+    {
+        $matcher = $direct->matcher;
+        $dispatcher = $matcher === null ? null : $this->registry->dispatcher($matcher);
+
+        if ($dispatcher === null) {
+            return [$direct];
+        }
+
+        $dispatched = $this->dispatched($direct, $dispatcher, $context, $types);
+
+        if ($dispatched === []) {
+            // The callable could not be pinned down. When the dispatcher hands
+            // its callee's return back, that return is genuinely unknown and
+            // the call is dynamic — reporting it as an unmodelled function
+            // would lose the flow without even marking it imprecise. When the
+            // dispatcher returns its own input, its entry still knows the
+            // answer and nothing is lost.
+            return $dispatcher->returns === DispatchReturn::Own
+                ? [$direct]
+                : [CallTarget::dynamic($direct->arguments, $direct->name())];
+        }
+
+        $mode = match ($dispatcher->returns) {
+            DispatchReturn::Callee => CallResultMode::Value,
+            DispatchReturn::CalleeArray => CallResultMode::Container,
+            DispatchReturn::Own => CallResultMode::Discard,
+        };
+
+        $targets = array_map(
+            static fn (CallTarget $target): CallTarget => $target->returningTo($mode),
+            $dispatched,
+        );
+
+        // `array_filter()` and friends still need their own entry to run: it is
+        // what puts the input array's taint on the result.
+        return $dispatcher->returns === DispatchReturn::Own ? [$direct, ...$targets] : $targets;
+    }
+
+    /**
+     * `new $class()` for every class name the operand can hold.
+     *
+     * @param list<Operand> $arguments
+     *
+     * @return list<CallTarget>
+     */
+    private function constructorsFor(Operand $class, array $arguments): array
+    {
+        $targets = [];
+
+        foreach ($this->values->strings($class) as $name) {
+            $name = ltrim($name, '\\');
+
+            if ($name === '') {
+                continue;
+            }
+
+            $key = $name . '::__construct';
+            $matcher = Matcher::method($name, '__construct');
+
+            // A class name nobody can find a definition for leaves the call
+            // dynamic, rather than resolving it to nothing and reporting clean.
+            if (! $this->functions->has($key) && ! $this->registry->knows($matcher)) {
+                continue;
+            }
+
+            $targets[] = CallTarget::resolved(
+                $arguments,
+                $matcher,
+                $this->functions->has($key) ? strtolower($key) : null,
+                'new ' . $name . '()',
+            );
+        }
+
+        return $targets;
+    }
+
+    /**
+     * The callees a dispatcher such as `call_user_func()` runs.
+     *
+     * Empty when the callable argument could not be resolved.
+     *
+     * @return list<CallTarget>
+     */
+    private function dispatched(
+        CallTarget $call,
+        Dispatcher $dispatcher,
+        FunctionContext $context,
+        ClassTypeMap $types,
+    ): array {
+        $callable = $call->argument($dispatcher->callable);
+
+        if ($callable === null) {
+            return [];
+        }
+
+        return $this->callables->resolve(
+            $callable,
+            $this->calleeArguments($call, $dispatcher),
+            $context,
+            $types,
+            $this->receivers,
+        );
+    }
+
+    /**
+     * The arguments the dispatcher hands the callee.
+     *
+     * @return list<Operand>
+     */
+    private function calleeArguments(CallTarget $call, Dispatcher $dispatcher): array
+    {
+        $arguments = [];
+
+        for ($index = $dispatcher->argumentStart; $index < $call->argumentCount(); $index++) {
+            if ($index === $dispatcher->callable) {
+                continue;
+            }
+
+            $argument = $call->argument($index);
+
+            if ($argument === null) {
+                continue;
+            }
+
+            $arguments[] = $argument;
+
+            // `spread` and `elements` both take a single array argument and
+            // unpack it. SSA gives that array one operand, so there is nothing
+            // finer to hand over: the callee's first parameter receives it, and
+            // the analysis reads its element taint from there.
+            if ($dispatcher->mode !== DispatchMode::Rest) {
+                break;
+            }
+        }
+
+        return $arguments;
     }
 
     public function resolve(Op $op, FunctionContext $context, ClassTypeMap $types): ?CallTarget
@@ -53,39 +259,13 @@ final class CallResolver
         }
 
         // `$render($x)` where `$render` holds a closure declared in this file.
-        $closure = $this->closureBehind($op->name);
+        $closure = $this->callables->closureBehind($op->name);
 
         if ($closure !== null) {
             return CallTarget::resolved($arguments, null, $closure->key, $closure->displayName . '()');
         }
 
         return CallTarget::dynamic($arguments, OperandHelper::describe($op->name) . '()');
-    }
-
-    /**
-     * Follow an operand back to a closure or arrow function declaration.
-     *
-     * Assignments are transparent, so `$a = fn () => ...; $b = $a; $b();`
-     * resolves. Anything that leaves the chain — a parameter, a property, a
-     * call result — stops the walk and the call stays dynamic.
-     */
-    private function closureBehind(Operand $operand, int $depth = 0): ?FunctionContext
-    {
-        if ($depth > 8) {
-            return null;
-        }
-
-        $definition = OperandHelper::definingOp($operand);
-
-        if ($definition instanceof Op\Expr\Assign) {
-            return $this->closureBehind($definition->expr, $depth + 1);
-        }
-
-        if ($definition instanceof Op\CallableOp) {
-            return $this->functions->forFunc($definition->getFunc());
-        }
-
-        return null;
     }
 
     private function resolveNamespacedCall(Op\Expr\NsFuncCall $op): CallTarget
@@ -272,45 +452,9 @@ final class CallResolver
         );
     }
 
-    /**
-     * The class of a method call's receiver, when it is statically obvious.
-     */
     private function receiverClass(Operand $receiver, FunctionContext $context, ClassTypeMap $types): ?string
     {
-        $name = OperandHelper::variableName($receiver);
-
-        if ($name === 'this') {
-            return $context->className;
-        }
-
-        if ($name !== null && in_array(strtolower($name), self::WPDB_RECEIVER_NAMES, true)) {
-            return 'wpdb';
-        }
-
-        $tracked = $types->classOf($receiver);
-
-        if ($tracked !== null) {
-            return $tracked;
-        }
-
-        // `$this->wpdb->query()` and `$this->db->query()`: the receiver is a
-        // property fetch, and these two property names are the near-universal
-        // convention for stashing the database handle.
-        $definition = OperandHelper::definingOp($receiver);
-
-        if ($definition instanceof Op\Expr\PropertyFetch) {
-            $property = OperandHelper::literalString($definition->name);
-
-            if ($property !== null && in_array(strtolower($property), self::WPDB_RECEIVER_NAMES, true)) {
-                return 'wpdb';
-            }
-
-            return $property === null
-                ? null
-                : $types->classOfProperty($this->receiverClass($definition->var, $context, $types), $property);
-        }
-
-        return null;
+        return $this->receivers->classOf($receiver, $context, $types);
     }
 
     /**

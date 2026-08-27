@@ -42,9 +42,16 @@ final class RegistryLoader
 
     private const SAFE_KEYS = ['function', 'class', 'method', 'static_method', 'note'];
 
+    private const DISPATCHER_KEYS = [
+        'function', 'class', 'method', 'static_method',
+        'callable', 'mode', 'argument_start', 'returns', 'note',
+    ];
+
     private const RULE_KEYS = ['id', 'title', 'description', 'remediation', 'cwe', 'message'];
 
-    private const TABLE_KEYS = ['meta', 'sources', 'sanitizers', 'propagators', 'sinks', 'safe', 'rules', 'options'];
+    private const TABLE_KEYS = [
+        'meta', 'sources', 'sanitizers', 'propagators', 'sinks', 'safe', 'dispatchers', 'rules', 'options',
+    ];
 
     private const OPTION_KEYS = ['safe_database_identifiers'];
 
@@ -121,6 +128,7 @@ final class RegistryLoader
         $this->loadPropagators($canonical, $data['propagators'] ?? [], $accumulator);
         $this->loadSinks($canonical, $data['sinks'] ?? [], $accumulator);
         $this->loadSafeCalls($canonical, $data['safe'] ?? [], $accumulator);
+        $this->loadDispatchers($canonical, $data['dispatchers'] ?? [], $accumulator);
         $this->loadRules($canonical, $data['rules'] ?? [], $accumulator);
         $this->loadOptions($canonical, $data['options'] ?? [], $accumulator);
 
@@ -277,6 +285,58 @@ final class RegistryLoader
             $accumulator->addSafeCall(new SafeCall(
                 $this->matcherFor($file, $context, $entry, allowConstruct: false, allowSuperglobal: false),
                 $this->requiredString($file, $context . ' note', $entry['note'] ?? null),
+            ));
+        }
+    }
+
+    private function loadDispatchers(string $file, mixed $entries, RegistryAccumulator $accumulator): void
+    {
+        foreach ($this->tableList($file, 'dispatchers', $entries) as $index => $entry) {
+            $context = sprintf('[[dispatchers]] #%d', $index + 1);
+            $this->rejectUnknownKeys($file, $context, $entry, self::DISPATCHER_KEYS);
+
+            $modeValue = $this->requiredString($file, $context . ' mode', $entry['mode'] ?? null);
+            $mode = DispatchMode::tryFrom($modeValue);
+
+            if ($mode === null) {
+                throw RegistryException::at($file, $context . ' mode', sprintf(
+                    '"%s" is not a dispatch mode. Valid modes: %s.',
+                    $modeValue,
+                    implode(', ', array_map(
+                        static fn (DispatchMode $m): string => $m->value,
+                        DispatchMode::cases(),
+                    )),
+                ));
+            }
+
+            $returnsValue = $this->requiredString($file, $context . ' returns', $entry['returns'] ?? null);
+            $returns = DispatchReturn::tryFrom($returnsValue);
+
+            if ($returns === null) {
+                throw RegistryException::at($file, $context . ' returns', sprintf(
+                    '"%s" is not a dispatch return. Valid values: %s.',
+                    $returnsValue,
+                    implode(', ', array_map(
+                        static fn (DispatchReturn $r): string => $r->value,
+                        DispatchReturn::cases(),
+                    )),
+                ));
+            }
+
+            $callable = $this->intValue($file, $context . ' callable', $entry['callable'] ?? 0);
+            $start = $this->intValue($file, $context . ' argument_start', $entry['argument_start'] ?? $callable + 1);
+
+            if ($callable < 0 || $start < 0) {
+                throw RegistryException::at($file, $context, 'argument positions cannot be negative.');
+            }
+
+            $accumulator->addDispatcher(new Dispatcher(
+                $this->matcherFor($file, $context, $entry, allowConstruct: false, allowSuperglobal: false),
+                $callable,
+                $mode,
+                $start,
+                $returns,
+                $this->optionalString($file, $context . ' note', $entry['note'] ?? null),
             ));
         }
     }

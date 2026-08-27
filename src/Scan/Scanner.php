@@ -16,12 +16,15 @@ use Enshrined\WpTaint\Rules\Wordpress\MissingAjaxCapabilityCheck;
 use Enshrined\WpTaint\Rules\Wordpress\MissingRestPermissionCallback;
 use Enshrined\WpTaint\Taint\AnalysisOptions;
 use Enshrined\WpTaint\Taint\AnalysisWarning;
+use Enshrined\WpTaint\Taint\CallableResolver;
 use Enshrined\WpTaint\Taint\CallResolver;
 use Enshrined\WpTaint\Taint\InterproceduralResolver;
 use Enshrined\WpTaint\Taint\IntraproceduralAnalyzer;
+use Enshrined\WpTaint\Taint\ReceiverResolver;
 use Enshrined\WpTaint\Taint\SummaryExtractor;
 use Enshrined\WpTaint\Taint\TaintGraphWriter;
 use Enshrined\WpTaint\Taint\UserFunctionTable;
+use Enshrined\WpTaint\Taint\ValueResolver;
 
 /**
  * The pipeline.
@@ -115,7 +118,13 @@ final class Scanner
             $file->releaseAst();
         }
 
-        $resolver = new CallResolver($this->registry, $functions);
+        $resolver = new CallResolver(
+            $this->registry,
+            $functions,
+            new CallableResolver($this->registry, $functions, $values = new ValueResolver()),
+            $values,
+            new ReceiverResolver(),
+        );
         $analyzer = new IntraproceduralAnalyzer($this->registry, $functions, $resolver, $this->options);
         $extractor = new SummaryExtractor($analyzer, $this->options);
         $interprocedural = new InterproceduralResolver($analyzer, $extractor, $this->options, $this->jobs);

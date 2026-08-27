@@ -23,6 +23,7 @@ final class Registry
      * @param array<string, Propagator>   $propagators
      * @param array<string, Sink>         $sinks
      * @param array<string, SafeCall>     $safeCalls
+     * @param array<string, Dispatcher>   $dispatchers
      * @param array<string, RuleMetadata> $rules
      * @param list<string>                $safeDatabaseIdentifiers
      */
@@ -33,6 +34,7 @@ final class Registry
         private readonly array $propagators,
         private readonly array $sinks,
         private readonly array $safeCalls,
+        private readonly array $dispatchers,
         private readonly array $rules,
         private readonly array $safeDatabaseIdentifiers,
     ) {
@@ -56,6 +58,22 @@ final class Registry
     public function sink(Matcher $matcher): ?Sink
     {
         return $this->sinks[$matcher->key()] ?? null;
+    }
+
+    /**
+     * The dispatcher entry for a call, if this call runs something else.
+     */
+    public function dispatcher(Matcher $matcher): ?Dispatcher
+    {
+        return $this->dispatchers[$matcher->key()] ?? null;
+    }
+
+    /**
+     * @return array<string, Dispatcher>
+     */
+    public function dispatchers(): array
+    {
+        return $this->dispatchers;
     }
 
     public function isSafeCall(Matcher $matcher): bool
@@ -212,6 +230,7 @@ final class Registry
             $this->propagators,
             $this->sinks,
             $this->safeCalls,
+            $this->dispatchers,
             $this->rules,
             $this->safeDatabaseIdentifiers,
         );
@@ -231,6 +250,7 @@ final class Registry
             $this->propagators,
             $sinks,
             $this->safeCalls,
+            $this->dispatchers,
             $this->rules,
             $this->safeDatabaseIdentifiers,
         );

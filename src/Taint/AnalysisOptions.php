@@ -14,7 +14,12 @@ final class AnalysisOptions
      */
     public function __construct(
         public readonly bool $interprocedural = true,
-        public readonly bool $assumeDynamicTainted = false,
+        /**
+         * What an unresolved call is assumed to do. `--assume-dynamic-tainted`
+         * is the old spelling of {@see DynamicCallPolicy::Tainted} and still
+         * works.
+         */
+        public readonly DynamicCallPolicy $dynamicCalls = DynamicCallPolicy::Propagate,
         public readonly int $maxIterations = 64,
         public readonly int $maxTraceSteps = 64,
         public readonly int $maxSummarisedParameters = 8,
@@ -29,5 +34,10 @@ final class AnalysisOptions
          */
         public readonly int $maxInterproceduralRounds = 32,
     ) {
+    }
+
+    public function assumeDynamicTainted(): bool
+    {
+        return $this->dynamicCalls === DynamicCallPolicy::Tainted;
     }
 }

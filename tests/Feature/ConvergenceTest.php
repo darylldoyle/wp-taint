@@ -296,3 +296,40 @@ it('still treats the keys of a superglobal as attacker-controlled', function ():
 
     expect($result->findings)->toHaveCount(1);
 });
+
+it('converges when an assertion is taken over an array literal', function (): void {
+    // `is_callable( array( $obj, $name ) )` puts two ops on one operand:
+    // Op\Expr\Array_ writes it from the keys alone, and Op\Expr\Assertion
+    // writes the same operand from the union of both taint slots. Folding
+    // element taint into the own slot made them disagree forever.
+    $warnings = convergenceWarnings(<<<'PHP'
+        <?php
+        class Acme_Proxy
+        {
+            private $post;
+
+            public function __call($name, $arguments)
+            {
+                if (is_callable(array($this->post, $name))) {
+                    return call_user_func_array(array($this->post, $name), $arguments);
+                }
+
+                trigger_error(esc_html(sprintf('Call to undefined method %s', $name)));
+            }
+        }
+        PHP);
+
+    expect($warnings)->toBe([]);
+});
+
+it('keeps element taint out of the own slot through a pass-through', function (): void {
+    // The split has to survive implode(): the element taint goes in as element
+    // taint and comes out reachable, without ever being promoted.
+    $result = scanCode(<<<'PHP'
+        <?php
+        $parts = array($_GET['a'], $_GET['b']);
+        echo implode(', ', $parts);
+        PHP);
+
+    expect($result->findings)->toHaveCount(1);
+});

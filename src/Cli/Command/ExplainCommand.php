@@ -12,13 +12,16 @@ use Enshrined\WpTaint\Registry\RegistryLoader;
 use Enshrined\WpTaint\Scan\FileFinder;
 use Enshrined\WpTaint\Support\PathHelper;
 use Enshrined\WpTaint\Taint\AnalysisOptions;
+use Enshrined\WpTaint\Taint\CallableResolver;
 use Enshrined\WpTaint\Taint\CallResolver;
 use Enshrined\WpTaint\Taint\Explainer;
 use Enshrined\WpTaint\Taint\InterproceduralResolver;
 use Enshrined\WpTaint\Taint\IntraproceduralAnalyzer;
+use Enshrined\WpTaint\Taint\ReceiverResolver;
 use Enshrined\WpTaint\Taint\SummaryExtractor;
 use Enshrined\WpTaint\Taint\TaintKind;
 use Enshrined\WpTaint\Taint\UserFunctionTable;
+use Enshrined\WpTaint\Taint\ValueResolver;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
@@ -44,10 +47,16 @@ final class ExplainCommand extends Command
             ->addOption('registry', null, InputOption::VALUE_REQUIRED, 'Registry name or path', 'wordpress')
             ->addOption('scope', null, InputOption::VALUE_REQUIRED, 'Directory to analyse for cross-file flows')
             ->addOption(
+                'dynamic-calls',
+                null,
+                InputOption::VALUE_REQUIRED,
+                'How to treat a call whose callee cannot be resolved: clean, propagate (default) or tainted',
+            )
+            ->addOption(
                 'assume-dynamic-tainted',
                 null,
                 InputOption::VALUE_NONE,
-                'Treat unresolved dynamic calls as propagating all taint',
+                'Deprecated alias for --dynamic-calls=tainted',
             );
     }
 
@@ -98,7 +107,7 @@ final class ExplainCommand extends Command
         }
 
         $options = new AnalysisOptions(
-            assumeDynamicTainted: $reader->bool('assume-dynamic-tainted'),
+            dynamicCalls: $reader->dynamicCallPolicy(),
         );
 
         $builder = new CfgBuilder($root);
@@ -137,12 +146,18 @@ final class ExplainCommand extends Command
             return ExitCode::ERROR;
         }
 
-        $resolver = new CallResolver($registry, $functions);
+        $resolver = new CallResolver(
+            $registry,
+            $functions,
+            new CallableResolver($registry, $functions, $values = new ValueResolver()),
+            $values,
+            new ReceiverResolver(),
+        );
         $analyzer = new IntraproceduralAnalyzer($registry, $functions, $resolver, $options);
         $extractor = new SummaryExtractor($analyzer, $options);
         $resolution = (new InterproceduralResolver($analyzer, $extractor, $options))->resolve($functions->all());
 
-        $explanation = (new Explainer($registry, $resolver, $analyzer))->explain(
+        $explanation = (new Explainer($registry, $resolver, $analyzer, $options))->explain(
             $target,
             $line,
             $functions->all(),

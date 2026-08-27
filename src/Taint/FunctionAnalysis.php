@@ -61,6 +61,19 @@ final class FunctionAnalysis
 
     private bool $collecting = false;
 
+    /**
+     * Set while a call op with several possible callees is being transferred,
+     * so their results accumulate on the shared operand instead of the last one
+     * visited overwriting the rest. See {@see transferCalls()}.
+     */
+    private bool $unionResultWrites = false;
+
+    /**
+     * Where the callee currently being transferred writes its return value. A
+     * dispatcher decides this; see {@see CallResultMode}.
+     */
+    private CallResultMode $resultMode = CallResultMode::Value;
+
     private TraceBuilder $traces;
 
     /** @var list<Block> */
@@ -278,10 +291,10 @@ final class FunctionAnalysis
             return false;
         }
 
-        $call = $this->resolver->resolve($op, $this->context, $this->types);
+        $calls = $this->resolver->resolveAll($op, $this->context, $this->types);
 
-        if ($call !== null && $op instanceof Op\Expr) {
-            return $this->transferCall($op, $call);
+        if ($calls !== [] && $op instanceof Op\Expr) {
+            return $this->transferCalls($op, $calls);
         }
 
         return match (true) {
@@ -468,6 +481,8 @@ final class FunctionAnalysis
      */
     private function transferContainerRead(Op\Expr $op, Operand $container, string $description): bool
     {
+        // A read out of a container flattens both slots: the value that comes
+        // out carries whatever was put in, however it got there.
         $taint = $this->state->effectiveTaintOf($container);
 
         if ($taint->isEmpty()) {
@@ -691,21 +706,33 @@ final class FunctionAnalysis
     }
 
     /**
+     * Propagate the union of several operands into an expression's result,
+     * keeping the two taint slots apart.
+     *
+     * Own taint flows to own, element taint flows to element. Folding element
+     * taint into the own slot is what made `is_callable( array( $a, $b ) )`
+     * oscillate: `Op\Expr\Array_` set the own slot from the keys alone while
+     * the assertion over it set the same slot from the union, and the two
+     * disagreed forever.
+     *
      * @param list<Operand> $inputs
      */
     private function transferUnion(Op\Expr $op, array $inputs, string $description): bool
     {
-        $taint = $this->state->unionOf($inputs);
+        $taint = $this->state->unionOfOwn($inputs);
+        $container = $this->state->unionOfContainers($inputs);
 
-        if ($taint->isEmpty()) {
-            return $this->state->set($op->result, $taint);
+        $provenance = $taint->isEmpty() && $container->isEmpty()
+            ? null
+            : new Provenance(TraceVerb::Propagate, $op, $description, $inputs);
+
+        $changed = $this->writeResult($op->result, $taint, $provenance);
+
+        if ($container->isEmpty() || $provenance === null) {
+            return $changed;
         }
 
-        return $this->state->set(
-            $op->result,
-            $taint,
-            new Provenance(TraceVerb::Propagate, $op, $description, $inputs),
-        );
+        return $this->state->addContainerTaint($op->result, $container, $provenance) || $changed;
     }
 
     private function transferPassThrough(Op\Expr $op, Operand $input, string $description): bool
@@ -780,6 +807,74 @@ final class FunctionAnalysis
     // Calls
     // -------------------------------------------------------------------
 
+    /**
+     * One call op, one or more callees.
+     *
+     * `call_user_func( $cb, $x )` where `$cb` holds a different name on each
+     * side of a branch reaches both, and picking one would be a guess. Every
+     * callee is analysed and the effects are unioned, so a sink in either is
+     * reported and the return value carries what either could produce.
+     *
+     * The union is what makes this safe to iterate: writes accumulate rather
+     * than replace while several callees are in play, so the order they are
+     * visited in cannot change the answer.
+     *
+     * @param list<CallTarget> $calls
+     */
+    private function transferCalls(Op\Expr $op, array $calls): bool
+    {
+        if (count($calls) === 1 && $calls[0]->resultMode === CallResultMode::Value) {
+            return $this->transferCall($op, $calls[0]);
+        }
+
+        $previousUnion = $this->unionResultWrites;
+        $previousMode = $this->resultMode;
+        $this->unionResultWrites = true;
+        $changed = false;
+
+        try {
+            foreach ($calls as $call) {
+                $this->resultMode = $call->resultMode;
+                $changed = $this->transferCall($op, $call) || $changed;
+            }
+        } finally {
+            $this->unionResultWrites = $previousUnion;
+            $this->resultMode = $previousMode;
+        }
+
+        return $changed;
+    }
+
+    /**
+     * Write a call's result, unioning when several callees share the operand.
+     *
+     * With one callee this is a plain assignment, and a callee that returns
+     * clean clears whatever a previous iteration left. With several, replacing
+     * would mean the last one visited won.
+     */
+    private function writeResult(Operand $result, TaintSet $taint, ?Provenance $provenance = null): bool
+    {
+        // The callee's return is not what this call evaluates to. It was still
+        // analysed, which is the point: its sinks fired.
+        if ($this->resultMode === CallResultMode::Discard) {
+            return false;
+        }
+
+        if ($this->resultMode === CallResultMode::Container) {
+            return $taint->isEmpty() || $provenance === null
+                ? false
+                : $this->state->addContainerTaint($result, $taint, $provenance);
+        }
+
+        if (! $this->unionResultWrites) {
+            return $this->state->set($result, $taint, $provenance);
+        }
+
+        return $taint->isEmpty()
+            ? false
+            : $this->state->add($result, $taint, $provenance);
+    }
+
     private function transferCall(Op\Expr $op, CallTarget $call): bool
     {
         if ($call->dynamic) {
@@ -826,14 +921,14 @@ final class FunctionAnalysis
             }
 
             if ($this->registry->isSafeCall($matcher)) {
-                return $this->state->set($op->result, TaintSet::empty());
+                return $this->writeResult($op->result, TaintSet::empty());
             }
 
             if ($sink !== null) {
                 // A sink with no other role consumes the value; whatever it
                 // returns is not derived from the tainted argument in a way we
                 // model.
-                return $this->state->set($op->result, TaintSet::empty());
+                return $this->writeResult($op->result, TaintSet::empty());
             }
         }
 
@@ -844,13 +939,13 @@ final class FunctionAnalysis
         if ($call->userFunctionKey !== null) {
             // --no-interprocedural: user calls are opaque, which is exactly the
             // Phase 3 behaviour this flag exists to reproduce.
-            return $this->state->set($op->result, TaintSet::empty());
+            return $this->writeResult($op->result, TaintSet::empty());
         }
 
         // A named function the catalogue has no model for. Returning clean is
         // the deliberate choice: a documented false negative beats an
         // undocumented false positive.
-        return $this->state->set($op->result, TaintSet::empty());
+        return $this->writeResult($op->result, TaintSet::empty());
     }
 
     private function sourceApplies(Source $source, CallTarget $call): bool
@@ -888,7 +983,7 @@ final class FunctionAnalysis
         $cleared = $sanitizer->apply($incoming);
 
         if ($cleared->isEmpty()) {
-            return $this->state->set($op->result, $cleared);
+            return $this->writeResult($op->result, $cleared);
         }
 
         return $this->state->set(
@@ -1022,23 +1117,43 @@ final class FunctionAnalysis
         return $this->transferUnion($op, $inputs, $description);
     }
 
+    /**
+     * A call whose callee could not be named.
+     *
+     * The engine has genuinely lost the thread here, so anything it says next
+     * is an assumption. Which assumption is `--dynamic-calls`, and the op is
+     * marked imprecise either way so the finding carries the caveat with it.
+     */
     private function transferDynamicCall(Op\Expr $op, CallTarget $call): bool
     {
         $this->imprecise = true;
 
-        if (! $this->options->assumeDynamicTainted) {
-            return $this->state->set($op->result, TaintSet::empty());
-        }
-
-        return $this->transferUnion(
-            $op,
-            $call->arguments,
-            sprintf(
-                'Call to %s could not be resolved. --assume-dynamic-tainted is on, so its arguments are assumed to '
-                    . 'flow to its return value.',
-                $call->name(),
+        return match ($this->options->dynamicCalls) {
+            DynamicCallPolicy::Clean => $this->writeResult($op->result, TaintSet::empty()),
+            DynamicCallPolicy::Propagate => $this->transferUnion(
+                $op,
+                $call->arguments,
+                sprintf(
+                    'Call to %s could not be resolved, so %s (--dynamic-calls=propagate).',
+                    $call->name(),
+                    DynamicCallPolicy::Propagate->describe(),
+                ),
             ),
-        );
+            DynamicCallPolicy::Tainted => $this->writeResult(
+                $op->result,
+                TaintSet::allDataflowKinds(),
+                new Provenance(
+                    TraceVerb::Propagate,
+                    $op,
+                    sprintf(
+                        'Call to %s could not be resolved, so %s (--dynamic-calls=tainted).',
+                        $call->name(),
+                        DynamicCallPolicy::Tainted->describe(),
+                    ),
+                    $call->arguments,
+                ),
+            ),
+        };
     }
 
     private function transferUserCall(Op\Expr $op, CallTarget $call): bool
@@ -1046,7 +1161,7 @@ final class FunctionAnalysis
         $key = $call->userFunctionKey;
 
         if ($key === null) {
-            return $this->state->set($op->result, TaintSet::empty());
+            return $this->writeResult($op->result, TaintSet::empty());
         }
 
         $summary = $this->summaries->get($key);
@@ -1054,7 +1169,7 @@ final class FunctionAnalysis
         if ($summary === null) {
             // Bottom of the lattice: the first interprocedural round has not
             // reached this callee yet.
-            return $this->state->set($op->result, TaintSet::empty());
+            return $this->writeResult($op->result, TaintSet::empty());
         }
 
         if ($summary->imprecise) {
@@ -1066,7 +1181,10 @@ final class FunctionAnalysis
         $viaParameters = [];
 
         foreach ($call->arguments as $index => $argument) {
-            $argumentTaint = $this->state->taintOf($argument);
+            // Both slots: the callee receives the whole value, and an array
+            // passed in arrives with its elements attached. Reading only the
+            // own slot loses every flow through `f( array( $_GET['v'] ) )`.
+            $argumentTaint = $this->state->effectiveTaintOf($argument);
 
             if ($argumentTaint->isEmpty()) {
                 continue;
@@ -1084,7 +1202,7 @@ final class FunctionAnalysis
         }
 
         if ($result->isEmpty()) {
-            return $this->state->set($op->result, $result);
+            return $this->writeResult($op->result, $result);
         }
 
         return $this->state->set(

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Cli;
 
+use Enshrined\WpTaint\Taint\DynamicCallPolicy;
+use InvalidArgumentException;
 use RuntimeException;
 use Symfony\Component\Console\Input\InputInterface;
 
@@ -123,6 +125,39 @@ final class InputReader
      * has three states: absent, present with no value, and present with a
      * value.
      */
+    /**
+     * `--dynamic-calls`, honouring the flag it replaced.
+     *
+     * `--assume-dynamic-tainted` was the only setting before there were three,
+     * and scripts in CI still pass it. It maps onto `tainted`; an explicit
+     * `--dynamic-calls` wins if both are given.
+     */
+    public function dynamicCallPolicy(): DynamicCallPolicy
+    {
+        $value = $this->nullableString('dynamic-calls');
+
+        if ($value === null) {
+            return $this->bool('assume-dynamic-tainted')
+                ? DynamicCallPolicy::Tainted
+                : DynamicCallPolicy::Propagate;
+        }
+
+        $policy = DynamicCallPolicy::tryFrom(strtolower($value));
+
+        if ($policy === null) {
+            throw new InvalidArgumentException(sprintf(
+                '--dynamic-calls must be one of %s, got "%s".',
+                implode(', ', array_map(
+                    static fn (DynamicCallPolicy $p): string => $p->value,
+                    DynamicCallPolicy::cases(),
+                )),
+                $value,
+            ));
+        }
+
+        return $policy;
+    }
+
     public function optionalValue(string $name, string $whenPresentWithoutValue): ?string
     {
         $value = $this->input->getOption($name);

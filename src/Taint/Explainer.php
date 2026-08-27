@@ -31,6 +31,7 @@ final class Explainer
         private readonly Registry $registry,
         private readonly CallResolver $resolver,
         private readonly IntraproceduralAnalyzer $analyzer,
+        private readonly AnalysisOptions $options,
     ) {
     }
 
@@ -204,9 +205,12 @@ final class Explainer
 
         if ($target->dynamic) {
             return [sprintf(
-                'A potential path was abandoned: the call to %s could not be resolved (dynamic callee). '
-                    . 'See KNOWN_LIMITATIONS.md § dynamic-calls, or re-run with --assume-dynamic-tainted.',
+                'A potential path was abandoned: the call to %s could not be resolved (dynamic callee), '
+                    . 'and --dynamic-calls=%s, so %s. '
+                    . 'See KNOWN_LIMITATIONS.md § dynamic-calls, or re-run with --dynamic-calls=tainted.',
                 $target->name(),
+                $this->options->dynamicCalls->value,
+                $this->options->dynamicCalls->describe(),
             )];
         }
 

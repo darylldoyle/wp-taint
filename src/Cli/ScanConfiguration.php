@@ -9,6 +9,7 @@ use Enshrined\WpTaint\Registry\Registry;
 use Enshrined\WpTaint\Registry\RegistryLoader;
 use Enshrined\WpTaint\Support\PathHelper;
 use Enshrined\WpTaint\Taint\AnalysisOptions;
+use Enshrined\WpTaint\Taint\DynamicCallPolicy;
 use InvalidArgumentException;
 use RuntimeException;
 
@@ -63,7 +64,7 @@ final class ScanConfiguration
         bool $interprocedural,
         bool $storedTaint,
         bool $storedTaintWrites,
-        bool $assumeDynamicTainted,
+        DynamicCallPolicy $dynamicCalls,
         bool $parseReport,
         ?string $dumpTaintGraph,
         bool $structuralRules,
@@ -103,7 +104,7 @@ final class ScanConfiguration
             $registry,
             new AnalysisOptions(
                 interprocedural: $interprocedural,
-                assumeDynamicTainted: $assumeDynamicTainted,
+                dynamicCalls: $dynamicCalls,
             ),
             $excludes,
             $format,
