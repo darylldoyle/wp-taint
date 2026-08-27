@@ -464,6 +464,33 @@ and Loginizer −13 were the largest, and every removed trace carried the line
 "Array taint is tracked per array, not per key, so the whole array is treated as
 tainted from here" — which is as direct a confirmation as the corpus offers.
 
+## The corpus as a tracked number
+
+Seventeen bugs over this work were found by running the corpus, and none of them
+by the fixture suite. Two made findings *fall*, which is the direction nobody
+thinks to look in: per-key array taint took the corpus down seventeen findings,
+every mover downward, and it was a false negative — `effectiveTaintOf()` had
+stopped seeing keyed slots at call boundaries. The only reason it was caught is
+that somebody happened to read the numbers.
+
+So the numbers are committed. Eight plugins pinned by exact version in
+`corpus-lock.json`, scanned serially, with per-plugin counts in
+`corpus-baseline.json` and a CI job that fails on drift. Pinned because the full
+corpus runs at latest-stable, which is right for triage and wrong for a tracked
+number: a baseline that moves whenever upstream releases teaches people to
+ignore it. Serial because a worker that runs out of memory takes its shard with
+it, and a baseline that depends on the runner's RAM is not a baseline.
+
+A diff is not automatically a regression — a real improvement moves the number
+too. It means *look*, then either fix the cause or accept the new baseline with
+the reason in the commit message. A count that falls gets flagged for extra
+suspicion, because a false positive is visible and annoying while a false
+negative is silent.
+
+It earned its keep within an hour: modelling `add_query_arg()` moved two counts,
+and reading the traces showed the shape test was wrong — it recognised a literal
+`array()` but not `$this->get_args`, a property holding one.
+
 ## Determinism across `--jobs`, again
 
 Elementor reported the same finding with a seven-step trace at `--jobs=1` and a
