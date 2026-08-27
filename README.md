@@ -43,12 +43,21 @@ wp-taint takes the SSA/CFG approach — which gives interprocedural taint cheapl
 - Command injection, `eval()`, and PHP object injection through `unserialize()`
 - Open redirects and HTTP header injection
 
+Calls are followed through the value that names them: a callable in a variable,
+`call_user_func()`, `array_map()`, and hook dispatch. A callback registered with
+`add_filter()` that reads `$_GET` taints the filter's result at every
+`apply_filters()` site; one that escapes is credited.
+
 **Broken authorization**, via structural rules, which taint analysis
 structurally cannot find:
 
 - `register_rest_route()` with no `permission_callback`
 - `permission_callback => '__return_true'` on a route that writes
+- `permission_callback` that resolves but reaches no authorization check
 - `wp_ajax_*` handlers with no capability check and no nonce check
+
+The last two walk the call graph rather than matching names, so a check
+delegated to a helper counts and a helper merely *named* like a check does not.
 
 ## Taint is never a boolean
 

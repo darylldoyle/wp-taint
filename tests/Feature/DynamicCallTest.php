@@ -5,14 +5,12 @@ declare(strict_types=1);
 use Enshrined\WpTaint\Taint\AnalysisOptions;
 use Enshrined\WpTaint\Taint\DynamicCallPolicy;
 
-/**
- * Calls the engine has to see through.
- *
- * WordPress routes an enormous amount of control flow through a callable in a
- * variable. An analyser that stops at the indirection stops exactly where the
- * interesting flows are, so these are the shapes that have to resolve — and,
- * just as importantly, the ones that must *not* resolve to a guess.
- */
+// Calls the engine has to see through.
+//
+// WordPress routes an enormous amount of control flow through a callable in a
+// variable. An analyser that stops at the indirection stops exactly where the
+// interesting flows are, so these are the shapes that have to resolve — and,
+// just as importantly, the ones that must *not* resolve to a guess.
 
 it('follows a callable through a dispatcher', function (): void {
     $result = scanCode(<<<'PHP'

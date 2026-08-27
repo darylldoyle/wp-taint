@@ -120,26 +120,42 @@ disproportionate amount of machinery for a v1.
 
 **Direction:** under-approximating.
 
-### Filter and action callbacks are not followed
+### Filter and action callbacks are followed
 
-`apply_filters( 'the_content', $value )` is modelled as a pass-through: the
-value goes in and comes out. Callbacks registered on that filter elsewhere are
-not analysed as part of the flow, so a callback that *introduces* taint is
-invisible, and one that sanitises is not credited.
+`apply_filters( 'the_content', $value )` is a call to every callback registered
+on `the_content`, and `do_action( 'acme_saved', $note )` flows its arguments
+into each callback's parameters. A callback that introduces taint taints the
+filter's result; one that sanitises is credited.
 
-`add_action( 'wp_ajax_*', ... )` **is** resolved, but only by the AJAX
-authorization rule, and only for the four callback shapes below. Unresolved
-registrations are counted and reported rather than ignored.
+The graph is built from `add_action()` and `add_filter()` across the whole scan,
+so a callback registered in one file and defined in another connects. Hook names
+resolve through the value resolver, so `"wp_ajax_{$action}"` and
+`__NAMESPACE__ . '\\render'` both work. Priority is recorded for the trace text
+and otherwise ignored: it cannot change a union.
 
-**Direction:** both. Under-approximating for taint-introducing callbacks,
-over-approximating for sanitising ones.
+Which dispatchers are followed is data, under `[[dispatchers]]` with
+`hook = true`. `apply_filters`, `apply_filters_ref_array`, `do_action` and
+`do_action_ref_array` ship; a project with its own dispatcher adds it there.
 
-### Hook callbacks resolve in four shapes only
+**What is still missed.** A registration whose hook *name* will not resolve is
+not connected to anything. It is listed in the unresolved-hook count rather than
+unioned into every dispatch — that would be the sound choice and it is the wrong
+one, because a plugin with 22 unplaced registrations against 201 hooks would gain
+22 spurious callees on every dispatch. `remove_filter()` is not modelled either,
+so a callback removed at runtime is still analysed.
 
-`'function_name'`, `[$this, 'method']`, `[__CLASS__, 'method']` /
-`[self::class, 'method']`, and an inline closure or arrow function. A callback
-built any other way is reported in the "hook registrations could not be
-resolved" count so the gap is visible.
+**Direction:** under-approximating, at the unresolved names.
+
+### Hook callbacks resolve in every form PHP accepts
+
+`'function_name'`, `'Class::method'`, `array( $object, 'method' )`,
+`array( 'Class', 'method' )`, a closure, an arrow function, and an object with
+`__invoke`. Resolution runs through the same resolver the rest of the analysis
+uses, so a hook edge and a `call_user_func()` edge cannot disagree about what a
+callback means.
+
+A callback the resolver cannot pin down is reported in the "hook registrations
+could not be resolved" count so the gap stays visible.
 
 ### An unmodelled function returns clean
 
@@ -184,27 +200,49 @@ the analysis is concerned. Phi nodes union across every path.
 
 ## Structural rules
 
-### `permission_callback` is checked for presence, not for adequacy
+### `permission_callback` is checked for what it reaches
 
-A route with `'permission_callback' => 'acme_check'` passes, whatever
-`acme_check()` actually does. Only a literally absent callback, or
-`__return_true` on a write route, is reported.
+Three distinct problems, at three severities:
 
-### The AJAX rule accepts anything that reads like a check
+| Reported | Severity |
+| --- | --- |
+| No `permission_callback` at all | high |
+| `__return_true` on a write route | critical |
+| A callback that reaches no authorization check | medium |
 
-Alongside the real WordPress functions, a method call whose name contains `can`,
-`capab`, `permission`, `nonce`, `referer`, `authori`, `authenticat` or `verify`
-is accepted as a check.
+The third walks the call graph from the callback looking for one of the
+`[[authorization]]` primitives. It is deliberately the quietest of the three,
+and stays silent whenever the walk was incomplete: a callback that cannot be
+resolved, or whose subgraph runs into something the engine cannot follow, is not
+reported at all. A callback can be doing something legitimate we cannot see.
 
-Without that, every codebase that factors its checks into a helper gets a false
-positive — and a false positive on an authorization rule is exactly the kind
-that gets a tool muted. The cost is that `$this->can_haz_cheeseburger()` also
-satisfies it.
+### The AJAX rule asks what the callback reaches
 
-### `register_rest_route()` options must be an inline array
+Walking the call graph from the resolved callback, to a depth of six, looking for
+a call to one of the `[[authorization]]` primitives — `current_user_can`,
+`check_ajax_referer`, `wp_verify_nonce` and the rest. Recursing through helpers
+is what credits `acf_verify_ajax()` for the right reason: it calls
+`wp_verify_nonce`, and we can see that.
 
-A route whose options come from a variable or a method call is counted as
-unresolved rather than reported.
+The name heuristic this replaced accepted any call containing `can`, `capab`,
+`permission`, `nonce`, `referer`, `authori`, `authenticat` or `verify`. It
+survives only where the graph cannot speak — a callback that will not resolve, or
+a walk that ran into something unfollowable — and findings resting on it are
+marked `imprecise`.
+
+**What is still missed.** A check reached only through a dynamic call the engine
+cannot resolve. Those walks report themselves incomplete, so the finding is
+marked rather than suppressed.
+
+### `register_rest_route()` options are folded, not traced
+
+Options handed in through a variable assigned exactly once from a literal, or
+returned by a function whose only `return` is a literal, resolve. Anything built
+conditionally, appended to, or passed through a filter does not, and is counted
+as unresolved rather than guessed at.
+
+That is deliberately a constant fold and not a dataflow analysis: a wrong answer
+in this rule is an authorization bypass either reported or missed.
 
 ---
 

@@ -8,6 +8,7 @@ use Enshrined\WpTaint\Cfg\CfgBuilder;
 use Enshrined\WpTaint\Cli\Application;
 use Enshrined\WpTaint\Cli\ExitCode;
 use Enshrined\WpTaint\Cli\InputReader;
+use Enshrined\WpTaint\Hooks\HookGraphBuilder;
 use Enshrined\WpTaint\Registry\RegistryLoader;
 use Enshrined\WpTaint\Scan\FileFinder;
 use Enshrined\WpTaint\Support\PathHelper;
@@ -146,13 +147,16 @@ final class ExplainCommand extends Command
             return ExitCode::ERROR;
         }
 
-        $resolver = new CallResolver(
-            $registry,
-            $functions,
-            new CallableResolver($registry, $functions, $values = new ValueResolver()),
-            $values,
-            new ReceiverResolver(),
-        );
+        $values = new ValueResolver();
+        $receivers = new ReceiverResolver();
+        $callables = new CallableResolver($registry, $functions, $values);
+
+        // The same hook graph the scan builds. Without it `explain` would say a
+        // value is clean where `scan` reports a finding through a filter
+        // callback, and the whole point of this command is that the two agree.
+        $hooks = (new HookGraphBuilder($callables, $values, $receivers))->build($functions->all());
+
+        $resolver = new CallResolver($registry, $functions, $callables, $values, $receivers, $hooks);
         $analyzer = new IntraproceduralAnalyzer($registry, $functions, $resolver, $options);
         $extractor = new SummaryExtractor($analyzer, $options);
         $resolution = (new InterproceduralResolver($analyzer, $extractor, $options))->resolve($functions->all());
