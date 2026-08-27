@@ -90,7 +90,7 @@ final class InterproceduralResolver
             // them. Both are fixed, so the merge is deterministic.
             foreach ($shards as $shardResult) {
                 foreach ($shardResult['summaries'] as $summary) {
-                    $summaries->set($summary);
+                    $summaries->put($summary);
                 }
 
                 $changed = $properties->mergeFrom($shardResult['properties']) || $changed;
@@ -138,7 +138,7 @@ final class InterproceduralResolver
         $visible = new SummaryTable();
 
         foreach ($summaries->all() as $summary) {
-            $visible->set($summary);
+            $visible->put($summary);
         }
 
         foreach ($ordered as $index => $context) {
@@ -147,7 +147,7 @@ final class InterproceduralResolver
             }
 
             $summary = $this->extractor->extract($context, $visible, $roundProperties);
-            $visible->set($summary);
+            $visible->put($summary);
             $produced[] = $summary;
 
             // A pass with no parameter seeded, purely so property writes in the
