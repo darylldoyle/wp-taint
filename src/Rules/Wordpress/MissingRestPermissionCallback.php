@@ -103,12 +103,25 @@ final class MissingRestPermissionCallback implements StructuralRule
     }
 
     /**
+     * `register_rest_route()` takes either one route definition or a list of
+     * them, and the list form can carry a shared `args` entry alongside.
+     *
+     * ```php
+     * register_rest_route( 'ns/v1', '/thing', [
+     *     'args' => [ 'id' => [ 'type' => 'integer' ] ],   // shared, string key
+     *     [ 'methods' => 'GET',  'permission_callback' => '…', 'callback' => '…' ],
+     *     [ 'methods' => 'POST', 'permission_callback' => '…', 'callback' => '…' ],
+     * ] );
+     * ```
+     *
+     * Only the integer-keyed entries are route definitions. Treating `args` as
+     * one produced a false positive on Akismet, because a schema block has no
+     * `permission_callback` and never should.
+     *
      * @return list<Node\Expr\Array_>
      */
     private function routeDefinitions(Node\Expr\Array_ $options): array
     {
-        // A single definition has string keys such as `methods`. A list of
-        // definitions has integer keys holding arrays.
         if (AstHelper::hasArrayKey($options, 'methods') || AstHelper::hasArrayKey($options, 'callback')) {
             return [$options];
         }
@@ -116,7 +129,11 @@ final class MissingRestPermissionCallback implements StructuralRule
         $definitions = [];
 
         foreach ($options->items as $item) {
-            if ($item?->value instanceof Node\Expr\Array_) {
+            if ($item === null || $item->key !== null) {
+                continue;
+            }
+
+            if ($item->value instanceof Node\Expr\Array_) {
                 $definitions[] = $item->value;
             }
         }

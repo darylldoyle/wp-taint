@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Taint;
 
+use Enshrined\WpTaint\Registry\Matcher;
 use Enshrined\WpTaint\Registry\Registry;
 use PHPCfg\Op;
 use PHPCfg\Operand;
@@ -13,15 +14,47 @@ use SplObjectStorage;
  * Decides whether an operand is "effectively literal" — safe to use as a
  * `$wpdb->prepare()` format string.
  *
- * A string literal is effectively literal. So is a concatenation of literals.
- * So, crucially, is a concatenation that interpolates `$wpdb->prefix` or any
- * other `wpdb` table property: that is the standard WordPress idiom, and
- * flagging it would produce a false positive on essentially every plugin.
+ * The bar is not "is a string literal". It is **"cannot carry attacker-supplied
+ * SQL syntax"**, which is what prepare() actually needs from its format string.
+ * Three things clear that bar:
+ *
+ * 1. Literals, constants, and concatenations of them.
+ * 2. `$wpdb->prefix` and the other table-name properties. Interpolating those
+ *    is the standard WordPress idiom, and flagging it would be a false positive
+ *    on essentially every plugin.
+ * 3. Values built only from the above through calls the catalogue models as
+ *    pure — which is what makes the canonical `IN (...)` placeholder idiom
+ *    work:
+ *
+ *    ```php
+ *    $placeholders = implode( ', ', array_fill( 0, count( $ids ), '%d' ) );
+ *    $wpdb->query( $wpdb->prepare( "... WHERE id IN ( {$placeholders} )", $ids ) );
+ *    ```
+ *
+ *    Every character of `$placeholders` came from the literals `', '` and
+ *    `'%d'`; only its *length* depends on the data. Treating that as
+ *    non-literal produced false positives on Akismet and All in One SEO on the
+ *    first corpus run, and it is the recommended way to write a prepared
+ *    `IN (...)` clause.
+ *
+ * An integer is also effectively literal: `absint( $_GET['id'] )` cannot inject
+ * SQL syntax however it is interpolated. So is the output of an inner
+ * `$wpdb->prepare()`, which is how a WHERE clause gets assembled from prepared
+ * fragments:
+ *
+ * ```php
+ * foreach ( $types as $type ) {
+ *     $where .= $wpdb->prepare( ' AND comment_type <> %s ', $type );
+ * }
+ * $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$wpdb->comments} WHERE x = %d" . $where, $id ) );
+ * ```
  *
  * Anything else is not, and prepare() cannot protect it.
  */
 final class LiteralAnalyzer
 {
+    private const MAX_DEPTH = 32;
+
     public function __construct(private readonly Registry $registry)
     {
     }
@@ -39,8 +72,14 @@ final class LiteralAnalyzer
      */
     private function check(Operand $operand, SplObjectStorage $seen, int $depth): bool
     {
-        if ($depth > 32 || $seen->contains($operand)) {
+        if ($depth > self::MAX_DEPTH) {
             return false;
+        }
+
+        // A cycle is a loop-carried value; by the time we come back round to it
+        // every contributor has already been checked.
+        if ($seen->contains($operand)) {
+            return true;
         }
 
         $seen->attach($operand);
@@ -55,35 +94,144 @@ final class LiteralAnalyzer
             return false;
         }
 
-        if ($definition instanceof Op\Expr\BinaryOp\Concat) {
-            return $this->check($definition->left, $seen, $depth + 1)
-                && $this->check($definition->right, $seen, $depth + 1);
-        }
+        return $this->checkOp($definition, $seen, $depth);
+    }
 
-        if ($definition instanceof Op\Expr\ConcatList) {
-            foreach ($definition->list as $item) {
-                if (! $item instanceof Operand || ! $this->check($item, $seen, $depth + 1)) {
-                    return false;
-                }
+    /**
+     * @param SplObjectStorage<Operand, true> $seen
+     */
+    private function checkOp(Op $definition, SplObjectStorage $seen, int $depth): bool
+    {
+        $recurse = fn (Operand $next): bool => $this->check($next, $seen, $depth + 1);
+
+        return match (true) {
+            $definition instanceof Op\Expr\ConstFetch,
+            $definition instanceof Op\Expr\ClassConstFetch => true,
+            // An integer or float cannot carry SQL syntax, whatever it came from.
+            $definition instanceof Op\Expr\Cast\Int_,
+            $definition instanceof Op\Expr\Cast\Double,
+            $definition instanceof Op\Expr\Cast\Bool_ => true,
+            $definition instanceof Op\Expr\Assign,
+            $definition instanceof Op\Expr\AssignRef => $recurse($definition->expr),
+            $definition instanceof Op\Expr\Cast => $recurse($definition->expr),
+            $definition instanceof Op\Expr\BinaryOp => $recurse($definition->left) && $recurse($definition->right),
+            $definition instanceof Op\Expr\ConcatList => $this->all($definition->list, $recurse),
+            $definition instanceof Op\Expr\Array_ => $this->all($definition->values, $recurse),
+            $definition instanceof Op\Phi => $this->all($definition->vars, $recurse),
+            $definition instanceof Op\Iterator\Value,
+            $definition instanceof Op\Iterator\Key => $recurse($definition->var),
+            $definition instanceof Op\Expr\ArrayDimFetch => $recurse($definition->var),
+            $definition instanceof Op\Expr\PropertyFetch => $this->isSafeDatabaseIdentifier($definition),
+            $definition instanceof Op\Expr\FuncCall,
+            $definition instanceof Op\Expr\NsFuncCall => $this->checkFunctionCall(
+                $definition->name,
+                $definition->args,
+                $recurse,
+            ),
+            $definition instanceof Op\Expr\MethodCall => $this->checkMethodCall($definition),
+            default => false,
+        };
+    }
+
+    /**
+     * @param array<array-key, mixed> $operands
+     * @param callable(Operand): bool $recurse
+     */
+    private function all(array $operands, callable $recurse): bool
+    {
+        foreach ($operands as $operand) {
+            if (! $operand instanceof Operand || ! $recurse($operand)) {
+                return false;
             }
+        }
 
+        return true;
+    }
+
+    /**
+     * A call is effectively literal when the catalogue says its result cannot
+     * carry SQL syntax, or when it merely passes through arguments that are all
+     * themselves effectively literal.
+     *
+     * @param array<array-key, mixed> $args
+     * @param callable(Operand): bool $recurse
+     */
+    private function checkFunctionCall(Operand $name, array $args, callable $recurse): bool
+    {
+        $function = OperandHelper::literalString($name);
+
+        if ($function === null) {
+            return false;
+        }
+
+        $matcher = Matcher::function($function);
+
+        // absint(), intval(), count(), md5(), esc_sql(), sanitize_key()…
+        // nothing that comes out of these can be SQL syntax.
+        if ($this->clearsSql($matcher)) {
             return true;
         }
 
-        if ($definition instanceof Op\Expr\Assign) {
-            return $this->check($definition->expr, $seen, $depth + 1);
+        $propagator = $this->registry->propagator($matcher);
+
+        if ($propagator === null) {
+            return false;
         }
 
-        if ($definition instanceof Op\Expr\ConstFetch || $definition instanceof Op\Expr\ClassConstFetch) {
-            // A constant cannot be influenced by a request.
-            return true;
+        foreach ($propagator->arguments->resolve(count($args)) as $index) {
+            $argument = $args[$index] ?? null;
+
+            if (! $argument instanceof Operand || ! $recurse($argument)) {
+                return false;
+            }
         }
 
-        if ($definition instanceof Op\Expr\PropertyFetch) {
-            return $this->isSafeDatabaseIdentifier($definition);
+        return true;
+    }
+
+    /**
+     * The output of an inner `$wpdb->prepare()` is already escaped SQL, so
+     * concatenating it into an outer format string is safe.
+     */
+    private function checkMethodCall(Op\Expr\MethodCall $call): bool
+    {
+        $method = OperandHelper::literalString($call->name);
+
+        if ($method === null || ! $this->clearsSql(Matcher::method('wpdb', $method))) {
+            return false;
         }
 
-        return false;
+        return $this->isDatabaseHandle($call->var);
+    }
+
+    private function clearsSql(Matcher $matcher): bool
+    {
+        $sanitizer = $this->registry->sanitizer($matcher);
+
+        return $sanitizer !== null
+            && ($sanitizer->clearsEverything || $sanitizer->clears->has(TaintKind::Sql));
+    }
+
+    /**
+     * `$wpdb`, `$this->wpdb`, `$this->db`, `aioseo()->core->db->db`.
+     */
+    private function isDatabaseHandle(Operand $receiver): bool
+    {
+        $name = OperandHelper::variableName($receiver);
+
+        if ($name !== null) {
+            return in_array(strtolower($name), ['wpdb', 'db'], true);
+        }
+
+        $definition = OperandHelper::definingOp($receiver);
+
+        if (! $definition instanceof Op\Expr\PropertyFetch) {
+            return false;
+        }
+
+        $property = OperandHelper::literalString($definition->name);
+
+        return $property !== null && in_array(strtolower($property), ['wpdb', 'db'], true);
     }
 
     /**
@@ -102,21 +250,6 @@ final class LiteralAnalyzer
             return false;
         }
 
-        $receiver = OperandHelper::variableName($fetch->var);
-
-        if ($receiver !== null) {
-            return strtolower($receiver) === 'wpdb';
-        }
-
-        // `$this->wpdb->prefix`.
-        $definition = OperandHelper::definingOp($fetch->var);
-
-        if (! $definition instanceof Op\Expr\PropertyFetch) {
-            return false;
-        }
-
-        $name = OperandHelper::literalString($definition->name);
-
-        return $name !== null && in_array(strtolower($name), ['wpdb', 'db'], true);
+        return $this->isDatabaseHandle($fetch->var);
     }
 }

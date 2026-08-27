@@ -158,6 +158,29 @@ note = "Decoded structures carry the taint of the encoded string."
 function = "array_map"
 
 [[propagators]]
+function = "array_fill"
+note = "Repeats a value. Used with implode() to build a prepare() placeholder list for IN (...)."
+
+[[propagators]]
+function = "array_fill_keys"
+
+[[propagators]]
+function = "array_pad"
+
+[[propagators]]
+function = "str_repeat"
+note = "Repeats a literal. The other half of the IN (...) placeholder idiom."
+
+[[propagators]]
+function = "array_slice"
+
+[[propagators]]
+function = "array_keys"
+
+[[propagators]]
+function = "array_combine"
+
+[[propagators]]
 function = "array_values"
 
 [[propagators]]

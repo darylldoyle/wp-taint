@@ -22,10 +22,76 @@ final class TaintState
     /** @var SplObjectStorage<Operand, Provenance> */
     private SplObjectStorage $provenance;
 
+    /** @var SplObjectStorage<Operand, TaintSet> */
+    private SplObjectStorage $containerTaint;
+
+    /** @var SplObjectStorage<Operand, Provenance> */
+    private SplObjectStorage $containerProvenance;
+
     public function __construct()
     {
         $this->taint = new SplObjectStorage();
         $this->provenance = new SplObjectStorage();
+        $this->containerTaint = new SplObjectStorage();
+        $this->containerProvenance = new SplObjectStorage();
+    }
+
+    /**
+     * Taint written into an array *through an element*, tracked separately from
+     * the operand's own taint.
+     *
+     * `$out = array(); $out[$k] = $tainted;` writes both to the same SSA
+     * operand: SSA does not re-version a variable for an element write. Folding
+     * the element taint into the operand's own slot means the assignment and
+     * the element write fight over it, one setting it empty and the other
+     * setting it tainted, and the fixed point oscillates forever. That shape —
+     * build an empty array, fill it in a loop — is everywhere in plugin code.
+     *
+     * Keeping the two apart makes both transfer functions monotone, which is
+     * what the fixed point needs to terminate.
+     */
+    public function containerTaintOf(Operand $operand): TaintSet
+    {
+        if (! $this->containerTaint->contains($operand)) {
+            return TaintSet::empty();
+        }
+
+        return $this->containerTaint[$operand];
+    }
+
+    public function addContainerTaint(Operand $operand, TaintSet $taint, Provenance $provenance): bool
+    {
+        if ($taint->isEmpty()) {
+            return false;
+        }
+
+        $merged = $this->containerTaintOf($operand)->union($taint);
+
+        if ($merged->equals($this->containerTaintOf($operand))) {
+            return false;
+        }
+
+        $this->containerTaint[$operand] = $merged;
+        $this->containerProvenance[$operand] = $provenance;
+
+        return true;
+    }
+
+    /**
+     * An operand's own taint plus anything written into it as a container.
+     */
+    public function effectiveTaintOf(Operand $operand): TaintSet
+    {
+        return $this->taintOf($operand)->union($this->containerTaintOf($operand));
+    }
+
+    public function containerProvenanceOf(Operand $operand): ?Provenance
+    {
+        if (! $this->containerProvenance->contains($operand)) {
+            return null;
+        }
+
+        return $this->containerProvenance[$operand];
     }
 
     public function taintOf(Operand $operand): TaintSet

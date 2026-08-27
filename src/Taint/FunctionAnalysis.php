@@ -261,6 +261,20 @@ final class FunctionAnalysis
 
     private function transfer(Op $op): bool
     {
+        // An expression whose result is the target of an assignment is a write,
+        // not a read: `$a['k'] = $v`, `$this->p = $v`, `self::$p = $v` all lower
+        // to a fetch followed by an Assign onto the fetch's own result operand.
+        // The Assign decides that operand's taint; anything else writing it
+        // fights the Assign and the fixed point never settles.
+        if (
+            $op instanceof Op\Expr
+            && ! $op instanceof Op\Expr\Assign
+            && ! $op instanceof Op\Expr\AssignRef
+            && OperandHelper::isAssignmentTarget($op->result)
+        ) {
+            return false;
+        }
+
         $call = $this->resolver->resolve($op, $this->context, $this->types);
 
         if ($call !== null && $op instanceof Op\Expr) {
@@ -275,6 +289,7 @@ final class FunctionAnalysis
             $op instanceof Op\Expr\Assign, $op instanceof Op\Expr\AssignRef => $this->transferAssign($op),
             $op instanceof Op\Expr\ArrayDimFetch => $this->transferArrayDimFetch($op),
             $op instanceof Op\Expr\PropertyFetch => $this->transferPropertyFetch($op),
+            $op instanceof Op\Expr\StaticPropertyFetch => $this->transferStaticPropertyFetch($op),
             $op instanceof Op\Expr\ConcatList => $this->transferConcatList($op),
             $op instanceof Op\Expr\BinaryOp\Concat,
             $op instanceof Op\Expr\BinaryOp\Coalesce => $this->transferBinaryConcat($op),
@@ -288,15 +303,25 @@ final class FunctionAnalysis
                 $op->expr,
                 'Cast to a string keeps the value intact.',
             ),
-            $op instanceof Op\Iterator\Value => $this->transferPassThrough(
+            $op instanceof Op\Iterator\Value => $this->transferContainerRead(
                 $op,
                 $op->var,
                 'Iterating a tainted collection yields tainted values.',
             ),
-            $op instanceof Op\Iterator\Key => $this->transferPassThrough(
+            $op instanceof Op\Iterator\Key => $this->transferContainerRead(
                 $op,
                 $op->var,
                 'Keys of a tainted collection are attacker-controlled too.',
+            ),
+            // `isset($x)` and `!empty($x)` narrow a value's *type*; they do not
+            // change its taint. php-cfg gives the assertion an operand that is
+            // already written by the op producing the value, so zeroing it here
+            // both launders taint and makes the fixed point oscillate forever
+            // between the two writers.
+            $op instanceof Op\Expr\Assertion => $this->transferPassThrough(
+                $op,
+                $op->expr,
+                'An isset() or empty() guard narrows the type but does not escape the value.',
             ),
             $op instanceof Op\Expr\Print_ => $this->transferPrint($op),
             $op instanceof Op\Expr\Eval_ => $this->transferConstructSink($op, 'eval', $op->expr),
@@ -342,7 +367,12 @@ final class FunctionAnalysis
         if ($target instanceof Op\Expr\ArrayDimFetch) {
             // Over-approximate: the whole array becomes tainted, not just the
             // written key. Recorded in KNOWN_LIMITATIONS.md.
-            return $this->state->add(
+            //
+            // Held in a separate slot from the operand's own taint, because SSA
+            // does not re-version an array for an element write: `$a = array();`
+            // and `$a[$k] = $tainted;` write the same operand, and letting them
+            // share a slot makes the fixed point oscillate.
+            return $this->state->addContainerTaint(
                 $target->var,
                 $taint,
                 new Provenance(
@@ -358,7 +388,7 @@ final class FunctionAnalysis
             );
         }
 
-        if ($target instanceof Op\Expr\PropertyFetch) {
+        if ($target instanceof Op\Expr\PropertyFetch || $target instanceof Op\Expr\StaticPropertyFetch) {
             $property = OperandHelper::literalString($target->name);
 
             if ($property === null) {
@@ -367,7 +397,9 @@ final class FunctionAnalysis
                 return false;
             }
 
-            $owner = $this->propertyOwnerClass($target);
+            $owner = $target instanceof Op\Expr\PropertyFetch
+                ? $this->propertyOwnerClass($target)
+                : $this->staticOwnerClass($target);
 
             return $this->properties->add($owner, $property, $taint);
         }
@@ -386,10 +418,33 @@ final class FunctionAnalysis
             return $this->transferSuperglobalFetch($op, $source, $superglobal ?? '');
         }
 
-        return $this->transferPassThrough(
+        return $this->transferContainerRead(
             $op,
             $op->var,
             sprintf('Read out of %s.', OperandHelper::describe($op->var)),
+        );
+    }
+
+    /**
+     * A read out of a container: its own taint plus anything written into it
+     * through an element.
+     */
+    private function transferContainerRead(Op\Expr $op, Operand $container, string $description): bool
+    {
+        $taint = $this->state->effectiveTaintOf($container);
+
+        if ($taint->isEmpty()) {
+            return $this->state->set($op->result, $taint);
+        }
+
+        $provenance = $this->state->taintOf($container)->isEmpty()
+            ? $this->state->containerProvenanceOf($container)
+            : null;
+
+        return $this->state->set(
+            $op->result,
+            $taint,
+            $provenance ?? new Provenance(TraceVerb::Propagate, $op, $description, [$container]),
         );
     }
 
@@ -439,6 +494,48 @@ final class FunctionAnalysis
                 [$op->var],
             ),
         );
+    }
+
+    /**
+     * `self::$option` and friends. Tracked in the same map as instance
+     * properties, keyed by the declaring class.
+     */
+    private function transferStaticPropertyFetch(Op\Expr\StaticPropertyFetch $op): bool
+    {
+        $property = OperandHelper::literalString($op->name);
+
+        if ($property === null) {
+            $this->imprecise = true;
+
+            return $this->state->set($op->result, TaintSet::empty());
+        }
+
+        $taint = $this->properties->get($this->staticOwnerClass($op), $property);
+
+        if ($taint->isEmpty()) {
+            return $this->state->set($op->result, $taint);
+        }
+
+        return $this->state->set(
+            $op->result,
+            $taint,
+            new Provenance(
+                TraceVerb::Propagate,
+                $op,
+                sprintf('Read from static property $%s.', $property),
+            ),
+        );
+    }
+
+    private function staticOwnerClass(Op\Expr\StaticPropertyFetch $fetch): ?string
+    {
+        $class = OperandHelper::literalString($fetch->class);
+
+        if ($class === null || in_array(strtolower($class), ['self', 'static', 'parent'], true)) {
+            return $this->context->className;
+        }
+
+        return $class;
     }
 
     private function propertyOwnerClass(Op\Expr\PropertyFetch $fetch): ?string

@@ -96,6 +96,30 @@ final class OperandHelper
     }
 
     /**
+     * True when this operand is the *target* of an assignment.
+     *
+     * `$arr['k'] = $v` and `$obj->p = $v` both lower to a fetch whose result
+     * temporary is then the `var` of an `Assign`. That temporary therefore has
+     * two writers, and the two disagree: the fetch would give it the taint of
+     * the container, the assignment gives it the taint of the assigned value.
+     *
+     * The assignment is the one that is right, and letting the fetch overwrite
+     * it made the fixed point oscillate forever on
+     * `foreach ($tainted as $i => $x) { $tainted[$i] = false; }` — a shape that
+     * appears in real plugin code.
+     */
+    public static function isAssignmentTarget(Operand $operand): bool
+    {
+        foreach ($operand->ops as $op) {
+            if (($op instanceof Op\Expr\Assign || $op instanceof Op\Expr\AssignRef) && $op->var === $operand) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * @return array{line: int, column: int, endColumn: int|null}
      */
     public static function position(?Op $op, SourceMap $sourceMap): array
