@@ -244,6 +244,50 @@ A variable assigned exactly once from a literal, or a function whose only
 analysis: a wrong answer here is an authorization bypass either reported or
 missed. **Unresolved route options across the corpus: 1.**
 
+## Following references
+
+1,433 by-reference parameter declarations in the corpus, plus `preg_match` and
+`parse_str`, which are everywhere. The lowest-risk work in the plan: it adds
+flows that are unambiguously real.
+
+Corpus effect: **1,061 findings to 1,071**, 0 convergence warnings. Ten of the
+twenty new ones are on UpdraftPlus, and they are exactly what the section was
+built to find:
+
+```php
+preg_match( '/ENGINE=([^\s;]+)/', $create_table_statement, $eng_match );
+$this->table_engine = $eng_match[1];
+…
+$wpdb->query( $sql[0] );        // $table_engine interpolated
+```
+
+Content from a restored SQL dump reaches `$wpdb->query()` through a regex
+capture. The authors have marked those lines `phpcs:ignore` — WPCS flags them
+too — which puts them in the accepted-debt category rather than the false
+positive one.
+
+### Aliasing fought SSA before it worked
+
+`$a = &$b` binds rather than copies, and SSA versions assignments, not aliases.
+The first attempt grouped every version of a name and treated them as one slot.
+That oscillated, because an ordinary assignment to `$item` legitimately
+*replaces* that version, and the alias merge kept adding it back.
+
+Two corrections, both found as convergence warnings rather than wrong answers:
+
+- An `AssignRef` unions into its target rather than setting it. Setting undid
+  what the merge added, and the two took turns.
+- The link for a by-reference loop variable is one-way, into the collection's
+  element slot. `foreach ( $x as &$v )` lowers to an `AssignRef` binding `$v` to
+  the iterator's value, and the `$v = …` inside the loop is a fresh SSA version
+  the binding never mentions — so the link has to cover every version of the
+  name. Pushing back the other way would fight the assignment that owns those
+  operands; pushing only into the element slot cannot, because nothing ever
+  *sets* an element slot, it is only ever grown.
+
+The loader caught one bad entry of my own: `settype( $var, $type )` writes the
+argument it reads, which in an add-only model is a no-op.
+
 ## Determinism across `--jobs`, again
 
 Elementor reported the same finding with a seven-step trace at `--jobs=1` and a
