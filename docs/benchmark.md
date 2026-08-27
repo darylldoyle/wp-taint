@@ -162,6 +162,29 @@ The target was 50k lines in under 60 seconds single-threaded. Across the whole
 corpus that works out at roughly **7 seconds per 50k lines**, comfortably inside
 it.
 
+`--jobs` forks after parsing, so children inherit the parsed CFGs through
+copy-on-write. Parsing stays serial, which caps the speedup well short of
+linear:
+
+| Plugin | `--jobs=1` | `--jobs=4` | `--jobs=8` |
+| --- | ---: | ---: | ---: |
+| wordpress-seo (210k lines) | 29.6s | 14.6s | 13.3s |
+
+Output is byte-identical at every job count, which
+`tests/Feature/ParallelTest.php` asserts rather than assumes.
+
+The result cache is keyed on every input — tool version, resolved catalogue,
+analysis options and the content of every file — so an unchanged re-scan costs
+almost nothing:
+
+| | Cold | Warm |
+| --- | ---: | ---: |
+| duplicator (111k lines) | 15.6s | 0.18s |
+
+Because analysis is whole-program, changing one file invalidates the whole
+cache. Anything finer would be unsound: a file's findings depend on functions
+declared in other files.
+
 Memory is the real constraint, not time. Interprocedural taint crosses files, so
 every parsed file is live at once, and it scales with the tree rather than with
 the largest file. WooCommerce needs about 2.3 GB — above the 2 GB default

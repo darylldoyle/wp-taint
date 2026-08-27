@@ -259,3 +259,40 @@ it('traces a static property flow back to its source', function (): void {
     expect($result->findings)->toHaveCount(1);
     expect($result->findings->all()[0]->trace[0]->verb->value)->toBe('source');
 });
+
+it('does not treat array values as if they were array keys', function (): void {
+    // WooCommerce interpolates array_keys() of a data array into fourteen
+    // prepared queries. The values are user data; the keys are column names.
+    // Conflating them made every one of those a critical finding.
+    $result = scanCode(<<<'PHP'
+        <?php
+        global $wpdb;
+        $data = array('hook' => $_POST['hook'], 'args' => $_POST['args']);
+        $columns = '`' . implode('`, `', array_keys($data)) . '`';
+        $wpdb->query($wpdb->prepare("INSERT INTO wp_acme ({$columns}) VALUES (%s, %s)", array_values($data)));
+        PHP);
+
+    expect($result->findings)->toHaveCount(0);
+});
+
+it('still reports array values reaching a sink', function (): void {
+    // The key/value split must not lose the flow it was carved out of.
+    $result = scanCode(<<<'PHP'
+        <?php
+        $args = array($_GET['first'], $_GET['second']);
+        vprintf('<p>%s %s</p>', $args);
+        PHP);
+
+    expect($result->findings)->toHaveCount(1);
+});
+
+it('still treats the keys of a superglobal as attacker-controlled', function (): void {
+    $result = scanCode(<<<'PHP'
+        <?php
+        foreach ($_GET as $key => $value) {
+            echo $key;
+        }
+        PHP);
+
+    expect($result->findings)->toHaveCount(1);
+});

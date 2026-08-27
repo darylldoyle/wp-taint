@@ -117,7 +117,7 @@ final class TaintState
                 continue;
             }
 
-            $set = $set->union($this->taintOf($operand));
+            $set = $set->union($this->effectiveTaintOf($operand));
         }
 
         return $set;

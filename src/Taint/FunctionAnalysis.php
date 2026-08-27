@@ -311,10 +311,13 @@ final class FunctionAnalysis
                 $op->var,
                 'Iterating a tainted collection yields tainted values.',
             ),
-            $op instanceof Op\Iterator\Key => $this->transferContainerRead(
+            // Keys, not values: `foreach ( $_GET as $k => $v )` has an
+            // attacker-controlled key, but `foreach ( $rows as $k => $v )` after
+            // `$rows[$i] = $tainted` does not.
+            $op instanceof Op\Iterator\Key => $this->transferPassThrough(
                 $op,
                 $op->var,
-                'Keys of a tainted collection are attacker-controlled too.',
+                'Keys of an attacker-controlled collection are attacker-controlled too.',
             ),
             // `isset($x)` and `!empty($x)` narrow a value's *type*; they do not
             // change its taint. php-cfg gives the assertion an operand that is
@@ -351,7 +354,16 @@ final class FunctionAnalysis
         $changed = $this->state->set($op->var, $taint, $provenance);
         $changed = $this->state->set($op->result, $taint, $provenance) || $changed;
 
-        return $this->propagateIndirectWrite($op, $taint) || $changed;
+        // `$a = $b` where `$b` is an array with taint written into its elements
+        // has to carry that across, or the taint is lost at the assignment.
+        $container = $this->state->containerTaintOf($value);
+
+        if (! $container->isEmpty()) {
+            $changed = $this->state->addContainerTaint($op->var, $container, $provenance) || $changed;
+            $changed = $this->state->addContainerTaint($op->result, $container, $provenance) || $changed;
+        }
+
+        return $this->propagateIndirectWrite($op, $taint->union($container)) || $changed;
     }
 
     /**
@@ -564,6 +576,15 @@ final class FunctionAnalysis
      */
     private function writeTrace(Op\Expr\Assign|Op\Expr\AssignRef $op, string $property, TaintSet $taint): array
     {
+        // Summary extraction seeds a parameter with every taint kind, which is
+        // a hypothesis rather than a flow. A trace built from it starts at
+        // "parameter 0, assumed tainted while summarising" — meaningless in a
+        // reported finding, and it was leaking into them through the property
+        // map. Only real runs record origins.
+        if ($this->seedParameterIndex !== null) {
+            return [];
+        }
+
         $kind = $taint->kinds()[0] ?? null;
 
         if ($kind === null) {
@@ -628,17 +649,45 @@ final class FunctionAnalysis
         return $this->transferUnion($op, [$op->left, $op->right], $description);
     }
 
+    /**
+     * An array literal's *keys* go into the operand's own taint and its
+     * *values* into the container slot.
+     *
+     * Everything that reads an array reads both, so this changes nothing
+     * downstream — except for the two things that read keys alone. Without the
+     * split, `array_keys( array( 'hook' => $tainted ) )` came back tainted, and
+     * WooCommerce interpolates exactly that into fourteen prepared queries.
+     */
     private function transferArrayLiteral(Op\Expr\Array_ $op): bool
     {
+        $keys = [];
         $values = [];
 
-        foreach ([...$op->keys, ...$op->values] as $item) {
+        foreach ($op->keys as $item) {
+            if ($item instanceof Operand) {
+                $keys[] = $item;
+            }
+        }
+
+        foreach ($op->values as $item) {
             if ($item instanceof Operand) {
                 $values[] = $item;
             }
         }
 
-        return $this->transferUnion($op, $values, 'Placed into an array literal.');
+        $changed = $this->transferUnion($op, $keys, 'Used as a key in an array literal.');
+
+        $valueTaint = $this->state->unionOf($values);
+
+        if ($valueTaint->isEmpty()) {
+            return $changed;
+        }
+
+        return $this->state->addContainerTaint(
+            $op->result,
+            $valueTaint,
+            new Provenance(TraceVerb::Propagate, $op, 'Placed into an array literal.', $values),
+        ) || $changed;
     }
 
     /**
@@ -960,6 +1009,16 @@ final class FunctionAnalysis
 
         $description = $note ?? sprintf('%s passes its argument through unchanged.', $matcher->describe());
 
+        // array_keys() returns keys, so it reads the array's own taint and not
+        // what element writes put into it. See transferArrayLiteral().
+        if ($matcher->key() === 'function:array_keys' && $inputs !== []) {
+            return $this->state->set(
+                $op->result,
+                $this->state->taintOf($inputs[0]),
+                new Provenance(TraceVerb::Propagate, $op, $description, $inputs),
+            );
+        }
+
         return $this->transferUnion($op, $inputs, $description);
     }
 
@@ -1180,7 +1239,7 @@ final class FunctionAnalysis
 
     private function reportSink(Sink $sink, Op $op, Operand $operand, string $identity): void
     {
-        $taint = $this->state->taintOf($operand);
+        $taint = $this->state->effectiveTaintOf($operand);
 
         if (! $taint->has($sink->kind)) {
             $this->checkQueryShape($sink, $op, $operand, $identity);

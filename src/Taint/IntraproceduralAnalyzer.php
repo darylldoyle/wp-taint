@@ -15,15 +15,12 @@ use Enshrined\WpTaint\Registry\Registry;
  */
 final class IntraproceduralAnalyzer
 {
-    private readonly LiteralAnalyzer $literals;
-
     public function __construct(
         private readonly Registry $registry,
         private readonly UserFunctionTable $functions,
         private readonly CallResolver $resolver,
         private readonly AnalysisOptions $options,
     ) {
-        $this->literals = new LiteralAnalyzer($registry);
     }
 
     /**
@@ -44,7 +41,9 @@ final class IntraproceduralAnalyzer
             $this->registry,
             $this->functions,
             $this->resolver,
-            $this->literals,
+            // Built per run: it consults the property map, which the caller
+            // owns and which grows as the interprocedural rounds proceed.
+            new LiteralAnalyzer($this->registry, $properties),
             $summaries,
             $properties,
             $this->options,

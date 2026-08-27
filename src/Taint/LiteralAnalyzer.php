@@ -19,9 +19,12 @@ use SplObjectStorage;
  * Three things clear that bar:
  *
  * 1. Literals, constants, and concatenations of them.
- * 2. `$wpdb->prefix` and the other table-name properties. Interpolating those
- *    is the standard WordPress idiom, and flagging it would be a false positive
- *    on essentially every plugin.
+ * 2. Any property read on `$wpdb`. `$wpdb->prefix` and the core table names are
+ *    the obvious case, but plugins register their own — Action Scheduler adds
+ *    `$wpdb->actionscheduler_actions`, and WooCommerce interpolates it into
+ *    fourteen prepared queries. Nothing attacker-controlled reaches a property
+ *    of the global database handle, and the map is consulted anyway so a
+ *    property that somehow *did* carry taint is still reported.
  * 3. Values built only from the above through calls the catalogue models as
  *    pure — which is what makes the canonical `IN (...)` placeholder idiom
  *    work:
@@ -55,8 +58,10 @@ final class LiteralAnalyzer
 {
     private const MAX_DEPTH = 32;
 
-    public function __construct(private readonly Registry $registry)
-    {
+    public function __construct(
+        private readonly Registry $registry,
+        private readonly PropertyTaintMap $properties,
+    ) {
     }
 
     public function isEffectivelyLiteral(Operand $operand): bool
@@ -242,14 +247,14 @@ final class LiteralAnalyzer
     {
         $property = OperandHelper::literalString($fetch->name);
 
-        if ($property === null) {
+        if ($property === null || ! $this->isDatabaseHandle($fetch->var)) {
             return false;
         }
 
-        if (! in_array($property, $this->registry->safeDatabaseIdentifiers(), true)) {
-            return false;
-        }
-
-        return $this->isDatabaseHandle($fetch->var);
+        // The catalogue's list is documentation of the core table properties.
+        // Any other property of $wpdb counts too, provided nothing tainted was
+        // ever written to it.
+        return in_array($property, $this->registry->safeDatabaseIdentifiers(), true)
+            || $this->properties->get('wpdb', $property)->isEmpty();
     }
 }
