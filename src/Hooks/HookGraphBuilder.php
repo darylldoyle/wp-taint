@@ -64,13 +64,16 @@ final class HookGraphBuilder
 
         foreach (BlockOrder::of($context->func->cfg) as $block) {
             foreach ($block->children as $op) {
-                if (! $op instanceof Op\Expr\FuncCall) {
+                // NsFuncCall as well as FuncCall. Inside a namespace,
+                // `add_action(...)` compiles to the namespaced form even though
+                // it resolves to the global function at runtime, and matching
+                // only FuncCall silently missed every registration in
+                // namespaced code — 747 of Elementor's 757.
+                if (! $op instanceof Op\Expr\FuncCall && ! $op instanceof Op\Expr\NsFuncCall) {
                     continue;
                 }
 
-                $name = OperandHelper::literalString($op->name);
-
-                if ($name === null || ! in_array(strtolower($name), self::REGISTRARS, true)) {
+                if (! $this->isRegistrar($op)) {
                     continue;
                 }
 
@@ -81,7 +84,7 @@ final class HookGraphBuilder
 
     private function record(
         HookGraph $graph,
-        Op\Expr\FuncCall $op,
+        Op\Expr\FuncCall|Op\Expr\NsFuncCall $op,
         FunctionContext $context,
         ClassTypeMap $types,
     ): void {
@@ -130,6 +133,26 @@ final class HookGraphBuilder
                 ));
             }
         }
+    }
+
+    /**
+     * A namespaced call falls back to the global function when the namespaced
+     * one does not exist, so both names have to be tried — the same rule
+     * {@see \Enshrined\WpTaint\Taint\CallResolver} applies.
+     */
+    private function isRegistrar(Op\Expr\FuncCall|Op\Expr\NsFuncCall $op): bool
+    {
+        $names = $op instanceof Op\Expr\NsFuncCall
+            ? [OperandHelper::literalString($op->nsName), OperandHelper::literalString($op->name)]
+            : [OperandHelper::literalString($op->name)];
+
+        foreach ($names as $name) {
+            if ($name !== null && in_array(strtolower(ltrim($name, '\\')), self::REGISTRARS, true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function intArgument(?Operand $operand, int $default): int

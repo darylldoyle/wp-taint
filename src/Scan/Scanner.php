@@ -123,6 +123,21 @@ final class Scanner
             ->build($contexts);
         $ruleContext = $ruleContext->withGraphs($callGraph, $hooks);
 
+        // A registration we could not place is a hook edge we know exists and
+        // cannot draw. Counted next to the other coverage gaps rather than
+        // guessed at.
+        foreach ($hooks->unplaced() as $registration) {
+            $ruleContext->recordUnresolvedHook(
+                'add_action/add_filter',
+                $registration->file,
+                $registration->line,
+                sprintf(
+                    'hook name could not be resolved, so %s is not connected to any dispatch',
+                    $registration->callback->name(),
+                ),
+            );
+        }
+
         foreach ($parsed as $file) {
             // Structural rules are pure AST shape checks over one file, so they
             // run before the whole-program taint pass — which is what lets the

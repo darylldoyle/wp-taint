@@ -22,10 +22,17 @@ use Enshrined\WpTaint\Taint\CallTarget;
  *
  * ## What a missing hook name means
  *
- * A registration whose hook name will not resolve is recorded under a wildcard
- * rather than dropped, because "we saw a registration we could not place" and
- * "there are no callbacks on this hook" are very different answers. Dispatches
- * union the wildcard set in and mark themselves imprecise.
+ * A registration whose hook name will not resolve is kept, separately, and
+ * surfaced in the unresolved-hook list — because "we saw a registration we could
+ * not place" and "there are no callbacks on this hook" are very different
+ * answers, and the second must never be reported when the first is true.
+ *
+ * It is deliberately *not* unioned into every dispatch. That would be the sound
+ * choice and it is the wrong one here: Advanced Custom Fields has 22 such
+ * registrations against 201 hooks, so every dispatch would gain 22 spurious
+ * callees — a large precision loss and an N×M cost, to model an edge that
+ * probably is not there. The tool's standing trade applies: a documented false
+ * negative beats an undocumented false positive.
  */
 final class HookGraph
 {
@@ -69,17 +76,13 @@ final class HookGraph
     }
 
     /**
-     * Every callback that can run on a hook.
-     *
-     * Includes the registrations whose hook name could not be resolved, because
-     * any of them might be this one. That is an over-approximation and the
-     * caller marks the dispatch imprecise because of it.
+     * Every callback registered on a hook.
      *
      * @return list<HookRegistration>
      */
     public function callbacksFor(string $hook): array
     {
-        $registrations = [...($this->byHook[$hook] ?? []), ...$this->unplaced];
+        $registrations = $this->byHook[$hook] ?? [];
 
         usort(
             $registrations,
@@ -98,6 +101,26 @@ final class HookGraph
             static fn (HookRegistration $r): CallTarget => $r->callback,
             $this->callbacksFor($hook),
         );
+    }
+
+    /**
+     * Registrations whose hook name could not be resolved.
+     *
+     * Surfaced rather than modelled. Each one is a place the engine knows it
+     * cannot see a hook edge that exists.
+     *
+     * @return list<HookRegistration>
+     */
+    public function unplaced(): array
+    {
+        $unplaced = $this->unplaced;
+
+        usort(
+            $unplaced,
+            static fn (HookRegistration $a, HookRegistration $b): int => $a->sortKey() <=> $b->sortKey(),
+        );
+
+        return $unplaced;
     }
 
     public function hasUnplaced(): bool

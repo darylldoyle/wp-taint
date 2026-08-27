@@ -23,6 +23,17 @@ use PhpParser\NodeVisitorAbstract;
  * | `A&B`                    | 8.1   | the first named type |
  * | `(A&B)\|null`            | 8.2   | the same, inside the union |
  *
+ * It also folds the identity magic constants — `__NAMESPACE__`, `__CLASS__`,
+ * `__FUNCTION__`, `__METHOD__`, `__TRAIT__` — to the strings they stand for.
+ * Not a compatibility fix: php-cfg parses them fine, but leaves them opaque, and
+ * `add_filter( 'hook', __NAMESPACE__ . '\\render' )` is how namespaced plugins
+ * register a callback. Folding here rather than in the value resolver means the
+ * enclosing namespace and class are still in hand, and everything downstream
+ * gets it for free.
+ *
+ * `__DIR__` and `__FILE__` are deliberately left alone. They belong to include
+ * resolution, where the path matters for more than its value.
+ *
  * Two of those — `match` and `?->` — have been in the language since PHP 8.0
  * and are ordinary in any plugin written in the last few years. Without this
  * shim the corpus parse rate falls far below the 99.5% the project treats as a
@@ -41,6 +52,22 @@ final class CompatibilityVisitor extends NodeVisitorAbstract
     /** @var array<string, int> */
     private array $lowered = [];
 
+    private string $namespace = '';
+
+    /** @var list<string> */
+    private array $classStack = [];
+
+    /** @var list<string> */
+    private array $functionStack = [];
+
+    /**
+     * Depth of enclosing traits.
+     *
+     * A trait's `__CLASS__` is the *using* class at runtime, which is not known
+     * statically, so it is left opaque rather than folded to a wrong answer.
+     */
+    private int $traitDepth = 0;
+
     /**
      * Which constructs were rewritten, for `dump-cfg --show-lowering`.
      *
@@ -53,9 +80,47 @@ final class CompatibilityVisitor extends NodeVisitorAbstract
         return $this->lowered;
     }
 
+    public function enterNode(Node $node): ?Node
+    {
+        if ($node instanceof Node\Stmt\Namespace_) {
+            $this->namespace = $node->name?->toString() ?? '';
+        }
+
+        if ($node instanceof Node\Stmt\Trait_) {
+            $this->traitDepth++;
+        }
+
+        if ($node instanceof Node\Stmt\ClassLike) {
+            $this->classStack[] = $node->name === null
+                ? ''
+                : ltrim($this->namespace . '\\' . $node->name->toString(), '\\');
+        }
+
+        if ($node instanceof Node\Stmt\ClassMethod || $node instanceof Node\Stmt\Function_) {
+            $this->functionStack[] = $node->name->toString();
+        } elseif ($node instanceof Node\FunctionLike) {
+            $this->functionStack[] = '{closure}';
+        }
+
+        return null;
+    }
+
     public function leaveNode(Node $node): ?Node
     {
+        if ($node instanceof Node\Stmt\Trait_) {
+            $this->traitDepth--;
+        }
+
+        if ($node instanceof Node\Stmt\ClassLike) {
+            array_pop($this->classStack);
+        }
+
+        if ($node instanceof Node\FunctionLike) {
+            array_pop($this->functionStack);
+        }
+
         return match (true) {
+            $node instanceof Node\Scalar\MagicConst => $this->foldMagicConstant($node),
             $node instanceof Node\Expr\Match_ => $this->lowerMatch($node),
             $node instanceof Node\Expr\NullsafePropertyFetch => $this->lowerNullsafePropertyFetch($node),
             $node instanceof Node\Expr\NullsafeMethodCall => $this->lowerNullsafeMethodCall($node),
@@ -70,6 +135,38 @@ final class CompatibilityVisitor extends NodeVisitorAbstract
             $node instanceof Node\Expr\New_ => $this->lowerFirstClassCallable($node),
             default => null,
         };
+    }
+
+    /**
+     * The identity magic constants, as the strings they stand for.
+     *
+     * A trait's `__CLASS__` is the *using* class at runtime, which is not known
+     * statically, so a trait is left alone rather than folded to the trait's own
+     * name — a wrong answer would be worse than an opaque one.
+     */
+    private function foldMagicConstant(Node\Scalar\MagicConst $node): ?Node
+    {
+        $class = end($this->classStack) === false ? '' : (string) end($this->classStack);
+        $function = end($this->functionStack) === false ? '' : (string) end($this->functionStack);
+        $inTrait = $this->traitDepth > 0;
+
+        $value = match (true) {
+            $node instanceof Node\Scalar\MagicConst\Namespace_ => $this->namespace,
+            $node instanceof Node\Scalar\MagicConst\Class_ => $inTrait ? null : $class,
+            $node instanceof Node\Scalar\MagicConst\Function_ => $function,
+            $node instanceof Node\Scalar\MagicConst\Method => $class === ''
+                ? $function
+                : $class . '::' . $function,
+            default => null,
+        };
+
+        if ($value === null) {
+            return null;
+        }
+
+        $this->record('magic_constant');
+
+        return new Node\Scalar\String_($value, $node->getAttributes());
     }
 
     private function record(string $construct): void
