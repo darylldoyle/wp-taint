@@ -37,6 +37,7 @@ final class OriginClassifier
     public function __construct(
         private readonly Registry $registry,
         private readonly CallResolver $resolver,
+        private readonly PropertyTaintMap $properties,
     ) {
     }
 
@@ -112,7 +113,7 @@ final class OriginClassifier
             $definition instanceof Op\Expr\ConcatList => $this->all($definition->list, $recurse),
             $definition instanceof Op\Expr\Array_ => $this->all($definition->values, $recurse),
             $definition instanceof Op\Phi => $this->all($definition->vars, $recurse),
-            $definition instanceof Op\Expr\PropertyFetch => $this->isSafeDatabaseIdentifier($definition),
+            $definition instanceof Op\Expr\PropertyFetch => $this->checkPropertyFetch($definition, $context, $types),
             $definition instanceof Op\Expr\FuncCall,
             $definition instanceof Op\Expr\NsFuncCall,
             $definition instanceof Op\Expr\MethodCall,
@@ -186,10 +187,46 @@ final class OriginClassifier
         return $target->userFunctionKey !== null;
     }
 
-    private function isSafeDatabaseIdentifier(Op\Expr\PropertyFetch $fetch): bool
-    {
+    /**
+     * A property read is accounted for when it names a `$wpdb` table property,
+     * or when the engine tracked every write to it and found them all clean.
+     *
+     * `$this->table_name` holding a table name is the shape this exists for: it
+     * is not a literal, but if the scan saw where it was set and nothing
+     * tainted reached it, its origin *is* accounted for.
+     */
+    private function checkPropertyFetch(
+        Op\Expr\PropertyFetch $fetch,
+        FunctionContext $context,
+        ClassTypeMap $types,
+    ): bool {
         $property = OperandHelper::literalString($fetch->name);
 
-        return $property !== null && in_array($property, $this->registry->safeDatabaseIdentifiers(), true);
+        if ($property === null) {
+            return false;
+        }
+
+        if (in_array($property, $this->registry->safeDatabaseIdentifiers(), true)) {
+            return true;
+        }
+
+        $owner = $this->propertyOwner($fetch, $context, $types);
+
+        return $this->properties->isTracked($owner, $property)
+            && $this->properties->get($owner, $property)->isEmpty();
+    }
+
+    private function propertyOwner(
+        Op\Expr\PropertyFetch $fetch,
+        FunctionContext $context,
+        ClassTypeMap $types,
+    ): ?string {
+        $receiver = OperandHelper::variableName($fetch->var);
+
+        if ($receiver === 'this') {
+            return $context->className;
+        }
+
+        return $types->classOf($fetch->var);
     }
 }

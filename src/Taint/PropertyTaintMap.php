@@ -20,13 +20,39 @@ final class PropertyTaintMap
     /** @var array<string, TaintSet> */
     private array $taint = [];
 
+    /**
+     * Every property the scan saw written, whether or not the value was
+     * tainted.
+     *
+     * "We tracked this and it was clean" and "we never saw it" are different
+     * answers, and {@see OriginClassifier} needs to tell them apart.
+     *
+     * @var array<string, true>
+     */
+    private array $tracked = [];
+
     public function get(?string $class, string $property): TaintSet
     {
         return $this->taint[self::key($class, $property)] ?? TaintSet::empty();
     }
 
+    public function isTracked(?string $class, string $property): bool
+    {
+        return isset($this->tracked[self::key($class, $property)]);
+    }
+
+    /**
+     * Record that a property was written, whatever the value's taint.
+     */
+    public function track(?string $class, string $property): void
+    {
+        $this->tracked[self::key($class, $property)] = true;
+    }
+
     public function add(?string $class, string $property, TaintSet $taint): bool
     {
+        $this->track($class, $property);
+
         if ($taint->isEmpty()) {
             return false;
         }

@@ -1,0 +1,322 @@
+# A hand-written WordPress rule pack for the benchmark.
+#
+# Written to give Semgrep its best shot: it uses Semgrep's own taint mode with
+# the same sources, sanitizers and sinks as registries/wordpress.toml, rather
+# than the pattern-matching rules a quick attempt would produce.
+rules:
+  - id: wp-xss-unescaped-output
+    languages: [php]
+    severity: ERROR
+    message: Untrusted input reaches output without HTML escaping.
+    mode: taint
+    pattern-sources:
+      - pattern: $_GET
+      - pattern: $_POST
+      - pattern: $_REQUEST
+      - pattern: $_COOKIE
+      - pattern: $_GET[...]
+      - pattern: $_POST[...]
+      - pattern: $_REQUEST[...]
+      - pattern: $_COOKIE[...]
+      - pattern: $_SERVER['REQUEST_URI']
+      - pattern: $_SERVER['HTTP_REFERER']
+      - pattern: $_SERVER['HTTP_USER_AGENT']
+      - pattern: get_post_meta(...)
+      - pattern: get_user_meta(...)
+      - pattern: get_term_meta(...)
+      - pattern: get_option(...)
+      - pattern: get_site_option(...)
+      - pattern: get_transient(...)
+      - pattern: get_query_var(...)
+      - pattern: wp_get_referer(...)
+      - pattern: $REQ->get_param(...)
+      - pattern: $REQ->get_params(...)
+      - pattern: $DB->get_var(...)
+      - pattern: $DB->get_results(...)
+      - pattern: $DB->get_row(...)
+      - pattern: $DB->get_col(...)
+    pattern-sanitizers:
+      - pattern: esc_html(...)
+      - pattern: esc_html__(...)
+      - pattern: esc_html_x(...)
+      - pattern: esc_attr(...)
+      - pattern: esc_attr__(...)
+      - pattern: esc_attr_x(...)
+      - pattern: esc_textarea(...)
+      - pattern: esc_js(...)
+      - pattern: esc_xml(...)
+      - pattern: esc_url(...)
+      - pattern: wp_kses(...)
+      - pattern: wp_kses_post(...)
+      - pattern: wp_kses_data(...)
+      - pattern: sanitize_text_field(...)
+      - pattern: sanitize_textarea_field(...)
+      - pattern: sanitize_key(...)
+      - pattern: sanitize_html_class(...)
+      - pattern: sanitize_title(...)
+      - pattern: sanitize_email(...)
+      - pattern: tag_escape(...)
+      - pattern: absint(...)
+      - pattern: intval(...)
+      - pattern: floatval(...)
+      - pattern: (int) $X
+      - pattern: (float) $X
+      - pattern: htmlspecialchars(...)
+      - pattern: strip_tags(...)
+    pattern-sinks:
+      - pattern: echo $SINK;
+      - pattern: print $SINK;
+      - pattern: printf(..., $SINK, ...)
+      - pattern: vprintf(..., $SINK, ...)
+      - pattern: _e($SINK, ...)
+      - pattern: _ex($SINK, ...)
+      - pattern: var_dump($SINK)
+
+  - id: wp-sqli-wpdb-query
+    languages: [php]
+    severity: ERROR
+    message: Untrusted input reaches a database query without preparation.
+    mode: taint
+    pattern-sources:
+      - pattern: $_GET[...]
+      - pattern: $_POST[...]
+      - pattern: $_REQUEST[...]
+      - pattern: $_COOKIE[...]
+      - pattern: get_post_meta(...)
+      - pattern: get_option(...)
+      - pattern: get_query_var(...)
+      - pattern: $REQ->get_param(...)
+    pattern-sanitizers:
+      - pattern: esc_sql(...)
+      - pattern: absint(...)
+      - pattern: intval(...)
+      - pattern: (int) $X
+      - pattern: sanitize_key(...)
+      - pattern: $DB->prepare("...", ...)
+      - pattern: $DB->prepare('...', ...)
+    pattern-sinks:
+      - pattern: $DB->query($SINK, ...)
+      - pattern: $DB->get_results($SINK, ...)
+      - pattern: $DB->get_var($SINK, ...)
+      - pattern: $DB->get_row($SINK, ...)
+      - pattern: $DB->get_col($SINK, ...)
+
+  - id: wp-rce-eval
+    languages: [php]
+    severity: ERROR
+    message: Untrusted input is evaluated as PHP code.
+    mode: taint
+    pattern-sources:
+      - pattern: $_GET[...]
+      - pattern: $_POST[...]
+      - pattern: $_REQUEST[...]
+      - pattern: $_COOKIE[...]
+    pattern-sanitizers:
+      - pattern: absint(...)
+      - pattern: intval(...)
+    pattern-sinks:
+      - pattern: eval($SINK)
+      - pattern: assert($SINK)
+
+  - id: wp-rce-unserialize
+    languages: [php]
+    severity: ERROR
+    message: Untrusted input is deserialised.
+    mode: taint
+    pattern-sources:
+      - pattern: $_GET[...]
+      - pattern: $_POST[...]
+      - pattern: $_REQUEST[...]
+      - pattern: $_COOKIE[...]
+    pattern-sinks:
+      - pattern: unserialize($SINK, ...)
+      - pattern: maybe_unserialize($SINK, ...)
+
+  - id: wp-rce-shell
+    languages: [php]
+    severity: ERROR
+    message: Untrusted input reaches a shell command.
+    mode: taint
+    pattern-sources:
+      - pattern: $_GET[...]
+      - pattern: $_POST[...]
+      - pattern: $_REQUEST[...]
+      - pattern: $_COOKIE[...]
+    pattern-sanitizers:
+      - pattern: escapeshellarg(...)
+      - pattern: escapeshellcmd(...)
+      - pattern: absint(...)
+      - pattern: intval(...)
+    pattern-sinks:
+      - pattern: exec($SINK, ...)
+      - pattern: shell_exec($SINK)
+      - pattern: system($SINK, ...)
+      - pattern: passthru($SINK, ...)
+      - pattern: popen($SINK, ...)
+      - pattern: proc_open($SINK, ...)
+
+  - id: wp-lfi-dynamic-include
+    languages: [php]
+    severity: ERROR
+    message: Untrusted input reaches an include path.
+    mode: taint
+    pattern-sources:
+      - pattern: $_GET[...]
+      - pattern: $_POST[...]
+      - pattern: $_REQUEST[...]
+      - pattern: $_COOKIE[...]
+    pattern-sanitizers:
+      - pattern: basename(...)
+      - pattern: sanitize_file_name(...)
+      - pattern: sanitize_key(...)
+      - pattern: absint(...)
+    pattern-sinks:
+      - pattern: include $SINK;
+      - pattern: include_once $SINK;
+      - pattern: require $SINK;
+      - pattern: require_once $SINK;
+
+  - id: wp-path-file-access
+    languages: [php]
+    severity: ERROR
+    message: Untrusted input reaches a filesystem path.
+    mode: taint
+    pattern-sources:
+      - pattern: $_GET[...]
+      - pattern: $_POST[...]
+      - pattern: $_REQUEST[...]
+      - pattern: $_COOKIE[...]
+    pattern-sanitizers:
+      - pattern: basename(...)
+      - pattern: sanitize_file_name(...)
+      - pattern: absint(...)
+      - pattern: intval(...)
+    pattern-sinks:
+      - pattern: file_get_contents($SINK, ...)
+      - pattern: file_put_contents($SINK, ...)
+      - pattern: fopen($SINK, ...)
+      - pattern: unlink($SINK)
+      - pattern: rename($SINK, ...)
+      - pattern: rename(..., $SINK)
+      - pattern: copy($SINK, ...)
+
+  - id: wp-redirect-open
+    languages: [php]
+    severity: WARNING
+    message: Untrusted input reaches wp_redirect() without host validation.
+    mode: taint
+    pattern-sources:
+      - pattern: $_GET[...]
+      - pattern: $_POST[...]
+      - pattern: $_REQUEST[...]
+      - pattern: $_COOKIE[...]
+    pattern-sanitizers:
+      - pattern: wp_validate_redirect(...)
+      - pattern: absint(...)
+    pattern-sinks:
+      - pattern: wp_redirect($SINK, ...)
+
+  - id: wp-header-injection
+    languages: [php]
+    severity: WARNING
+    message: Untrusted input reaches an HTTP header.
+    mode: taint
+    pattern-sources:
+      - pattern: $_GET[...]
+      - pattern: $_POST[...]
+      - pattern: $_REQUEST[...]
+      - pattern: $_COOKIE[...]
+    pattern-sanitizers:
+      - pattern: sanitize_text_field(...)
+      - pattern: absint(...)
+      - pattern: intval(...)
+      - pattern: urlencode(...)
+      - pattern: rawurlencode(...)
+    pattern-sinks:
+      - pattern: header($SINK, ...)
+      - pattern: setcookie(..., $SINK, ...)
+      - pattern: setcookie($SINK, ...)
+
+  # Structural: no dataflow involved. Semgrep is good at exactly this shape.
+  - id: wp-authz-rest-missing-permission-callback
+    languages: [php]
+    severity: ERROR
+    message: REST route registered without a permission_callback.
+    patterns:
+      - pattern: register_rest_route($NS, $ROUTE, array(...))
+      - pattern-not: register_rest_route($NS, $ROUTE, array(..., 'permission_callback' => $CB, ...))
+      - pattern-not: |
+          register_rest_route($NS, $ROUTE, array(..., array(..., 'permission_callback' => $CB, ...), ...))
+
+  - id: wp-authz-rest-public-write
+    languages: [php]
+    severity: ERROR
+    message: REST write route is callable by anyone.
+    patterns:
+      - pattern-either:
+          - pattern: register_rest_route($NS, $ROUTE, array(..., 'permission_callback' => '__return_true', ...))
+          - pattern: |
+              register_rest_route($NS, $ROUTE, array(..., array(..., 'permission_callback' => '__return_true', ...), ...))
+      - pattern-not: register_rest_route($NS, $ROUTE, array(..., 'methods' => 'GET', ...))
+      - pattern-not: register_rest_route($NS, $ROUTE, array(..., 'methods' => WP_REST_Server::READABLE, ...))
+      - pattern-not: |
+          register_rest_route($NS, $ROUTE, array(..., array(..., 'methods' => 'GET', ...), ...))
+      - pattern-not: |
+          register_rest_route($NS, $ROUTE, array(..., array(..., 'methods' => WP_REST_Server::READABLE, ...), ...))
+
+  # Semgrep matches one AST node at a time, so a rule can see the callback
+  # *or* the handler body, never both. The inline-closure form is the only one
+  # of the four AJAX shapes expressible without cross-function resolution.
+  - id: wp-authz-ajax-missing-check-closure
+    languages: [php]
+    severity: ERROR
+    message: AJAX handler has no capability or nonce check.
+    patterns:
+      - pattern-either:
+          - pattern: add_action($HOOK, function (...) { ... });
+          - pattern: add_action($HOOK, static function (...) { ... });
+      - metavariable-regex:
+          metavariable: $HOOK
+          regex: ^['"]wp_ajax_
+      - pattern-not: |
+          add_action($HOOK, function (...) {
+            ...
+            current_user_can(...);
+            ...
+          });
+      - pattern-not: |
+          add_action($HOOK, static function (...) {
+            ...
+            current_user_can(...);
+            ...
+          });
+      - pattern-not: |
+          add_action($HOOK, function (...) {
+            ...
+            check_ajax_referer(...);
+            ...
+          });
+      - pattern-not: |
+          add_action($HOOK, static function (...) {
+            ...
+            check_ajax_referer(...);
+            ...
+          });
+
+  # The three non-closure shapes need the handler body, which the add_action
+  # node does not contain. This is the closest a file-local rule gets: flag any
+  # function that has no check at all and whose name looks like an AJAX handler.
+  - id: wp-authz-ajax-missing-check-function
+    languages: [php]
+    severity: ERROR
+    message: AJAX handler has no capability or nonce check.
+    patterns:
+      - pattern: |
+          function $F(...) { ... }
+      - metavariable-regex:
+          metavariable: $F
+          regex: (?i).*ajax.*
+      # A regex over the matched function text rather than a structural
+      # negation: the checks appear inside `if` conditions, and Semgrep's
+      # statement-position `...` will not see them there.
+      - pattern-not-regex: (current_user_can|check_ajax_referer|check_admin_referer|wp_verify_nonce)

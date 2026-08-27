@@ -80,7 +80,10 @@ final class FunctionAnalysis
     ) {
         $this->state = new TaintState();
         $this->types = new ClassTypeMap();
-        $this->queryShapes = new QueryShapeInspector($literals, new OriginClassifier($registry, $resolver));
+        $this->queryShapes = new QueryShapeInspector(
+            $literals,
+            new OriginClassifier($registry, $resolver, $properties),
+        );
         $this->returnTaint = TaintSet::empty();
         $this->blocks = BlockOrder::of($this->context->func->cfg);
         $this->traces = new TraceBuilder(
@@ -774,7 +777,7 @@ final class FunctionAnalysis
         if ($sanitizer->requiresLiteralArgument !== null) {
             $formatArgument = $call->argument($sanitizer->requiresLiteralArgument);
 
-            if ($formatArgument !== null && ! $this->literals->isEffectivelyLiteral($formatArgument)) {
+            if ($formatArgument !== null && $this->formatStringIsUnsafe($formatArgument)) {
                 return $this->reportNonLiteralSanitizer($op, $call, $sanitizer, $matcher, $formatArgument, $incoming);
             }
         }
@@ -805,6 +808,39 @@ final class FunctionAnalysis
                 imprecise: $sanitizer->imprecise,
             ),
         );
+    }
+
+    /**
+     * Whether a `prepare()` format string is one prepare() cannot protect.
+     *
+     * "Not a string literal" is not the same as "unsafe", and treating it as
+     * such produced 532 critical findings on the corpus, almost all of them on
+     * this shape:
+     *
+     * ```php
+     * $table = self::table();   // returns $wpdb->prefix . 'wfconfig'
+     * $wpdb->get_row( $wpdb->prepare( "SELECT … FROM {$table} WHERE name = %s", $key ) );
+     * ```
+     *
+     * The format string is not literal, and it is also not dangerous: every
+     * character of it is accounted for. The question prepare() actually needs
+     * answering is whether anything attacker-controlled reached the format
+     * string, which is the same question the query-shape rule asks, so it uses
+     * the same machinery.
+     */
+    private function formatStringIsUnsafe(Operand $formatArgument): bool
+    {
+        if ($this->literals->isEffectivelyLiteral($formatArgument)) {
+            return false;
+        }
+
+        // A proven flow from a source: unambiguously unsafe.
+        if ($this->state->taintOf($formatArgument)->has(TaintKind::Sql)) {
+            return true;
+        }
+
+        // No proven flow, but something in it the engine cannot account for.
+        return $this->queryShapes->unaccountedComponent($formatArgument, $this->context, $this->types) !== null;
     }
 
     /**
