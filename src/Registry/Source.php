@@ -11,6 +11,14 @@ use Enshrined\WpTaint\Taint\TaintSet;
  */
 final class Source
 {
+    /**
+     * Strategies {@see $appliesBy} accepts. Named here so a typo in a catalogue
+     * is a load error rather than a silently inert entry.
+     */
+    public const ADD_QUERY_ARG_BASE = 'add_query_arg_base';
+
+    public const STRATEGIES = [self::ADD_QUERY_ARG_BASE];
+
     public function __construct(
         public readonly Matcher $matcher,
         public readonly TaintSet $kinds,
@@ -38,6 +46,16 @@ final class Source
          * @var list<string>
          */
         public readonly array $keyPrefixes = [],
+        /**
+         * A named strategy deciding whether this entry is a source *at this
+         * call site*.
+         *
+         * `add_query_arg()` reads `$_SERVER['REQUEST_URI']` only when no base
+         * URI was passed to it. Whether one was depends on the shape of the
+         * first argument, which no static field can say — and getting it wrong
+         * either way is a false SSRF finding or a missed reflected one.
+         */
+        public readonly ?string $appliesBy = null,
     ) {
     }
 

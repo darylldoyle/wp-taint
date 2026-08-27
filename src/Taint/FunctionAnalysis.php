@@ -1807,6 +1807,10 @@ final class FunctionAnalysis
 
     private function sourceApplies(Source $source, CallTarget $call): bool
     {
+        if ($source->appliesBy === Source::ADD_QUERY_ARG_BASE && ! self::addQueryArgReadsRequestUri($call)) {
+            return false;
+        }
+
         if ($source->argumentLiteralContains === null) {
             return true;
         }
@@ -1881,6 +1885,45 @@ final class FunctionAnalysis
      * string, which is the same question the query-shape rule asks, so it uses
      * the same machinery.
      */
+    /**
+     * Whether `add_query_arg()` reads the current request at this call site.
+     *
+     * It reads `$_SERVER['REQUEST_URI']` only when no base URI was handed to
+     * it, and where the base would sit depends on the shape of the first
+     * argument:
+     *
+     * ```php
+     * add_query_arg( [ 'a' => 1 ] );                  // reads REQUEST_URI
+     * add_query_arg( [ 'a' => 1 ], $endpoint );       // does not
+     * add_query_arg( 'a', 1 );                        // reads REQUEST_URI
+     * add_query_arg( 'a', 1, $endpoint );             // does not
+     * ```
+     *
+     * Modelling it as an unconditional source produced SSRF findings on every
+     * plugin that builds a third-party API URL this way — Contact Form 7 calls
+     * it with the Sendinblue endpoint and got two. Modelling it as never a
+     * source would lose reflected XSS through the current URL, which is a real
+     * and common bug.
+     */
+    private static function addQueryArgReadsRequestUri(CallTarget $call): bool
+    {
+        $first = $call->argument(0);
+
+        // The key form is the one whose first argument is a literal string;
+        // everything else is taken to be the array form. Checking for a literal
+        // `array()` instead was too narrow — Cookie Law Info passes
+        // `$this->get_args`, a property holding an array, and got three SSRF
+        // findings for it.
+        //
+        // The cost is `add_query_arg( $key, $value )` with a computed key,
+        // which is read as the array form and stays quiet. That is the rarer
+        // shape, and quiet is the direction to fail in on a call this
+        // ambiguous.
+        $baseIndex = $first !== null && OperandHelper::literalString($first) !== null ? 2 : 1;
+
+        return $call->argumentCount() <= $baseIndex;
+    }
+
     /**
      * What a strategy-driven sanitizer clears at this particular call site.
      *

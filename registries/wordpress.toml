@@ -748,6 +748,32 @@ path_arg = 0
 args_arg = 2
 note = "Already resolved by locate_template(); the path is the argument."
 
+# add_query_arg() reads $_SERVER['REQUEST_URI'] only when no base URI was handed
+# to it, and where the base would sit depends on whether the first argument is an
+# array or a key. `applies_by` names the check, because no static field can say.
+#
+# Unconditional, it produced SSRF findings on every plugin that builds a
+# third-party API URL this way. Never a source, and reflected XSS through the
+# current URL — a real and common bug — would go missing.
+[[sources]]
+function = "add_query_arg"
+kinds = ["html", "html_attr", "url"]
+applies_by = "add_query_arg_base"
+
+[[propagators]]
+function = "add_query_arg"
+note = "With an explicit base it is a pure string build; see the [[sources]] entry for the other case."
+
+[[propagators]]
+function = "remove_query_arg"
+
+# get_avatar() returns an <img> element it has escaped itself. Echoing it is the
+# documented use, and treating the markup as taint reported every theme and
+# plugin that shows an avatar.
+[[safe]]
+function = "get_avatar"
+note = "Returns markup it escaped itself. get_avatar_url() is the one that returns a bare URL."
+
 [[rules]]
 id = "wp.sqli.wpdb-query"
 title = "Untrusted input reaches a database query without preparation"

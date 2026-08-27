@@ -25,7 +25,7 @@ final class RegistryLoader
 
     private const SOURCE_KEYS = [
         'superglobal', 'function', 'class', 'method', 'static_method', 'kinds', 'stored', 'note',
-        'arg', 'arg_literal_contains', 'keys', 'key_prefixes',
+        'arg', 'arg_literal_contains', 'keys', 'key_prefixes', 'applies_by',
     ];
 
     private const SANITIZER_KEYS = [
@@ -211,6 +211,12 @@ final class RegistryLoader
                 $this->intValue($file, $context . ' arg', $entry['arg'] ?? 0),
                 $keys,
                 $this->stringList($file, $context . ' key_prefixes', $entry['key_prefixes'] ?? []),
+                $this->namedStrategy(
+                    $file,
+                    $context . ' applies_by',
+                    $entry['applies_by'] ?? null,
+                    Source::STRATEGIES,
+                ),
             ));
         }
     }
@@ -270,17 +276,25 @@ final class RegistryLoader
      */
     private function clearsBy(string $file, string $context, mixed $value): ?string
     {
+        return $this->namedStrategy($file, $context . ' clears_by', $value, Sanitizer::STRATEGIES);
+    }
+
+    /**
+     * @param list<string> $allowed
+     */
+    private function namedStrategy(string $file, string $context, mixed $value, array $allowed): ?string
+    {
         if ($value === null) {
             return null;
         }
 
-        $name = $this->requiredString($file, $context . ' clears_by', $value);
+        $name = $this->requiredString($file, $context, $value);
 
-        if (! in_array($name, Sanitizer::STRATEGIES, true)) {
-            throw RegistryException::at($file, $context . ' clears_by', sprintf(
+        if (! in_array($name, $allowed, true)) {
+            throw RegistryException::at($file, $context, sprintf(
                 '"%s" is not a known strategy. Valid strategies: %s.',
                 $name,
-                implode(', ', Sanitizer::STRATEGIES),
+                implode(', ', $allowed),
             ));
         }
 
