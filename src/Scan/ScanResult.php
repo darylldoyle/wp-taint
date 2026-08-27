@@ -28,6 +28,15 @@ final class ScanResult
         public readonly array $unresolvedHooks = [],
         public readonly int $suppressedByBaseline = 0,
         public readonly int $suppressedInline = 0,
+        /**
+         * Files parsed from `--include-path` for their symbols only.
+         *
+         * Reported separately from `filesScanned` because they are context, not
+         * work: a run that says it scanned 30,000 files when the user pointed it
+         * at a 40-file plugin is lying about what it looked at.
+         */
+        public readonly int $referenceFiles = 0,
+        public readonly int $referenceParseFailures = 0,
     ) {
     }
 
@@ -45,6 +54,8 @@ final class ScanResult
             $this->unresolvedHooks,
             $suppressedByBaseline,
             $suppressedInline,
+            $this->referenceFiles,
+            $this->referenceParseFailures,
         );
     }
 

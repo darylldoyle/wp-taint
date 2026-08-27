@@ -99,6 +99,12 @@ final class ScanCommand extends Command
                 'Deprecated alias for --dynamic-calls=tainted',
             )
             ->addOption(
+                'include-path',
+                null,
+                InputOption::VALUE_REQUIRED | InputOption::VALUE_IS_ARRAY,
+                'Analyse this tree for its symbols but never report findings in it (repeatable)',
+            )
+            ->addOption(
                 'no-follow-includes',
                 null,
                 InputOption::VALUE_NONE,
@@ -208,6 +214,7 @@ final class ScanCommand extends Command
             $reader->bool('stored-taint-writes'),
             $reader->dynamicCallPolicy(),
             ! $reader->bool('no-follow-includes'),
+            $reader->stringList('include-path'),
             $reader->bool('parse-report'),
             $reader->nullableString('dump-taint-graph'),
             ! $reader->bool('no-structural-rules'),

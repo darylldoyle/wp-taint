@@ -24,6 +24,7 @@ final class ScanConfiguration
     /**
      * @param list<string> $paths
      * @param list<string> $excludes
+     * @param list<string> $includePaths analysed for symbols, never reported on
      */
     public function __construct(
         public readonly array $paths,
@@ -43,12 +44,14 @@ final class ScanConfiguration
         public readonly int $jobs,
         public readonly bool $useCache,
         public readonly ?string $cacheDirectory,
+        public readonly array $includePaths = [],
     ) {
     }
 
     /**
      * @param list<string> $paths
      * @param list<string> $excludes
+     * @param list<string> $includePaths
      */
     public static function build(
         array $paths,
@@ -66,6 +69,8 @@ final class ScanConfiguration
         bool $storedTaintWrites,
         DynamicCallPolicy $dynamicCalls,
         bool $followIncludes,
+        /** @var list<string> */
+        array $includePaths,
         bool $parseReport,
         ?string $dumpTaintGraph,
         bool $structuralRules,
@@ -121,6 +126,10 @@ final class ScanConfiguration
             $jobs,
             $useCache,
             $cacheDirectory,
+            array_values(array_map(
+                static fn (string $path): string => rtrim($path, '/'),
+                array_values($includePaths),
+            )),
         );
     }
 

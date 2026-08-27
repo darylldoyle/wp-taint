@@ -18,6 +18,7 @@ use Enshrined\WpTaint\Rules\RuleContext;
 use Enshrined\WpTaint\Rules\StructuralRule;
 use Enshrined\WpTaint\Rules\Wordpress\MissingAjaxCapabilityCheck;
 use Enshrined\WpTaint\Rules\Wordpress\MissingRestPermissionCallback;
+use Enshrined\WpTaint\Support\PathHelper;
 use Enshrined\WpTaint\Taint\AnalysisOptions;
 use Enshrined\WpTaint\Taint\AnalysisWarning;
 use Enshrined\WpTaint\Taint\CallableResolver;
@@ -62,6 +63,18 @@ final class Scanner
         private readonly bool $structuralRulesEnabled = true,
         private readonly ?string $taintGraphPath = null,
         private readonly int $jobs = 1,
+        /**
+         * Trees parsed and summarised for their symbols, but never reported on.
+         *
+         * A Composer dependency's helper, or WordPress core itself. Without
+         * them an unmodelled call is routine rather than rare; with them the
+         * engine knows what those functions do to the values passed through,
+         * and the reader is not shown findings in code they did not write and
+         * cannot fix.
+         *
+         * @var list<string>
+         */
+        private readonly array $includePaths = [],
     ) {
         // Both remaining structural rules are pure AST shape checks. The
         // query-shape check that used to live here needs the dataflow verdict,
@@ -100,6 +113,35 @@ final class Scanner
             // Never skipped, never swallowed. A file we cannot read is a
             // reported error and sets exit code 2.
             $parseErrors[] = $result->error();
+        }
+
+        // Reference trees, parsed after the real ones so a file appearing in
+        // both is analysed as the user's own.
+        $referenceParseFailures = 0;
+        $scanned = [];
+
+        foreach ($parsed as $file) {
+            $scanned[$file->relativePath] = true;
+        }
+
+        /** @var array<string, true> $reference */
+        $reference = [];
+
+        foreach ($this->referenceFiles($scanned) as $file) {
+            $result = $builder->buildFromFile($file);
+
+            // A reference tree is context, not a deliverable. A file in it that
+            // will not parse is a gap in what we know about the dependency, not
+            // an error in the code being scanned, so it is counted rather than
+            // failing the run.
+            if (! $result->isSuccess()) {
+                $referenceParseFailures++;
+
+                continue;
+            }
+
+            $parsed[] = $result->file();
+            $reference[$result->file()->relativePath] = true;
         }
 
         $functions = new UserFunctionTable();
@@ -150,7 +192,11 @@ final class Scanner
             // Structural rules are pure AST shape checks over one file, so they
             // run before the whole-program taint pass — which is what lets the
             // AST go early.
-            if ($this->structuralRulesEnabled) {
+            // Reference trees are skipped: a missing permission_callback in
+            // WordPress core is not this project's bug to fix.
+            // Reference trees are skipped: a missing permission_callback in
+            // WordPress core is not this project's bug to fix.
+            if ($this->structuralRulesEnabled && ! isset($reference[$file->relativePath])) {
                 foreach ($this->structuralRules as $rule) {
                     $findings = [...$findings, ...$rule->analyse($file, $this->registry, $ruleContext)];
                 }
@@ -210,12 +256,30 @@ final class Scanner
 
         /** @var list<array{findings: list<Finding>, warnings: list<AnalysisWarning>}> $shards */
         $shards = $pool->run(
-            static function (int $shard, int $shardCount) use ($contexts, $analyzer, $resolution, $graph): array {
+            static function (
+                int $shard,
+                int $shardCount
+            ) use (
+                $contexts,
+                $analyzer,
+                $resolution,
+                $graph,
+                $reference,
+            ): array {
                 $shardFindings = [];
                 $shardWarnings = [];
 
                 foreach ($contexts as $index => $context) {
                     if ($index % $shardCount !== $shard) {
+                        continue;
+                    }
+
+                    // A reference tree has already done its job: its summaries
+                    // are in the table and its symbols are known. Walking it
+                    // again for findings would report bugs in code the reader
+                    // did not write and cannot fix, and cost the time of a
+                    // second whole-program pass to do it.
+                    if (isset($reference[$context->file->relativePath])) {
                         continue;
                     }
 
@@ -262,13 +326,46 @@ final class Scanner
         return new ScanResult(
             $collection,
             $parseErrors,
-            count($parsed),
+            count($parsed) - count($reference),
             $warnings,
             $this->root,
             $this->registry->names,
             $this->options->interprocedural,
             (int) round((hrtime(true) - $startedAt) / 1_000_000),
             $unresolvedHooks,
+            referenceFiles: count($reference),
+            referenceParseFailures: $referenceParseFailures,
         );
+    }
+
+    /**
+     * Files under `--include-path`, minus anything already being scanned.
+     *
+     * A path in both is the user's own code, and analysed as such: findings in
+     * it are reported.
+     *
+     * @param array<string, true> $scanned relative paths already parsed
+     *
+     * @return list<string>
+     */
+    private function referenceFiles(array $scanned): array
+    {
+        if ($this->includePaths === []) {
+            return [];
+        }
+
+        $files = [];
+
+        // No default excludes. `vendor/` is skipped when deciding what to
+        // report on, and `--include-path=./vendor` is the whole point of this
+        // flag — a finder that quietly drops it would find nothing and say so
+        // by producing no findings, which is the worst way to be wrong.
+        foreach ((new FileFinder([], false))->find($this->includePaths) as $path) {
+            if (! isset($scanned[PathHelper::relative($path, $this->root)])) {
+                $files[] = $path;
+            }
+        }
+
+        return $files;
     }
 }

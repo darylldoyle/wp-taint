@@ -36,6 +36,7 @@ final class ScanRunner
             $this->configuration->structuralRules,
             $this->configuration->dumpTaintGraph,
             $this->configuration->jobs,
+            $this->configuration->includePaths,
         );
 
         // A graph dump is a side effect the cache cannot replay, so it always
@@ -88,6 +89,7 @@ final class ScanRunner
             'interprocedural' => $analysis->interprocedural,
             'dynamicCalls' => $analysis->dynamicCalls->value,
             'followIncludes' => $analysis->followIncludes,
+            'includePaths' => $this->configuration->includePaths,
             'structuralRules' => $this->configuration->structuralRules,
             'root' => $this->configuration->root,
         ]));

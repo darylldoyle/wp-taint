@@ -657,6 +657,50 @@ function = "wp_validate_auth_cookie"
 class = "WP_User"
 method = "has_cap"
 
+# ---------------------------------------------------------------------------
+# Translation.
+#
+# A translation function returns the translated *message*, not its arguments.
+# The number handed to _n() picks which message; it does not come back out.
+#
+# These went uncatalogued until `--include-path` was pointed at WordPress core,
+# at which point the engine learned _n()'s real body — which ends in
+# `apply_filters( 'ngettext', $translation, $single, $plural, $number, … )`.
+# With the hook graph following that filter, a callback returning its fourth
+# parameter would hand the number back, so the count from a get_option() call
+# reached an echo and Akismet gained three findings.
+#
+# Sound? A callback on `ngettext` really could return the number. Modelling that
+# path costs three false positives on one plugin to describe a filter nobody
+# writes, so the catalogue states the sensible model instead — which is what a
+# hand-written entry is for, and why it wins over a learned summary.
+# ---------------------------------------------------------------------------
+
+[[propagators]]
+function = "__"
+arg = 0
+
+[[propagators]]
+function = "translate"
+arg = 0
+
+[[propagators]]
+function = "_x"
+arg = 0
+
+[[propagators]]
+function = "_n"
+args = [0, 1]
+note = "The number selects the message; it is not part of it."
+
+[[propagators]]
+function = "_nx"
+args = [0, 1]
+
+[[propagators]]
+function = "translate_nooped_plural"
+arg = 0
+
 [[rules]]
 id = "wp.sqli.wpdb-query"
 title = "Untrusted input reaches a database query without preparation"

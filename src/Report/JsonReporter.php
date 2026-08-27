@@ -48,6 +48,8 @@ final class JsonReporter implements Reporter
                 'root' => $result->root,
                 'registries' => $result->registryNames,
                 'filesScanned' => $result->filesScanned,
+                'referenceFiles' => $result->referenceFiles,
+                'referenceParseFailures' => $result->referenceParseFailures,
                 'filesFailedToParse' => count($result->parseErrors),
                 'interprocedural' => $result->interprocedural,
                 'suppressedByBaseline' => $result->suppressedByBaseline,
