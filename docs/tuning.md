@@ -116,6 +116,105 @@ Findings resting on an assumption are counted: 395 of the 851 carry
 where the engine lost the thread anywhere, so it is an upper bound on doubt
 rather than a measure of it.
 
+## Making hooks part of the call graph
+
+15,637 `add_action`/`add_filter` registrations and 9,173 `apply_filters` calls in
+the corpus, none of them connected to anything. A filter callback reading `$_GET`
+could taint a value the engine believed was clean; an action's arguments never
+reached the sinks inside its callbacks.
+
+Once the graph exists, a dispatch is a call with several callees, which the
+Phase 1 dispatcher machinery already handles. `hook = true` on a
+`[[dispatchers]]` entry says the callable argument names a hook.
+
+### Two silent misses, both large
+
+**Namespaced registrar calls.** Inside a namespace, `add_action(...)` compiles to
+the namespaced call form even though it resolves to the global function at
+runtime. Matching only the plain form missed every registration in namespaced
+code. Elementor resolved 10 of its 757.
+
+**`__NAMESPACE__ . '\\render'`**, which is how a namespaced plugin names a
+callback. The identity magic constants now fold to strings during lowering, where
+the enclosing namespace and class are still in hand — so every resolver
+downstream gets it without learning about scope. A trait's `__CLASS__` is left
+alone: it is the *using* class at runtime, and a wrong answer would be worse than
+an opaque one.
+
+Resolution after both fixes:
+
+| Plugin | Registrations resolved | Syntactic `add_*` |
+| --- | --- | --- |
+| Contact Form 7 | 143 | 143 |
+| Akismet | 70 | 72 |
+| Elementor | 717 | 757 |
+| Yoast SEO | 536 | 594 |
+| Advanced Custom Fields | 325 | 375 |
+
+The syntactic counts are `grep`, so they include matches in comments and strings;
+the real rates are higher.
+
+### The wildcard that had to go
+
+A registration whose hook *name* will not resolve was first modelled as being on
+every hook — the sound choice, since it might be any of them.
+
+It is the wrong one. Advanced Custom Fields had 22 such registrations against 201
+hooks, so every dispatch gained 22 spurious callees and its average went from 1.4
+callbacks per hook to 23.4. Five of the six findings that appeared on ACF came
+from those edges and vanished when they were removed.
+
+They are surfaced in the unresolved-hook list instead, where the other coverage
+gaps already live. The standing trade applies: a documented false negative beats
+an undocumented false positive.
+
+## Authorization: reachability instead of names
+
+The AJAX rule accepted any call whose name contained `can`, `capab`,
+`permission`, `nonce`, `referer`, `authori`, `authenticat` or `verify`. It
+credited `acf_verify_ajax()` for the right reason by accident and would have
+credited `$this->can_haz_cheeseburger()` for no reason at all.
+
+It now walks the call graph looking for one of the `[[authorization]]`
+primitives. `acf_verify_ajax()` counts because it calls `wp_verify_nonce`, which
+we can see. A helper named like a check but returning `true` is reported. The
+heuristic survives only where the graph cannot speak, and those findings are
+marked imprecise.
+
+### The third REST class needed two conditions, not one
+
+`permission_callback` presence used to be the whole test, which credited
+`array( $this, 'noop' )` exactly as much as a real capability check. The new rule
+reports a callback that reaches no authorization primitive — and on its first
+corpus run it reported both of Akismet's routes:
+
+```php
+public static function remote_call_permission_callback( $request ) {
+    $local_key = Akismet::get_api_key();
+    return $local_key && ( strtolower( $request->get_param( 'key' ) ?? '' ) === strtolower( $local_key ) );
+}
+```
+
+That is a real authorization check, written with a shared secret rather than a
+WordPress primitive. Reachability alone was the wrong test.
+
+The rule now needs both: nothing below the callback reaches a primitive, *and*
+the body contains no branch, comparison, boolean operator or negation, so it
+cannot be refusing anything. A cheap syntactic proxy for "provably returns a
+constant", and named as one — being wrong now means staying quiet, which is the
+direction an authorization rule should fail in. Akismet: back to 0.
+
+### Route options no longer have to be inline
+
+`register_rest_route( $ns, $route, $this->route_args() )` was counted as
+unresolved and skipped, which meant the most safety-critical rule in the tool
+quietly declined to look at a large share of the routes in the corpus.
+
+A variable assigned exactly once from a literal, or a function whose only
+`return` is a literal, now folds. Deliberately a constant fold and not a dataflow
+analysis: a wrong answer here is an authorization bypass either reported or
+missed. **Unresolved route options across the corpus: 1.**
+
 ## Determinism across `--jobs`, again
 
 Elementor reported the same finding with a seven-step trace at `--jobs=1` and a
