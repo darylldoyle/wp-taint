@@ -981,7 +981,9 @@ final class FunctionAnalysis
             $this->imprecise = true;
         }
 
-        $cleared = $sanitizer->apply($incoming);
+        $cleared = $sanitizer->clearsBy === null
+            ? $sanitizer->apply($incoming)
+            : $incoming->without($this->strategyClears($sanitizer, $call));
 
         if ($cleared->isEmpty()) {
             return $this->writeResult($op->result, $cleared);
@@ -1023,6 +1025,33 @@ final class FunctionAnalysis
      * string, which is the same question the query-shape rule asks, so it uses
      * the same machinery.
      */
+    /**
+     * What a strategy-driven sanitizer clears at this particular call site.
+     *
+     * Nothing, when it cannot tell — which leaves the incoming taint untouched
+     * and makes the call behave exactly like the propagator it would otherwise
+     * be. That is the right failure: `preg_replace()` with a computed pattern
+     * proves nothing, and pretending otherwise would launder real taint.
+     */
+    private function strategyClears(Sanitizer $sanitizer, CallTarget $call): TaintSet
+    {
+        if ($sanitizer->clearsBy !== Sanitizer::ALLOWLIST_PATTERN) {
+            return TaintSet::empty();
+        }
+
+        $pattern = $call->argument($sanitizer->patternArgument);
+        $replacement = $call->argument($sanitizer->replacementArgument);
+
+        $patternLiteral = $pattern === null ? null : OperandHelper::literalString($pattern);
+        $replacementLiteral = $replacement === null ? null : OperandHelper::literalString($replacement);
+
+        if ($patternLiteral === null || $replacementLiteral === null) {
+            return TaintSet::empty();
+        }
+
+        return AllowlistPattern::clears($patternLiteral, $replacementLiteral) ?? TaintSet::empty();
+    }
+
     private function formatStringIsUnsafe(Operand $formatArgument): bool
     {
         if ($this->literals->isEffectivelyLiteral($formatArgument)) {

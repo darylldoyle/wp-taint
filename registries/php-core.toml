@@ -115,9 +115,19 @@ note = "Taint flows from both the subject and the replacement."
 [[propagators]]
 function = "str_ireplace"
 
-[[propagators]]
+# preg_replace() is a sanitizer or a propagator depending on its pattern, and no
+# static entry can say which. `clears_by` names the strategy that reads the
+# pattern at each call site: an allowlist class such as '/[^a-z0-9]/' with an
+# empty replacement can only emit characters the class kept, so any taint kind
+# whose syntax needs a character it dropped is cleared. A computed pattern, or
+# one this does not understand, clears nothing and the call propagates.
+[[sanitizers]]
 function = "preg_replace"
-note = "The replacement and the subject both propagate."
+all_args = true
+clears_by = "allowlist_pattern"
+pattern_arg = 0
+replacement_arg = 1
+note = "Only when the pattern is a literal allowlist class. Otherwise it propagates."
 
 [[propagators]]
 function = "preg_replace_callback"

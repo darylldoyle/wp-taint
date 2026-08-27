@@ -31,6 +31,7 @@ final class RegistryLoader
     private const SANITIZER_KEYS = [
         'function', 'class', 'method', 'static_method', 'arg', 'args', 'all_args', 'clears',
         'requires_literal_arg', 'literal_violation_rule_id', 'note', 'imprecise',
+        'clears_by', 'pattern_arg', 'replacement_arg',
     ];
 
     private const PROPAGATOR_KEYS = ['function', 'class', 'method', 'static_method', 'arg', 'args', 'all_args', 'note'];
@@ -212,13 +213,25 @@ final class RegistryLoader
             $matcher = $this->matcherFor($file, $context, $entry, allowConstruct: false, allowSuperglobal: false);
             $clearsRaw = $entry['clears'] ?? null;
             $clearsEverything = $this->isWildcard($clearsRaw);
+            $clearsBy = $this->clearsBy($file, $context, $entry['clears_by'] ?? null);
+
+            // One or the other. A fixed set and a strategy would leave it
+            // ambiguous which one applied, and an entry with neither clears
+            // nothing, which is a propagator written in the wrong table.
+            if (($clearsBy === null) === ($clearsRaw === null || $clearsRaw === [])) {
+                throw RegistryException::at($file, $context, $clearsBy === null
+                    ? 'must set either clears or clears_by.'
+                    : 'sets both clears and clears_by; a strategy computes what it clears.');
+            }
 
             $accumulator->addSanitizer(new Sanitizer(
                 $matcher,
                 $this->arguments($file, $context, $entry, ArgumentSelector::index(0)),
-                $clearsEverything
-                    ? TaintSet::allDataflowKinds()
-                    : $this->kinds($file, $context, $clearsRaw, allowWildcard: true),
+                match (true) {
+                    $clearsBy !== null => TaintSet::empty(),
+                    $clearsEverything => TaintSet::allDataflowKinds(),
+                    default => $this->kinds($file, $context, $clearsRaw, allowWildcard: true),
+                },
                 $clearsEverything,
                 isset($entry['requires_literal_arg'])
                     ? $this->intValue($file, $context . ' requires_literal_arg', $entry['requires_literal_arg'])
@@ -230,8 +243,37 @@ final class RegistryLoader
                     $context . ' literal_violation_rule_id',
                     $entry['literal_violation_rule_id'] ?? null,
                 ),
+                $clearsBy,
+                $this->intValue($file, $context . ' pattern_arg', $entry['pattern_arg'] ?? 0),
+                $this->intValue($file, $context . ' replacement_arg', $entry['replacement_arg'] ?? 1),
             ));
         }
+    }
+
+    /**
+     * A named strategy for working out what a call clears from its arguments.
+     *
+     * An unknown name is a hard error rather than a silently inert entry: the
+     * whole point of the catalogue being data is that a typo in it cannot
+     * quietly disable a sanitizer.
+     */
+    private function clearsBy(string $file, string $context, mixed $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $name = $this->requiredString($file, $context . ' clears_by', $value);
+
+        if (! in_array($name, Sanitizer::STRATEGIES, true)) {
+            throw RegistryException::at($file, $context . ' clears_by', sprintf(
+                '"%s" is not a known strategy. Valid strategies: %s.',
+                $name,
+                implode(', ', Sanitizer::STRATEGIES),
+            ));
+        }
+
+        return $name;
     }
 
     private function loadPropagators(string $file, mixed $entries, RegistryAccumulator $accumulator): void
