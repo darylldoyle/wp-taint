@@ -1215,7 +1215,6 @@ final class FunctionAnalysis
             $position['endColumn'],
             trim($this->context->file->sourceMap->line($position['line'])),
             $this->context->displayName,
-            $op,
             $this->imprecise,
         );
     }

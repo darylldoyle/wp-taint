@@ -220,14 +220,19 @@ be wrong the moment a function it calls changed elsewhere.
 
 ---
 
+### `--jobs` needs `pcntl`
+
+Parallelism forks after parsing, so children inherit the parsed CFGs through
+copy-on-write. Without the `pcntl` extension — which is CLI-only and absent on
+some hosts — `--jobs` silently falls back to serial. The output is identical
+either way; only the wall clock changes.
+
+Parsing stays serial: it is the phase that builds the shared function table, and
+it is cheap relative to the analysis. Expect roughly a 2x improvement rather
+than a linear one.
+
 ## Not implemented
 
-- **`--jobs` (parallelism).** The option is accepted and currently ignored. The
-  honest reason: the expensive phase is the interprocedural summary fixed point,
-  and parallelising it soundly means making it round-synchronous and exchanging
-  serialised summaries between forked workers. That is a real design, not a
-  flag, and shipping a `--jobs` that silently drops cross-shard flows would
-  break the determinism guarantee the rest of the tool is built on.
 - **HTML reporter.** Deferred post-v1; the deployment context is a developer
   machine, where console, JSON and SARIF cover it.
 - **Second-order flows through the database.** `update_option()` writing tainted

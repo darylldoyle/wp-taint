@@ -4,9 +4,10 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Taint;
 
+use Enshrined\WpTaint\Scan\WorkerPool;
+
 /**
- * Drives summaries to a fixed point, then analyses every function body with
- * those summaries in place.
+ * Drives summaries to a fixed point, then hands them to the finding pass.
  *
  * Summaries start at the bottom of the lattice — every function assumed to
  * propagate nothing — and are recomputed until nothing changes. That is what
@@ -16,6 +17,19 @@ namespace Enshrined\WpTaint\Taint;
  * The property taint map converges in the same loop, because
  * `$this->value = $_GET['x']` in one method and `echo $this->value` in another
  * is a single flow the per-function analysis cannot see on its own.
+ *
+ * ## Why each round reads a frozen table
+ *
+ * Every function in a round is summarised against the *previous* round's
+ * summaries, not against summaries other functions produced earlier in the same
+ * round. Reading them as they land would converge in fewer rounds, but it makes
+ * the result depend on the order functions are visited — and the moment the
+ * round is sharded across worker processes, that order is whatever the
+ * scheduler picked.
+ *
+ * The transfer functions are monotone, so both orders reach the same least
+ * fixed point. Freezing the table costs a round or two and buys a guarantee
+ * that `--jobs=8` and `--jobs=1` produce byte-identical output.
  */
 final class InterproceduralResolver
 {
@@ -23,6 +37,7 @@ final class InterproceduralResolver
         private readonly IntraproceduralAnalyzer $analyzer,
         private readonly SummaryExtractor $extractor,
         private readonly AnalysisOptions $options,
+        private readonly int $jobs = 1,
     ) {
     }
 
@@ -41,22 +56,50 @@ final class InterproceduralResolver
         }
 
         $ordered = self::callOrder($functions);
+        $pool = new WorkerPool($this->jobs);
         $rounds = 0;
         $changed = true;
 
         while ($changed && $rounds < $this->options->maxInterproceduralRounds) {
-            $changed = false;
             $rounds++;
 
-            foreach ($ordered as $context) {
-                $summary = $this->extractor->extract($context, $summaries, $properties);
-                $changed = $summaries->set($summary) || $changed;
+            // The frozen inputs for this round. Workers read these and never
+            // write them, so no worker can observe another's output.
+            $previousSummaries = $summaries;
+            $previousProperties = $properties;
+
+            /** @var list<array{summaries: list<FunctionSummary>, properties: PropertyTaintMap}> $shards */
+            $shards = $pool->run(
+                fn (int $shard, int $shardCount): array => $this->round(
+                    $ordered,
+                    $previousSummaries,
+                    $previousProperties,
+                    $shard,
+                    $shardCount,
+                ),
+            );
+
+            $summaries = new SummaryTable();
+            $properties = clone $previousProperties;
+            $changed = false;
+
+            // Merged in shard order, then in the order each shard produced
+            // them. Both are fixed, so the merge is deterministic.
+            foreach ($shards as $shardResult) {
+                foreach ($shardResult['summaries'] as $summary) {
+                    $summaries->set($summary);
+                }
+
+                $changed = $properties->mergeFrom($shardResult['properties']) || $changed;
             }
 
-            // A round of plain body analysis, purely to let property writes
-            // settle. Findings are discarded; only the property map matters.
             foreach ($ordered as $context) {
-                $this->analyzer->analyze($context, $summaries, $properties, null, false);
+                $previous = $previousSummaries->get($context->key);
+                $current = $summaries->get($context->key);
+
+                if ($previous === null || $current === null || ! $previous->equals($current)) {
+                    $changed = true;
+                }
             }
         }
 
@@ -69,12 +112,47 @@ final class InterproceduralResolver
     }
 
     /**
+     * One round over one shard of the function list.
+     *
+     * @param list<FunctionContext> $ordered
+     *
+     * @return array{summaries: list<FunctionSummary>, properties: PropertyTaintMap}
+     */
+    private function round(
+        array $ordered,
+        SummaryTable $summaries,
+        PropertyTaintMap $properties,
+        int $shard,
+        int $shardCount,
+    ): array {
+        // A private copy, so a worker's property writes stay in that worker
+        // until the parent merges them.
+        $roundProperties = clone $properties;
+        $produced = [];
+
+        foreach ($ordered as $index => $context) {
+            if ($index % $shardCount !== $shard) {
+                continue;
+            }
+
+            $produced[] = $this->extractor->extract($context, $summaries, $roundProperties);
+
+            // A pass with no parameter seeded, purely so property writes in the
+            // body land in the map. Findings are discarded.
+            $this->analyzer->analyze($context, $summaries, $roundProperties, null, false);
+        }
+
+        return ['summaries' => $produced, 'properties' => $roundProperties];
+    }
+
+    /**
      * Callees before callers, approximately.
      *
-     * A true reverse topological sort is not possible in the presence of
-     * recursion and dynamic dispatch, and is not needed: the fixed point
+     * A true reverse topological sort is impossible in the presence of
+     * recursion and dynamic dispatch, and unnecessary: the fixed point
      * converges from any order. Ordering leaves first simply gets there in
-     * fewer rounds. Sorting by key keeps it deterministic.
+     * fewer rounds. Sorting by key keeps it deterministic, which the round
+     * sharding depends on.
      *
      * @param list<FunctionContext> $functions
      *

@@ -70,6 +70,37 @@ final class PropertyTaintMap
         return true;
     }
 
+    /**
+     * Fold another map into this one.
+     *
+     * Used to merge what each `--jobs` worker recorded. Both halves only ever
+     * grow, so the merge is a union and the order it happens in cannot change
+     * the result.
+     */
+    public function mergeFrom(self $other): bool
+    {
+        $changed = false;
+
+        foreach ($other->tracked as $key => $unused) {
+            if (! isset($this->tracked[$key])) {
+                $this->tracked[$key] = true;
+                $changed = true;
+            }
+        }
+
+        foreach ($other->taint as $key => $taint) {
+            $existing = $this->taint[$key] ?? TaintSet::empty();
+            $merged = $existing->union($taint);
+
+            if (! $merged->equals($existing)) {
+                $this->taint[$key] = $merged;
+                $changed = true;
+            }
+        }
+
+        return $changed;
+    }
+
     private static function key(?string $class, string $property): string
     {
         return strtolower($class ?? '?') . '::' . $property;

@@ -53,6 +53,7 @@ final class Scanner
         private readonly string $root,
         private readonly bool $structuralRulesEnabled = true,
         private readonly ?string $taintGraphPath = null,
+        private readonly int $jobs = 1,
     ) {
         // Both remaining structural rules are pure AST shape checks. The
         // query-shape check that used to live here needs the dataflow verdict,
@@ -117,7 +118,7 @@ final class Scanner
         $resolver = new CallResolver($this->registry, $functions);
         $analyzer = new IntraproceduralAnalyzer($this->registry, $functions, $resolver, $this->options);
         $extractor = new SummaryExtractor($analyzer, $this->options);
-        $interprocedural = new InterproceduralResolver($analyzer, $extractor, $this->options);
+        $interprocedural = new InterproceduralResolver($analyzer, $extractor, $this->options, $this->jobs);
 
         $contexts = $functions->all();
         $resolution = $interprocedural->resolve($contexts);
@@ -137,23 +138,50 @@ final class Scanner
             );
         }
 
+        // A graph dump needs the live taint state, which cannot cross a process
+        // boundary, so it forces the serial path.
         $graph = $this->taintGraphPath === null ? null : new TaintGraphWriter();
+        $pool = new WorkerPool($graph === null ? $this->jobs : 1);
 
-        foreach ($contexts as $context) {
-            $result = $analyzer->analyze(
-                $context,
-                $resolution['summaries'],
-                $resolution['properties'],
-                null,
-                true,
-            );
+        /** @var list<array{findings: list<Finding>, warnings: list<AnalysisWarning>}> $shards */
+        $shards = $pool->run(static function (int $shard, int $shardCount) use (
+            $contexts,
+            $analyzer,
+            $resolution,
+            $graph,
+        ): array {
+            $shardFindings = [];
+            $shardWarnings = [];
 
-            $findings = [...$findings, ...$result->findings];
-            $warnings = [...$warnings, ...$result->warnings];
+            foreach ($contexts as $index => $context) {
+                if ($index % $shardCount !== $shard) {
+                    continue;
+                }
 
-            if ($graph !== null && $result->state !== null) {
-                $graph->addFunction($context, $result->state);
+                $result = $analyzer->analyze(
+                    $context,
+                    $resolution['summaries'],
+                    $resolution['properties'],
+                    null,
+                    true,
+                );
+
+                $shardFindings = [...$shardFindings, ...$result->findings];
+                $shardWarnings = [...$shardWarnings, ...$result->warnings];
+
+                if ($graph !== null && $result->state !== null) {
+                    $graph->addFunction($context, $result->state);
+                }
             }
+
+            return ['findings' => $shardFindings, 'warnings' => $shardWarnings];
+        });
+
+        // Merged in shard order; FindingCollection sorts afterwards, so the
+        // result is identical whatever --jobs was.
+        foreach ($shards as $shardResult) {
+            $findings = [...$findings, ...$shardResult['findings']];
+            $warnings = [...$warnings, ...$shardResult['warnings']];
         }
 
         if ($graph !== null && $this->taintGraphPath !== null) {

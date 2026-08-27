@@ -208,6 +208,16 @@ final class FindingCollection implements IteratorAggregate, Countable
      * Sort and de-duplicate. Two findings with the same rule, location and
      * fingerprint are the same finding however many analysis passes produced
      * them.
+     *
+     * They can still arrive with *different traces*: a sink can be genuinely
+     * reachable by more than one path, and which path is found first depends on
+     * the order functions were analysed — which under `--jobs` is whatever the
+     * scheduler picked. "First wins" would therefore make the output depend on
+     * core count.
+     *
+     * So the winner is chosen by an explicit rule instead: the longer trace,
+     * because it explains more, and on a tie the lexicographically smaller one,
+     * because it has to be *something* and that something has to be total.
      */
     private function normalised(): self
     {
@@ -223,14 +233,42 @@ final class FindingCollection implements IteratorAggregate, Countable
                 $finding->fingerprint,
             ]);
 
-            // Keep the first occurrence: passes run in a fixed order, and the
-            // earlier pass is the one with the more complete trace.
-            $unique[$key] ??= $finding;
+            $existing = $unique[$key] ?? null;
+
+            if ($existing === null || self::preferredOf($existing, $finding) === $finding) {
+                $unique[$key] = $finding;
+            }
         }
 
         $findings = array_values($unique);
         usort($findings, static fn (Finding $a, Finding $b): int => $a->compareTo($b));
 
         return new self($findings);
+    }
+
+    private static function preferredOf(Finding $a, Finding $b): Finding
+    {
+        if (count($a->trace) !== count($b->trace)) {
+            return count($a->trace) > count($b->trace) ? $a : $b;
+        }
+
+        return self::traceSignature($a) <= self::traceSignature($b) ? $a : $b;
+    }
+
+    private static function traceSignature(Finding $finding): string
+    {
+        $parts = [];
+
+        foreach ($finding->trace as $step) {
+            $parts[] = implode(':', [
+                $step->verb->value,
+                $step->file,
+                (string) $step->line,
+                (string) $step->column,
+                $step->description,
+            ]);
+        }
+
+        return implode("\0", $parts);
     }
 }

@@ -35,6 +35,7 @@ final class ScanRunner
             $this->configuration->root,
             $this->configuration->structuralRules,
             $this->configuration->dumpTaintGraph,
+            $this->configuration->jobs,
         );
 
         // A graph dump is a side effect the cache cannot replay, so it always

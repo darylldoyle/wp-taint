@@ -89,6 +89,7 @@ wp-taint scan <paths...>
   --no-structural-rules
   --assume-dynamic-tainted
   --exclude=GLOB                   repeatable
+  --jobs=N                         worker processes (default 1; needs pcntl)
   --parse-report
   --dump-taint-graph=PATH
   --trace-full
@@ -198,6 +199,50 @@ Read the resolved catalogue with `wp-taint registry:dump`.
 5. **No LLM, no network, no telemetry on the analysis path.** Fully
    deterministic and offline. The only thing that touches the network is
    `tools/fetch-corpus.php`, a developer tool.
+
+## Speed
+
+A plugin is the unit: interprocedural taint crosses files, so the whole scan is
+parsed and held in memory at once.
+
+| Plugin | Lines | Time | Peak RSS |
+| --- | ---: | ---: | ---: |
+| akismet | 7,678 | 1.2s | 67 MB |
+| advanced-custom-fields | 83,330 | 12.9s | 417 MB |
+| wordpress-seo | 209,674 | 25.1s | 584 MB |
+| woocommerce | 786,566 | 157.8s | 2,310 MB |
+
+Roughly 7 seconds per 50k lines single-threaded. `--jobs=4` roughly halves that
+— parsing stays serial, so it is not linear — and produces byte-identical
+output, which is enforced by a test rather than hoped for.
+
+The result cache is keyed on every input, so an unchanged re-scan is close to
+instant (15.6s to 0.18s on Duplicator). Because the analysis is whole-program,
+changing one file invalidates the whole cache; anything finer would be unsound.
+
+Memory is the real constraint. `bin/wp-taint` raises the limit to 2 GB, which
+covers everything in the WordPress.org top fifty except WooCommerce; for a tree
+that size set `WP_TAINT_MEMORY_LIMIT=4G`.
+
+## How it compares
+
+Against the same fixture suite, with no project-specific tuning for anyone:
+
+| | wp-taint | Semgrep 1.174 | Psalm 6.16 |
+| --- | --- | --- | --- |
+| Vulnerable caught | **69 / 69** | 64 / 68 | 31 / 68 |
+| False positives | **0 / 78** | 9 / 73 | 4 / 73 |
+
+Psalm misses every SQL injection because nothing tells it what `$wpdb` is, and
+every authorization bug because those have no source and no sink. Semgrep does
+much better, and its remaining gaps are structural: a rule matches one AST node,
+so it cannot see an `add_action()` registration and the handler body at once.
+
+Both tools' false positives are the same shape — a sanitiser applied inside a
+callee — which is precisely what function summaries exist to credit.
+
+Full working, including where the comparison is unfair to wp-taint, in
+[docs/benchmark.md](docs/benchmark.md).
 
 ## Where it is imprecise
 

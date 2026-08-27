@@ -5,11 +5,15 @@ declare(strict_types=1);
 namespace Enshrined\WpTaint\Taint;
 
 use Enshrined\WpTaint\Finding\Severity;
-use PHPCfg\Op;
 
 /**
  * A sink reachable from a function parameter, recorded on that function's
  * summary so a caller can report it without re-analysing the callee.
+ *
+ * Deliberately plain data — scalars, enums and a TaintKind. Summaries cross
+ * process boundaries under `--jobs`, so nothing here may hold a php-cfg object.
+ * Everything a caller needs to render the finding is already captured at
+ * extraction time.
  */
 final class SinkReference
 {
@@ -25,7 +29,6 @@ final class SinkReference
         public readonly ?int $endColumn,
         public readonly string $snippet,
         public readonly string $functionDisplayName,
-        public readonly ?Op $op = null,
         public readonly bool $imprecise = false,
     ) {
     }
