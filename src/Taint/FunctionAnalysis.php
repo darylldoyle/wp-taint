@@ -133,6 +133,7 @@ final class FunctionAnalysis
         private readonly PropertyTaintMap $properties,
         private readonly ScopeTable $scopes,
         private readonly ?IncludeGraph $includes,
+        private readonly ReceiverResolver $receivers,
         private readonly AnalysisOptions $options,
         private readonly ?int $seedParameterIndex,
         private readonly bool $collectFindings,
@@ -141,7 +142,7 @@ final class FunctionAnalysis
         $this->types = new ClassTypeMap();
         $this->queryShapes = new QueryShapeInspector(
             $literals,
-            new OriginClassifier($registry, $resolver, $properties),
+            new OriginClassifier($registry, $resolver, $properties, $receivers),
         );
         $this->returnTaint = TaintSet::empty();
         $this->blocks = BlockOrder::of($this->context->func->cfg);
@@ -1103,6 +1104,25 @@ final class FunctionAnalysis
         }
 
         $owner = $this->propertyOwnerClass($op);
+
+        // A table name or prefix on the database handle is not data. WordPress
+        // sets these itself from the install's configuration, and every plugin
+        // interpolates them into SQL because there is no other way to name a
+        // table.
+        //
+        // This was implicit until `--include-path` was pointed at core: nothing
+        // in a plugin writes `$wpdb->prefix`, so the property carried no taint
+        // and the question never arose. Core writes it — `wpdb::get_blog_prefix()`
+        // assigns `$this->prefix` — and the moment that body is analysed, the
+        // assumption the entire SQL ruleset rests on stops holding. Cookie Law
+        // Info gained 23 findings, all rooted at `$wpdb->prefix`.
+        if (
+            $owner !== null && strtolower($owner) === 'wpdb'
+            && in_array($property, $this->registry->safeDatabaseIdentifiers(), true)
+        ) {
+            return $this->state->set($op->result, TaintSet::empty());
+        }
+
         $stored = $this->properties->get($owner, $property);
         $taint = $stored->union($this->state->taintOf($op->var));
 
@@ -1200,15 +1220,21 @@ final class FunctionAnalysis
         return $class;
     }
 
+    /**
+     * Which class a property belongs to.
+     *
+     * Through the same resolver the call machinery uses, so the property map
+     * and the call graph cannot disagree about what a receiver is. That matters
+     * more than it sounds: an unknown owner lands in a single `?::name` bucket
+     * shared by every untyped receiver in the scan, and `$wpdb->comments` — a
+     * table name — was colliding there with `WP_Query::$comments`, which holds
+     * actual comment data. Under `--include-path` at WordPress core the
+     * collision produced a fourteen-step trace to
+     * `OPTIMIZE TABLE {$wpdb->comments}`.
+     */
     private function propertyOwnerClass(Op\Expr\PropertyFetch $fetch): ?string
     {
-        $receiver = OperandHelper::variableName($fetch->var);
-
-        if ($receiver === 'this') {
-            return $this->context->className;
-        }
-
-        return $this->types->classOf($fetch->var);
+        return $this->receivers->classOf($fetch->var, $this->context, $this->types);
     }
 
     private function transferConcatList(Op\Expr\ConcatList $op): bool

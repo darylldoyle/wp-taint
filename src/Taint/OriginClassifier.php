@@ -38,6 +38,7 @@ final class OriginClassifier
         private readonly Registry $registry,
         private readonly CallResolver $resolver,
         private readonly PropertyTaintMap $properties,
+        private readonly ReceiverResolver $receivers,
     ) {
     }
 
@@ -222,17 +223,20 @@ final class OriginClassifier
         return $this->properties->isCleanEverywhere($property);
     }
 
+    /**
+     * Through the same resolver the dataflow uses.
+     *
+     * These two disagreeing is worse than either being wrong on its own: writes
+     * land under one key and lookups miss under another, so every read falls
+     * through to the by-name fallback and the shape rule fires on properties it
+     * has in fact seen written. Cookie Law Info went from 15 findings to 40 in
+     * the window where they disagreed about `$wpdb`.
+     */
     private function propertyOwner(
         Op\Expr\PropertyFetch $fetch,
         FunctionContext $context,
         ClassTypeMap $types,
     ): ?string {
-        $receiver = OperandHelper::variableName($fetch->var);
-
-        if ($receiver === 'this') {
-            return $context->className;
-        }
-
-        return $types->classOf($fetch->var);
+        return $this->receivers->classOf($fetch->var, $context, $types);
     }
 }

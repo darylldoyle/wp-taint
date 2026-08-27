@@ -51,6 +51,7 @@ final class IntraproceduralAnalyzer
             $properties,
             $scopes,
             $this->includes,
+            new ReceiverResolver(),
             $this->options,
             $seedParameterIndex,
             $collectFindings,
