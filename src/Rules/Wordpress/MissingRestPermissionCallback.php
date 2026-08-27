@@ -37,17 +37,25 @@ use PhpParser\NodeFinder;
  * | --- | --- | --- |
  * | No `permission_callback` | high | The route is public and WordPress says so |
  * | `__return_true` on a write | critical | An unauthenticated write |
- * | A callback that decides nothing | medium | It resolves, reaches no capability check, and makes no decision |
+ * | A callback that always allows | medium | It resolves, reaches no capability check, and cannot refuse |
  *
- * The third is the new one and it is deliberately the quietest. Two conditions,
- * not one: nothing below the callback reaches an authorization primitive, *and*
- * the callback body contains no branch and no comparison — so it cannot be
- * deciding anything.
+ * The third is the new one and it is deliberately the quietest, because it is
+ * the only one of the three that can be wrong. It needs everything: the callback
+ * resolves, the walk below it was complete, nothing it reaches is an
+ * authorization primitive, and its body neither decides nor delegates — no
+ * branch, no comparison, and no calls at all.
  *
- * Both are needed. Akismet's REST permission callback compares a request
- * parameter against the site's API key, which is a real check written with a
- * shared secret rather than a WordPress primitive. Reachability alone reported
- * it; asking whether the body makes a decision does not.
+ * Every one of those conditions was bought with a false positive.
+ *
+ * - Akismet compares a request parameter against the site's API key. Real
+ *   authorization, written with a shared secret rather than a WordPress
+ *   primitive: reachability alone reported it, "makes no decision" does not.
+ * - SG AI Studio writes `return $this->check_jwt_authorization( $request );`,
+ *   which has no branch and no comparison but delegates to a real JWT check.
+ *   Thirty-seven findings on one plugin.
+ *
+ * What survives is the longhand `__return_true`: a callback that provably hands
+ * back a constant. Narrow, and decidable.
  */
 final class MissingRestPermissionCallback implements StructuralRule
 {
@@ -263,7 +271,7 @@ final class MissingRestPermissionCallback implements StructuralRule
             return null;
         }
 
-        if (! $this->makesNoDecision($resolved['stmts'])) {
+        if (! $this->cannotRefuse($resolved['stmts'])) {
             return null;
         }
 
@@ -274,24 +282,28 @@ final class MissingRestPermissionCallback implements StructuralRule
             $file,
             $registry,
             sprintf(
-                'permission_callback is %s. It reaches no capability or nonce check, and its body contains no '
-                    . 'branch or comparison, so it cannot be refusing anything.',
+                'permission_callback is %s. It reaches no capability or nonce check, and its body neither '
+                    . 'branches nor delegates, so it cannot refuse anything.',
                 $resolved['description'],
             ),
         );
     }
 
     /**
-     * Whether a body could be making a decision at all.
+     * Whether a body could refuse the request by any route.
      *
      * A cheap syntactic proxy for "provably returns a constant", and named as
-     * one: any branch, comparison, boolean operator or negation counts as a
-     * decision, whether or not it is really an authorization one. Being wrong
-     * here means staying quiet, which is the direction this rule should fail in.
+     * one. Any branch, comparison, boolean operator or negation counts as a
+     * decision; any call counts as delegation, because a one-line
+     * `return $this->check_jwt_authorization( $request );` has neither a branch
+     * nor a comparison and is a real check.
+     *
+     * Being wrong here means staying quiet, which is the direction an
+     * authorization rule should fail in.
      *
      * @param list<Node\Stmt> $stmts
      */
-    private function makesNoDecision(array $stmts): bool
+    private function cannotRefuse(array $stmts): bool
     {
         $deciding = [
             Node\Stmt\If_::class,
@@ -302,6 +314,10 @@ final class MissingRestPermissionCallback implements StructuralRule
             Node\Expr\BooleanNot::class,
             Node\Expr\Empty_::class,
             Node\Expr\Isset_::class,
+            Node\Expr\FuncCall::class,
+            Node\Expr\MethodCall::class,
+            Node\Expr\StaticCall::class,
+            Node\Expr\New_::class,
         ];
 
         $finder = new NodeFinder();
