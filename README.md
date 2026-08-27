@@ -253,23 +253,34 @@ that size set `WP_TAINT_MEMORY_LIMIT=4G`.
 
 ## How it compares
 
-Against the same fixture suite, with no project-specific tuning for anyone:
+Against the same fixture suite, each fixture analysed on its own, with no
+project-specific tuning for anyone:
 
 | | wp-taint | Semgrep 1.174 | Psalm 6.16 |
 | --- | --- | --- | --- |
-| Vulnerable caught | **69 / 69** | 64 / 68 | 31 / 68 |
-| False positives | **0 / 78** | 9 / 73 | 4 / 73 |
+| Vulnerable caught, all 184 | **92 / 92** | 67 / 92 | 38 / 92 |
+| Vulnerable caught, original 147 | **69 / 69** | 64 / 69 | 33 / 69 |
+| False positives, original 147 | **0 / 78** | 12 / 78 | 0 / 78 |
 
-Psalm misses every SQL injection because nothing tells it what `$wpdb` is, and
-every authorization bug because those have no source and no sink. Semgrep does
-much better, and its remaining gaps are structural: a rule matches one AST node,
-so it cannot see an `add_action()` registration and the handler body at once.
+**Quote the second row, not the first.** 37 of these fixtures were added while
+fixing bugs the corpus exposed, and each pins a shape that work had just taught
+this engine to handle — dynamic calls, hook dispatch, include scope,
+by-reference writes. Semgrep gets 3 of 23 on them because they are a catalogue
+of what its analysis model does not attempt. On the suite that predates the
+work, it finds 93% of the vulnerable fixtures. It is a capable tool.
 
-Both tools' false positives are the same shape — a sanitiser applied inside a
-callee — which is precisely what function summaries exist to credit.
+What separates them there is the safe half: 12 false positives against zero,
+clustered on values that *were* escaped by a route Semgrep cannot follow — an
+escaper applied through `array_map()`, an allowlist regex, a `$wpdb` table
+identifier that is not data.
 
-Full working, including where the comparison is unfair to wp-taint, in
-[docs/benchmark.md](docs/benchmark.md).
+Psalm is precise where it fires — zero false positives — and misses every SQL
+injection because nothing tells it what `$wpdb` is, which is a catalogue gap a
+plugin would close, and every authorization bug because those have no source and
+no sink, which taint analysis structurally cannot find.
+
+Full working, including what the comparison does not prove and why the fixtures
+flatter us, in [docs/benchmark.md](docs/benchmark.md).
 
 ## Where it is imprecise
 

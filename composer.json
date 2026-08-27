@@ -28,11 +28,13 @@
     "require-dev": {
         "pestphp/pest": "^3.0",
         "pestphp/pest-plugin-type-coverage": "^3.0",
+        "php-stubs/wordpress-stubs": "^7.0",
         "phpstan/phpstan": "^2.0",
         "phpstan/phpstan-strict-rules": "^2.0",
         "slevomat/coding-standard": "^8.15",
         "squizlabs/php_codesniffer": "^3.10",
         "symfony/process": "^7.4",
+        "vimeo/psalm": "^6.16",
         "wp-coding-standards/wpcs": "^3.1"
     },
     "bin": [

@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<psalm errorLevel="1" resolveFromConfigFile="false"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns="https://getpsalm.org/schema/config">
+    <projectFiles>
+        <directory name="/private/tmp/claude-501/-Users-darylldoyle-Sites-wp-taint/8d742374-7077-483d-af04-dbdd2b353975/scratchpad/bench" />
+    </projectFiles>
+    <stubs>
+        <file name="vendor/php-stubs/wordpress-stubs/wordpress-stubs.php" />
+    </stubs>
+</psalm>
