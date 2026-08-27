@@ -400,6 +400,70 @@ That is four separate non-convergences across the five phases, every one of them
 two ops writing one operand with different answers. It is the recurring cost of
 building on an SSA form that does not version everything.
 
+## Coverage, and what analysing WordPress core breaks
+
+Two halves. `--include-path` analyses a tree for its symbols and never reports
+on it; `tools/generate-wpcs-catalogue.php` imports the WPCS escaper and
+sanitizer lists.
+
+The generator's important half is what it refuses to emit. WPCS says *that*
+`esc_attr()` escapes; it cannot say which taint kinds it clears, because a
+token-based sniff has no concept of kinds — and `esc_url_raw()` is on the
+escaping list while being emphatically not an HTML escaper. Kinds come from a
+hand-written table, and a function whose kinds are not stated is skipped rather
+than guessed. 50 entries generated, 20 skipped with a reason recorded for each.
+
+### Core exposed two assumptions that only held because core was not analysed
+
+Pointing `--include-path` at a real WordPress install took four small plugins
+from 10 findings to 38. Two mechanisms accounted for most of it.
+
+**`$wpdb->prefix` became tainted.** `wpdb::get_blog_prefix()` assigns
+`$this->prefix`, so the moment core's body is analysed the property carries
+taint — and every plugin interpolates it into SQL because there is no other way
+to name a table. Cookie Law Info gained 23 findings rooted there. The
+safe-identifier rule said a `$wpdb` property was clean *provided the property map
+recorded no taint for it*, and core defeats the proviso. A read of a known safe
+database identifier on `$wpdb` now yields clean outright.
+
+**An unknown property owner was one shared bucket.** `propertyOwnerClass()` knew
+only `$this` and the type map, so a `global $wpdb` resolved to null and every
+write on an untyped receiver landed under `?::name`. `$wpdb->comments` collided
+there with `WP_Query::$comments`, producing a fourteen-step trace to
+`OPTIMIZE TABLE {$wpdb->comments}`.
+
+Fixing only one of the two was **worse than fixing neither**: writes landed under
+one key and lookups missed under another, so every read fell through to the
+by-name fallback and the shape rule fired on properties it had in fact seen
+written. Cookie Law Info went to 40 in that window. Both the dataflow and the
+origin classifier now resolve receivers through the same `ReceiverResolver` the
+call machinery uses.
+
+With core referenced afterwards: Cookie Law Info 40 to 15, Akismet 4 to 2. Still
+not a tuned configuration, and documented as such.
+
+## Per-key array taint
+
+The last of the three limitations that had been accepted as-is.
+
+```php
+$context['title'] = $_GET['title'];
+$context['id']    = 42;
+echo $context['id'];              // was reported, and should not be
+```
+
+A write with a literal key goes to a slot of its own; a read naming that key
+sees only what went into it. Both fallbacks stay, and a fixture caught one being
+dropped: a read with a *computed* key was not consulting the per-key slots, so
+`echo $context[$key]` came back clean with `$context['title']` plainly tainted.
+That is the unsound direction, which is why all four cases are fixtures rather
+than two.
+
+Corpus effect: **1,081 findings to 1,046**, every mover downward. Yoast SEO −14
+and Loginizer −13 were the largest, and every removed trace carried the line
+"Array taint is tracked per array, not per key, so the whole array is treated as
+tainted from here" — which is as direct a confirmation as the corpus offers.
+
 ## Determinism across `--jobs`, again
 
 Elementor reported the same finding with a seven-step trace at `--jobs=1` and a

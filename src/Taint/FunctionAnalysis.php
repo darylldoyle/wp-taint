@@ -1002,8 +1002,8 @@ final class FunctionAnalysis
                     TraceVerb::Propagate,
                     $op,
                     sprintf(
-                        'Written into %s. Array taint is tracked per array, not per key, so the whole array is '
-                            . 'treated as tainted from here.',
+                        'Written into %s under a computed key. The key could be any of them, so the whole array '
+                            . 'is treated as tainted from here.',
                         OperandHelper::describe($target->var),
                     ),
                     [$op->expr],
