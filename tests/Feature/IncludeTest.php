@@ -296,3 +296,64 @@ it('handles a numeric array key', function (): void {
 
     expect(findingSignatures($result))->toBe(['wp.xss.unescaped-output@7']);
 });
+
+it('resolves a path built from a function that always returns the same string', function (): void {
+    // `include WC()->plugin_path() . '/includes/…'` is how WooCommerce writes
+    // every one of its own includes, and a call in the middle of a path was the
+    // last mechanical thing stopping resolution.
+    //
+    // Resolved by method name, because the receiver's class is not visible —
+    // WC() returns an instance, not a string — and only when exactly one class
+    // in the scan declares the method.
+    $result = scanTree([
+        'plugin.php' => <<<'PHP'
+            <?php
+            class Acme_Plugin {
+                public function plugin_path() {
+                    return untrailingslashit(plugin_dir_path(__FILE__));
+                }
+            }
+            function ACME() { return new Acme_Plugin(); }
+
+            function acme_boot() {
+                $title = $_GET['title'];
+                include ACME()->plugin_path() . '/views/list.php';
+            }
+            PHP,
+        'views/list.php' => <<<'PHP'
+            <?php
+            echo $title;
+            PHP,
+    ]);
+
+    expect(findingSignatures($result))->toBe(['wp.xss.unescaped-output@2']);
+});
+
+it('does not resolve a function that returns different strings', function (): void {
+    // Every return, and the same one. A function returning a path on one branch
+    // and something else on another is not a constant, and treating it as one
+    // would resolve an include to a file the code never loads.
+    $result = scanTree([
+        'plugin.php' => <<<'PHP'
+            <?php
+            function acme_dir($which) {
+                if ($which) {
+                    return __DIR__ . '/views';
+                }
+
+                return __DIR__ . '/other';
+            }
+
+            function acme_boot($which) {
+                $title = $_GET['title'];
+                include acme_dir($which) . '/list.php';
+            }
+            PHP,
+        'views/list.php' => <<<'PHP'
+            <?php
+            echo $title;
+            PHP,
+    ]);
+
+    expect($result->findings)->toBeEmpty();
+});

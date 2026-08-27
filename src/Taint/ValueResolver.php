@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Taint;
 
+use Enshrined\WpTaint\Cfg\ConstantReturnTable;
 use Enshrined\WpTaint\Cfg\ConstantTable;
 use PHPCfg\Op;
 use PHPCfg\Operand;
@@ -26,8 +27,10 @@ use PHPCfg\Operand;
  */
 final class ValueResolver
 {
-    public function __construct(private readonly ?ConstantTable $constants = null)
-    {
+    public function __construct(
+        private readonly ?ConstantTable $constants = null,
+        private readonly ?ConstantReturnTable $returns = null,
+    ) {
     }
 
     /**
@@ -38,9 +41,9 @@ final class ValueResolver
      * knowledge halfway through a walk would give different answers to the same
      * question depending on when it was asked.
      */
-    public function withConstants(ConstantTable $constants): self
+    public function withConstants(ConstantTable $constants, ?ConstantReturnTable $returns = null): self
     {
-        return new self($constants);
+        return new self($constants, $returns);
     }
 
     /**
@@ -89,6 +92,8 @@ final class ValueResolver
             $definition instanceof Op\Expr\ConstFetch => $this->fromConstant($definition),
             $definition instanceof Op\Expr\FuncCall,
             $definition instanceof Op\Expr\NsFuncCall => $this->fromPureCall($definition, $depth),
+            $definition instanceof Op\Expr\MethodCall,
+            $definition instanceof Op\Expr\StaticCall => $this->fromConstantReturn($definition),
             $definition instanceof Op\Phi => $this->fromPhi($definition, $depth),
             $definition instanceof Op\Expr\ConcatList => $this->fromParts($definition->list, $depth),
             $definition instanceof Op\Expr\BinaryOp\Concat => $this->fromParts(
@@ -129,6 +134,16 @@ final class ValueResolver
         $name = $this->pureFunctionName($op);
 
         if ($name === null) {
+            // Not a builtin this can evaluate, but perhaps a function in the
+            // scan whose body always returns the same string.
+            foreach ($this->callNames($op) as $candidate) {
+                $value = $this->returns?->forFunction($candidate);
+
+                if ($value !== null) {
+                    return [$value];
+                }
+            }
+
             return [];
         }
 
@@ -154,6 +169,64 @@ final class ValueResolver
         $value = self::applyPure($name, $arguments);
 
         return $value === null ? [] : [$value];
+    }
+
+    /**
+     * A method whose body always returns the same string.
+     *
+     * `WC()->plugin_path()` names a method on a receiver whose class this
+     * cannot see — `WC()` returns an instance, not a string — so it resolves by
+     * method name, and only when exactly one class in the scan declares it.
+     *
+     * @return list<string>
+     */
+    private function fromConstantReturn(Op\Expr\MethodCall|Op\Expr\StaticCall $op): array
+    {
+        if ($this->returns === null) {
+            return [];
+        }
+
+        $method = OperandHelper::literalString($op->name);
+
+        if ($method === null) {
+            return [];
+        }
+
+        if ($op instanceof Op\Expr\StaticCall) {
+            $class = OperandHelper::literalString($op->class);
+
+            if ($class !== null) {
+                $value = $this->returns->forFunction($class . '::' . $method);
+
+                if ($value !== null) {
+                    return [$value];
+                }
+            }
+        }
+
+        $value = $this->returns->forUniqueMethod($method);
+
+        return $value === null ? [] : [$value];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function callNames(Op\Expr\FuncCall|Op\Expr\NsFuncCall $op): array
+    {
+        $names = $op instanceof Op\Expr\NsFuncCall
+            ? [OperandHelper::literalString($op->nsName), OperandHelper::literalString($op->name)]
+            : [OperandHelper::literalString($op->name)];
+
+        $resolved = [];
+
+        foreach ($names as $name) {
+            if ($name !== null) {
+                $resolved[] = ltrim($name, '\\');
+            }
+        }
+
+        return $resolved;
     }
 
     private function pureFunctionName(Op\Expr\FuncCall|Op\Expr\NsFuncCall $op): ?string

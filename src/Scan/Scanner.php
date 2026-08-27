@@ -160,8 +160,8 @@ final class Scanner
         // Constants first: WordPress builds include paths out of them and
         // almost nothing else, so resolution stops dead without this, and
         // everything downstream wants a resolver that can see them.
-        $constants = (new ConstantTableBuilder(new ValueResolver()))->build($contexts);
-        $values = (new ValueResolver())->withConstants($constants);
+        $static = (new ConstantTableBuilder(new ValueResolver()))->buildBoth($contexts);
+        $values = (new ValueResolver())->withConstants($static['constants'], $static['returns']);
         $callables = new CallableResolver($this->registry, $functions, $values);
 
         // The hook and call graphs are built before the structural rules run,
@@ -217,7 +217,7 @@ final class Scanner
         // file an include loads is a static fact.
         $includes = $this->options->followIncludes
             ? (new IncludeGraphBuilder(
-                new IncludeResolver($values->withConstants($constants), $files, $this->root),
+                new IncludeResolver($values, $files, $this->root),
                 $this->root,
                 $this->registry,
                 $values,

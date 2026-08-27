@@ -49,11 +49,29 @@ final class ConstantTableBuilder
      */
     public function build(array $contexts): ConstantTable
     {
+        return $this->buildBoth($contexts)['constants'];
+    }
+
+    /**
+     * Constants and constant returns together, because each helps the other.
+     *
+     * `define( 'ACME_DIR', … )` may be built from a function's return, and a
+     * function's return is routinely built from a constant. Two passes over
+     * both, with each pass reading the last one's answers.
+     *
+     * @param list<FunctionContext> $contexts
+     *
+     * @return array{constants: ConstantTable, returns: ConstantReturnTable}
+     */
+    public function buildBoth(array $contexts): array
+    {
         $table = new ConstantTable();
+        $returns = new ConstantReturnTable();
 
         for ($pass = 0; $pass < self::PASSES; $pass++) {
-            $resolver = $this->values->withConstants($table);
+            $resolver = $this->values->withConstants($table, $returns);
             $next = new ConstantTable();
+            $nextReturns = new ConstantReturnTable();
 
             foreach ($contexts as $context) {
                 foreach (BlockOrder::of($context->func->cfg) as $block) {
@@ -61,12 +79,62 @@ final class ConstantTableBuilder
                         $this->collect($next, $resolver, $op);
                     }
                 }
+
+                $this->collectReturn($nextReturns, $resolver, $context);
             }
 
             $table = $next;
+            $returns = $nextReturns;
         }
 
-        return $table;
+        return ['constants' => $table, 'returns' => $returns];
+    }
+
+    /**
+     * A body whose every `return` yields the same constant string.
+     *
+     * Every one, and the same one. A function returning a path on one branch
+     * and something else on another is not a constant, and treating it as one
+     * would resolve an include to a file the code never loads.
+     */
+    private function collectReturn(
+        ConstantReturnTable $returns,
+        ValueResolver $resolver,
+        FunctionContext $context,
+    ): void {
+        if ($context->isMain()) {
+            return;
+        }
+
+        $values = [];
+
+        foreach (BlockOrder::of($context->func->cfg) as $block) {
+            foreach ($block->children as $op) {
+                if (! $op instanceof Op\Terminal\Return_) {
+                    continue;
+                }
+
+                // A bare `return;` means the function can hand back null, so it
+                // does not always yield the string.
+                if ($op->expr === null) {
+                    return;
+                }
+
+                $resolved = $resolver->strings($op->expr);
+
+                if (count($resolved) !== 1) {
+                    return;
+                }
+
+                $values[] = $resolved[0];
+            }
+        }
+
+        $unique = array_unique($values);
+
+        if (count($unique) === 1) {
+            $returns->record($context->key, reset($unique));
+        }
     }
 
     private function collect(ConstantTable $table, ValueResolver $resolver, mixed $op): void

@@ -159,8 +159,8 @@ final class ExplainCommand extends Command
 
         $contexts = $functions->all();
         $receivers = new ReceiverResolver();
-        $constants = (new ConstantTableBuilder(new ValueResolver()))->build($contexts);
-        $values = (new ValueResolver())->withConstants($constants);
+        $static = (new ConstantTableBuilder(new ValueResolver()))->buildBoth($contexts);
+        $values = (new ValueResolver())->withConstants($static['constants'], $static['returns']);
         $callables = new CallableResolver($registry, $functions, $values);
 
         // The same hook graph the scan builds. Without it `explain` would say a
