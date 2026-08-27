@@ -20,6 +20,7 @@ use Enshrined\WpTaint\Rules\StructuralRule;
 use Enshrined\WpTaint\Taint\TaintKind;
 use Enshrined\WpTaint\Taint\TaintSet;
 use PhpParser\Node;
+use PhpParser\NodeFinder;
 
 /**
  * `register_rest_route()` with no `permission_callback`, or with
@@ -36,11 +37,17 @@ use PhpParser\Node;
  * | --- | --- | --- |
  * | No `permission_callback` | high | The route is public and WordPress says so |
  * | `__return_true` on a write | critical | An unauthenticated write |
- * | A callback that checks nothing | medium | It resolves, and nothing below it checks a capability |
+ * | A callback that decides nothing | medium | It resolves, reaches no capability check, and makes no decision |
  *
- * The third is the new one, and it is deliberately the quietest: a callback can
- * be doing something legitimate the engine cannot see, so it is reported at a
- * lower severity than the two that are unambiguous.
+ * The third is the new one and it is deliberately the quietest. Two conditions,
+ * not one: nothing below the callback reaches an authorization primitive, *and*
+ * the callback body contains no branch and no comparison — so it cannot be
+ * deciding anything.
+ *
+ * Both are needed. Akismet's REST permission callback compares a request
+ * parameter against the site's API key, which is a real check written with a
+ * shared secret rather than a WordPress primitive. Reachability alone reported
+ * it; asking whether the body makes a decision does not.
  */
 final class MissingRestPermissionCallback implements StructuralRule
 {
@@ -215,17 +222,16 @@ final class MissingRestPermissionCallback implements StructuralRule
     }
 
     /**
-     * A `permission_callback` that is present but never checks anything.
+     * A `permission_callback` that is present but decides nothing.
      *
      * Presence used to be the whole test, which credited
      * `'permission_callback' => array( $this, 'noop' )` exactly as much as a
-     * real capability check. With the call graph the question becomes whether
-     * anything below the callback reaches an authorization primitive.
+     * real capability check.
      *
-     * Only reported when the walk was complete. A callback the engine could not
-     * resolve, or one whose subgraph runs into something it cannot follow,
-     * stays silent: this rule is quiet by design, because the cost of being
-     * wrong on an authorization rule is the tool being muted.
+     * Silent unless three things hold: the callback resolves, the walk below it
+     * was complete, and its body makes no decision. Quiet by design — the cost
+     * of being wrong on an authorization rule is the tool being muted, and this
+     * is the one class of the three that can be wrong.
      */
     private function inspectCallbackBody(
         Node\Expr\FuncCall $call,
@@ -257,6 +263,10 @@ final class MissingRestPermissionCallback implements StructuralRule
             return null;
         }
 
+        if (! $this->makesNoDecision($resolved['stmts'])) {
+            return null;
+        }
+
         return $this->finding(
             self::NO_CHECK_RULE,
             Severity::Medium,
@@ -264,10 +274,45 @@ final class MissingRestPermissionCallback implements StructuralRule
             $file,
             $registry,
             sprintf(
-                'permission_callback is %s, and nothing reachable from it checks a capability or a nonce.',
+                'permission_callback is %s. It reaches no capability or nonce check, and its body contains no '
+                    . 'branch or comparison, so it cannot be refusing anything.',
                 $resolved['description'],
             ),
         );
+    }
+
+    /**
+     * Whether a body could be making a decision at all.
+     *
+     * A cheap syntactic proxy for "provably returns a constant", and named as
+     * one: any branch, comparison, boolean operator or negation counts as a
+     * decision, whether or not it is really an authorization one. Being wrong
+     * here means staying quiet, which is the direction this rule should fail in.
+     *
+     * @param list<Node\Stmt> $stmts
+     */
+    private function makesNoDecision(array $stmts): bool
+    {
+        $deciding = [
+            Node\Stmt\If_::class,
+            Node\Stmt\Switch_::class,
+            Node\Expr\Ternary::class,
+            Node\Expr\Match_::class,
+            Node\Expr\BinaryOp::class,
+            Node\Expr\BooleanNot::class,
+            Node\Expr\Empty_::class,
+            Node\Expr\Isset_::class,
+        ];
+
+        $finder = new NodeFinder();
+
+        foreach ($deciding as $class) {
+            if ($finder->findFirstInstanceOf($stmts, $class) !== null) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function enclosingClass(ParsedFile $file, Node $node): ?string
