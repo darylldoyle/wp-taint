@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Taint;
 
+use Enshrined\WpTaint\Finding\TraceStep;
+
 /**
  * Variables in scope at the top level of each file, by name.
  *
@@ -57,6 +59,19 @@ final class ScopeTable
     private array $out = [];
 
     /**
+     * The trace of the assignment that put taint into each variable.
+     *
+     * A finding that enters through an include used to begin "$title was in
+     * scope at the include that loaded this file" and stop there — a dead end
+     * that tells a reviewer nothing about whether the value is attacker
+     * controlled. The property map solved the identical problem by recording
+     * the write's trace and splicing it in ahead of the read.
+     *
+     * @var array<string, array<string, list<TraceStep>>>
+     */
+    private array $origins = [];
+
+    /**
      * How many names to track per file.
      *
      * A `{main}` body with hundreds of locals is a procedural script, not a
@@ -82,19 +97,71 @@ final class ScopeTable
     }
 
     /**
-     * @param array<string, TaintSet> $scope
+     * @param array<string, TaintSet>        $scope
+     * @param array<string, list<TraceStep>> $origins
      */
-    public function addInto(string $key, array $scope): bool
+    public function addInto(string $key, array $scope, array $origins = []): bool
     {
+        $this->recordOrigins($key, $origins);
+
         return self::merge($this->in, $key, $scope);
     }
 
     /**
-     * @param array<string, TaintSet> $scope
+     * @param array<string, TaintSet>        $scope
+     * @param array<string, list<TraceStep>> $origins
      */
-    public function addOutOf(string $key, array $scope): bool
+    public function addOutOf(string $key, array $scope, array $origins = []): bool
     {
+        $this->recordOrigins($key, $origins);
+
         return self::merge($this->out, $key, $scope);
+    }
+
+    /**
+     * The trace of the write that tainted a variable, for splicing ahead of the
+     * step that reads it.
+     *
+     * @return list<TraceStep>
+     */
+    public function originOf(string $key, string $name): array
+    {
+        return $this->origins[$key][$name] ?? [];
+    }
+
+    /**
+     * @param array<string, list<TraceStep>> $origins
+     */
+    private function recordOrigins(string $key, array $origins): void
+    {
+        foreach ($origins as $name => $origin) {
+            if ($origin === []) {
+                continue;
+            }
+
+            $current = $this->origins[$key][$name] ?? [];
+
+            // Smallest signature, exactly as the property map does it, and for
+            // the same reason: "longest wins" does not terminate when a value
+            // flows through a cycle, and an include chain can be one.
+            if ($current === [] || self::signature($origin) < self::signature($current)) {
+                $this->origins[$key][$name] = $origin;
+            }
+        }
+    }
+
+    /**
+     * @param list<TraceStep> $origin
+     */
+    private static function signature(array $origin): string
+    {
+        $parts = [];
+
+        foreach ($origin as $step) {
+            $parts[] = implode(':', [$step->file, (string) $step->line, (string) $step->column, $step->description]);
+        }
+
+        return implode("\0", $parts);
     }
 
     /**
@@ -111,6 +178,10 @@ final class ScopeTable
 
         foreach ($other->out as $key => $scope) {
             $changed = $this->addOutOf($key, $scope) || $changed;
+        }
+
+        foreach ($other->origins as $key => $origins) {
+            $this->recordOrigins($key, $origins);
         }
 
         return $changed;

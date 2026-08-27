@@ -225,15 +225,23 @@ final class FunctionAnalysis
             return;
         }
 
+        $named = $this->namedScopeWithOrigins();
         $scope = [];
+        $origins = [];
 
-        foreach ($this->namedScope() as $name => $taint) {
-            if (isset($assigned[$name])) {
-                $scope[$name] = $taint;
+        foreach ($named['taint'] as $name => $taint) {
+            if (! isset($assigned[$name])) {
+                continue;
+            }
+
+            $scope[$name] = $taint;
+
+            if (isset($named['origins'][$name])) {
+                $origins[$name] = $named['origins'][$name];
             }
         }
 
-        $this->scopes->addOutOf($this->context->key, $scope);
+        $this->scopes->addOutOf($this->context->key, $scope, $origins);
     }
 
     /**
@@ -279,6 +287,7 @@ final class FunctionAnalysis
         $this->seedScope(
             $this->scopes->scopeInto($this->context->key),
             '$%s was in scope at the include that loaded this file.',
+            $this->context->key,
         );
     }
 
@@ -291,7 +300,7 @@ final class FunctionAnalysis
      *
      * @param array<string, TaintSet> $scope
      */
-    private function seedScope(array $scope, string $description): void
+    private function seedScope(array $scope, string $description, string $originKey): void
     {
         if ($scope === []) {
             return;
@@ -314,6 +323,7 @@ final class FunctionAnalysis
                         TraceVerb::Propagate,
                         $op,
                         sprintf($description, $name),
+                        prefix: $this->scopes->originOf($originKey, $name),
                     ));
                 }
             }
@@ -362,10 +372,14 @@ final class FunctionAnalysis
         // pass would fight the assignment that owns that operand, which is how
         // this oscillated the first time.
         $changed = false;
-        $visible = $this->namedScope();
+        $visible = $this->namedScopeWithOrigins();
 
         foreach ($targets as $target) {
-            $changed = $this->scopes->addInto(strtolower($target . '::{main}'), $visible) || $changed;
+            $changed = $this->scopes->addInto(
+                strtolower($target . '::{main}'),
+                $visible['taint'],
+                $visible['origins'],
+            ) || $changed;
         }
 
         return $changed;
@@ -403,6 +417,7 @@ final class FunctionAnalysis
                     $this->seedScope(
                         $this->scopes->scopeOutOf(strtolower($target . '::{main}')),
                         sprintf('$%%s was left in scope by %s.', $target),
+                        strtolower($target . '::{main}'),
                     );
                 }
             }
@@ -410,13 +425,18 @@ final class FunctionAnalysis
     }
 
     /**
-     * Every named variable this body holds taint in, for handing to an include.
+     * Every named variable this body holds taint in, with the trace of where
+     * that taint came from.
      *
-     * @return array<string, TaintSet>
+     * The trace is what stops a finding on the far side of an include from
+     * beginning "$title was in scope" and ending there.
+     *
+     * @return array{taint: array<string, TaintSet>, origins: array<string, list<TraceStep>>}
      */
-    private function namedScope(): array
+    private function namedScopeWithOrigins(): array
     {
         $scope = [];
+        $origins = [];
 
         foreach ($this->blocks as $block) {
             foreach ($block->children as $op) {
@@ -433,14 +453,55 @@ final class FunctionAnalysis
 
                     $taint = $this->state->effectiveTaintOf($operand);
 
-                    if (! $taint->isEmpty()) {
-                        $scope[$name] = ($scope[$name] ?? TaintSet::empty())->union($taint);
+                    if ($taint->isEmpty()) {
+                        continue;
+                    }
+
+                    $scope[$name] = ($scope[$name] ?? TaintSet::empty())->union($taint);
+
+                    if (! isset($origins[$name])) {
+                        $origin = $this->scopeTrace($op, $operand, $name, $taint);
+
+                        if ($origin !== []) {
+                            $origins[$name] = $origin;
+                        }
                     }
                 }
             }
         }
 
-        return $scope;
+        return ['taint' => $scope, 'origins' => $origins];
+    }
+
+    /**
+     * The trace that explains why a variable holds taint.
+     *
+     * Summary extraction seeds a parameter with every kind, which is a
+     * hypothesis rather than a flow — the same reason property writes record no
+     * origin during a summarising run.
+     *
+     * @return list<TraceStep>
+     */
+    private function scopeTrace(Op $op, Operand $operand, string $name, TaintSet $taint): array
+    {
+        if ($this->seedParameterIndex !== null) {
+            return [];
+        }
+
+        $kind = $taint->kinds()[0] ?? null;
+
+        if ($kind === null) {
+            return [];
+        }
+
+        $step = $this->traces->step(
+            TraceVerb::Propagate,
+            $op,
+            $taint,
+            sprintf('$%s holds this when the include runs.', $name),
+        );
+
+        return $this->traces->build($operand, $kind, $step);
     }
 
     private function seedSources(): void

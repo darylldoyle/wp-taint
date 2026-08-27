@@ -228,3 +228,29 @@ it('still carries what the partial does assign', function (): void {
 
     expect(findingSignatures($result))->toBe(['wp.xss.unescaped-output@3']);
 });
+
+it('traces an include-seeded finding back to its source', function (): void {
+    // A trace that begins "$title was in scope at the include that loaded this
+    // file" and stops there tells a reviewer nothing about whether the value is
+    // attacker controlled, and a finding a reviewer cannot judge is one they
+    // learn to ignore. The property map solved the identical problem by
+    // splicing the write's trace in ahead of the read.
+    $result = scanTree([
+        'index.php' => <<<'PHP'
+            <?php
+            $title = $_GET['title'];
+            include __DIR__ . '/parts/header.php';
+            PHP,
+        'parts/header.php' => <<<'PHP'
+            <?php
+            echo $title;
+            PHP,
+    ]);
+
+    $trace = $result->findings->all()[0]->trace;
+    $descriptions = array_map(static fn (object $step): string => $step->description, $trace);
+
+    expect($descriptions[0])->toContain('Tainted by superglobal $_GET');
+    expect($trace[0]->file)->toContain('index.php');
+    expect(end($descriptions))->toContain('Reaches echo');
+});
