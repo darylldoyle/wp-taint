@@ -37,9 +37,15 @@ that operand.
 Nine regression tests in `tests/Feature/ConvergenceTest.php`, written from the
 shapes that actually broke.
 
-Convergence warnings across the whole corpus went from dozens to zero, and the
-scans got substantially faster because the wasted iterations disappeared:
+The scans got substantially faster because the wasted iterations disappeared:
 All in One SEO went from 56.4s to 16.4s.
+
+**Seventeen functions still do not converge**, across 11 plugins, concentrated
+in WooCommerce (5) and Jetpack (3). Those are whatever is left of the same
+pattern, and they are the only known correctness problem remaining in the
+engine. The method that found the first three — lower the iteration cap, log
+which operand changes on the final passes, find the two ops fighting over it —
+applies directly.
 
 ## Six false positive classes
 
@@ -194,9 +200,11 @@ What has been done instead:
 
 - Every false positive **class** found by sampling was fixed at the root, not
   suppressed, and each has a fixture taken from the plugin code that exposed it.
-- The corpus total fell from 1,485 findings to a little over a third of that,
-  and every finding removed was reviewed and confirmed as a false positive
-  before the fix was written.
+- The corpus total fell from 1,394 findings to 1,046, a 25% reduction across
+  the same 50 plugins. The effect is far larger on the plugins that triggered
+  each class — LiteSpeed Cache 57 to 6, Advanced Custom Fields 22 to 3, Cookie
+  Law Info 29 to 7, Akismet 5 to 0 — because each fix targeted one idiom rather
+  than trimming across the board.
 - The fixture suite grew from 133 files to 148, and still passes at 100% on both
   halves — so none of the tuning was bought with false negatives.
 
