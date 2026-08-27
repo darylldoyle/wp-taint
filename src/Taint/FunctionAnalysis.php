@@ -1216,6 +1216,7 @@ final class FunctionAnalysis
                     $reference->snippet,
                 ),
                 $this->imprecise || $reference->imprecise,
+                $reference->sinkIdentity,
             );
         }
     }
@@ -1363,6 +1364,7 @@ final class FunctionAnalysis
             $this->traces->build($operand, $kind, $sinkStep),
             Fingerprint::compute($ruleId, $this->context->file->relativePath, $identity, $snippet),
             $this->imprecise,
+            $identity,
         );
     }
 }

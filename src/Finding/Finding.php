@@ -24,6 +24,13 @@ final class Finding
         public readonly array $trace,
         public readonly string $fingerprint,
         public readonly bool $imprecise = false,
+        /**
+         * What the value reaches: `echo`, `wpdb::query`, `register_rest_route`.
+         *
+         * The console header shows this rather than repeating the source line,
+         * which the source/sink block below it already carries.
+         */
+        public readonly string $sinkIdentity = '',
     ) {
     }
 
@@ -57,6 +64,7 @@ final class Finding
             $trace,
             $this->fingerprint,
             $this->imprecise,
+            $this->sinkIdentity,
         );
     }
 }

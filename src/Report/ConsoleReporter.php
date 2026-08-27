@@ -56,13 +56,13 @@ final class ConsoleReporter implements Reporter
 
     private function sinkLabel(Finding $finding): string
     {
-        $last = $finding->trace[count($finding->trace) - 1] ?? null;
-
-        if ($last === null) {
-            return $finding->kind->value;
+        if ($finding->sinkIdentity !== '') {
+            return $this->ansi->dim($finding->sinkIdentity);
         }
 
-        return $this->ansi->dim(self::truncate($last->snippet, 72));
+        $last = $finding->trace[count($finding->trace) - 1] ?? null;
+
+        return $this->ansi->dim($last === null ? $finding->kind->value : self::truncate($last->snippet, 72));
     }
 
     private function renderCompact(Finding $finding): string

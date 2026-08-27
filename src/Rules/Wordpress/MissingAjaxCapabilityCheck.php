@@ -240,6 +240,8 @@ final class MissingAjaxCapabilityCheck implements StructuralRule
             $registry->ruleMessage(self::RULE),
             [$step],
             Fingerprint::compute(self::RULE, $file->relativePath, $hook, $snippet),
+            false,
+            $hook,
         );
     }
 

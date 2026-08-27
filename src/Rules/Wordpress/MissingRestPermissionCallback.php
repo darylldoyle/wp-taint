@@ -317,6 +317,8 @@ final class MissingRestPermissionCallback implements StructuralRule
             $registry->ruleMessage($ruleId),
             [$step],
             Fingerprint::compute($ruleId, $file->relativePath, 'register_rest_route', $snippet),
+            false,
+            'register_rest_route()',
         );
     }
 
