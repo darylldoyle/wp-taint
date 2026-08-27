@@ -7,6 +7,7 @@ namespace Enshrined\WpTaint\Taint;
 use Enshrined\WpTaint\Cfg\ParsedFile;
 use PHPCfg\Func;
 use PHPCfg\Op;
+use PHPCfg\Operand;
 
 /**
  * One analysable function body, with everything the analyser needs about where
@@ -92,5 +93,38 @@ final class FunctionContext
     public function parameterCount(): int
     {
         return count($this->func->params);
+    }
+
+    /**
+     * Indexes of the parameters declared `&$x`.
+     *
+     * A by-reference parameter is the callee's half of a write the caller can
+     * see. php-cfg records the flag on the `Param` op; what it does not do is
+     * connect the write back to the caller's operand, which is what
+     * {@see FunctionSummary::$paramToParam} exists for.
+     *
+     * @return list<int>
+     */
+    public function byRefParameters(): array
+    {
+        $indexes = [];
+
+        foreach (array_values($this->func->params) as $index => $param) {
+            if ($param instanceof Op\Expr\Param && $param->byRef) {
+                $indexes[] = $index;
+            }
+        }
+
+        return $indexes;
+    }
+
+    /**
+     * The operand a by-reference parameter writes through.
+     */
+    public function parameterOperand(int $index): ?Operand
+    {
+        $param = $this->func->params[$index] ?? null;
+
+        return $param instanceof Op\Expr\Param ? $param->result : null;
     }
 }

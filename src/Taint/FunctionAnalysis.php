@@ -142,6 +142,7 @@ final class FunctionAnalysis
             $this->returnTaint,
             $this->sinksReached,
             $this->imprecise,
+            $this->byRefTaint(),
             $this->warnings,
             $this->state,
         );
@@ -242,6 +243,36 @@ final class FunctionAnalysis
         }
 
         return $changed;
+    }
+
+    /**
+     * What each by-reference parameter holds once the body has settled.
+     *
+     * The callee's half of a write the caller can see. Both slots, because
+     * `function fill( array &$out ) { $out[] = $_GET['x']; }` puts the taint in
+     * the element slot and the caller reading `$out[0]` needs to find it.
+     *
+     * @return array<int, TaintSet>
+     */
+    private function byRefTaint(): array
+    {
+        $taint = [];
+
+        foreach ($this->context->byRefParameters() as $index) {
+            $operand = $this->context->parameterOperand($index);
+
+            if ($operand === null) {
+                continue;
+            }
+
+            $held = $this->state->effectiveTaintOf($operand);
+
+            if (! $held->isEmpty()) {
+                $taint[$index] = $held;
+            }
+        }
+
+        return $taint;
     }
 
     /**
@@ -1293,8 +1324,10 @@ final class FunctionAnalysis
             $this->reportSummarySinks($op, $call, $summary, $index, $argument, $argumentTaint);
         }
 
+        $changed = $this->applySummaryByRefEffects($op, $call, $summary);
+
         if ($result->isEmpty()) {
-            return $this->writeResult($op->result, $result);
+            return $this->writeResult($op->result, $result) || $changed;
         }
 
         return $this->writeResult(
@@ -1308,7 +1341,74 @@ final class FunctionAnalysis
                 callee: $summary->displayName,
                 parameterIndex: $viaParameters[0] ?? null,
             ),
-        );
+        ) || $changed;
+    }
+
+    /**
+     * Write a callee's out-parameters back onto the caller's arguments.
+     *
+     * ```php
+     * function fill( array &$out ) { $out[] = $_GET['x']; }
+     *
+     * $values = [];
+     * fill( $values );
+     * echo $values[0];      // reported now; silent before
+     * ```
+     *
+     * Two contributions per out-parameter: what the callee moved into it from
+     * another argument, and what it put there from sources in its own body. The
+     * first is intersected with what the caller actually passed, so a parameter
+     * that only ever carries HTML does not hand back SQL.
+     *
+     * Adds rather than sets, for the same reason the catalogue's [[byref]]
+     * effects do: SSA gives the write no operand of its own.
+     *
+     * The element slot, because an out-parameter is nearly always an array and
+     * the caller reads `$out[0]` rather than `$out`.
+     */
+    private function applySummaryByRefEffects(Op\Expr $op, CallTarget $call, FunctionSummary $summary): bool
+    {
+        $changed = false;
+
+        foreach ($summary->byRefParameters() as $target) {
+            $argument = $call->argument($target);
+
+            if ($argument === null) {
+                continue;
+            }
+
+            $taint = $summary->byRefIntroduces($target);
+            $contributors = [];
+
+            foreach ($call->arguments as $index => $source) {
+                $moved = $this->state->effectiveTaintOf($source)->intersect($summary->byRefTaintFrom($index, $target));
+
+                if (! $moved->isEmpty()) {
+                    $taint = $taint->union($moved);
+                    $contributors[] = $source;
+                }
+            }
+
+            if ($taint->isEmpty()) {
+                continue;
+            }
+
+            $provenance = new Provenance(
+                TraceVerb::Propagate,
+                $op,
+                sprintf(
+                    '%s writes %s back through by-reference parameter %d.',
+                    $summary->displayName,
+                    $taint->describe(),
+                    $target + 1,
+                ),
+                $contributors,
+            );
+
+            $changed = $this->state->addContainerTaint($argument, $taint, $provenance) || $changed;
+        }
+
+        return $changed;
     }
 
     /**

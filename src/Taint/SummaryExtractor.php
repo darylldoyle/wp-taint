@@ -38,6 +38,7 @@ final class SummaryExtractor
         $paramToReturn = [];
         $paramToSink = [];
         $clears = [];
+        $paramToParam = [];
         $imprecise = $parameterCount > $analysed;
 
         for ($index = 0; $index < $analysed; $index++) {
@@ -47,6 +48,14 @@ final class SummaryExtractor
             $clears[$index] = TaintSet::allDataflowKinds()->without($result->returnTaint);
             $paramToSink[$index] = self::deduplicate($result->sinksReached);
             $imprecise = $imprecise || $result->imprecise;
+
+            // Where this parameter's taint ends up in the function's
+            // out-parameters, which is the other half of what a caller needs:
+            // `function fill( $in, array &$out )` moves taint sideways rather
+            // than returning it.
+            if ($result->byRefTaint !== []) {
+                $paramToParam[$index] = $result->byRefTaint;
+            }
         }
 
         // What the function returns with no parameter tainted at all: a wrapper
@@ -62,6 +71,11 @@ final class SummaryExtractor
             $clears,
             $baseline->returnTaint,
             $imprecise || $baseline->imprecise,
+            $paramToParam,
+            // The baseline run seeds nothing, so whatever reached an
+            // out-parameter came from inside the body — a helper that fills its
+            // argument straight from `$_GET`.
+            $baseline->byRefTaint,
         );
     }
 
