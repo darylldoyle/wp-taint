@@ -1,0 +1,10 @@
+{
+    "expectation": "vulnerable",
+    "findings": [
+        {
+            "ruleId": "wp.header.injection",
+            "kind": "header",
+            "line": 7
+        }
+    ]
+}

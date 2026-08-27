@@ -1,0 +1,10 @@
+{
+    "expectation": "vulnerable",
+    "findings": [
+        {
+            "ruleId": "wp.authz.rest-missing-permission-callback",
+            "kind": "authz",
+            "line": 11
+        }
+    ]
+}

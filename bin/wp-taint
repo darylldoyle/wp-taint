@@ -1,0 +1,38 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+use Enshrined\WpTaint\Cli\Application;
+
+$autoloaders = [
+    // Running from a checkout.
+    __DIR__ . '/../vendor/autoload.php',
+    // Installed as a dependency.
+    __DIR__ . '/../../../autoload.php',
+];
+
+$loaded = false;
+
+foreach ($autoloaders as $autoloader) {
+    if (is_file($autoloader)) {
+        require_once $autoloader;
+        $loaded = true;
+
+        break;
+    }
+}
+
+if (! $loaded) {
+    fwrite(STDERR, "Composer autoloader not found. Run `composer install`.\n");
+
+    exit(2);
+}
+
+// Analysis holds every parsed file in memory at once, because interprocedural
+// taint crosses files. Large plugin trees need more than the CLI default.
+if (ini_get('memory_limit') !== '-1') {
+    ini_set('memory_limit', '1G');
+}
+
+exit((new Application())->run());

@@ -1,0 +1,10 @@
+{
+    "expectation": "vulnerable",
+    "findings": [
+        {
+            "ruleId": "wp.lfi.dynamic-include",
+            "kind": "path",
+            "line": 9
+        }
+    ]
+}

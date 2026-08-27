@@ -1,0 +1,589 @@
+# PHP core sources, sinks, sanitizers and propagators.
+#
+# Nothing WordPress-specific belongs in this file. `wordpress.toml` extends it.
+
+[meta]
+name = "php-core"
+description = "PHP language and standard library sources, sinks and sanitizers"
+
+[options]
+safe_database_identifiers = []
+
+# =============================================================================
+# SOURCES
+# =============================================================================
+
+[[sources]]
+superglobal = "_GET"
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath"]
+
+[[sources]]
+superglobal = "_POST"
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath"]
+
+[[sources]]
+superglobal = "_REQUEST"
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath"]
+
+[[sources]]
+superglobal = "_COOKIE"
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath"]
+
+[[sources]]
+superglobal = "_FILES"
+kinds = ["html", "html_attr", "sql", "path", "header"]
+note = "Filenames and MIME types come straight from the client."
+
+# $_SERVER is only partially attacker-controlled. Tainting the whole
+# superglobal makes the false positive rate unmanageable, so only the keys
+# below are treated as untrusted.
+[[sources]]
+superglobal = "_SERVER"
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval"]
+keys = ["REQUEST_URI", "QUERY_STRING", "PHP_SELF", "PATH_INFO", "argv"]
+key_prefixes = ["HTTP_"]
+note = "HTTP_* keys are request headers verbatim. Other keys are set by the web server."
+
+[[sources]]
+function = "file_get_contents"
+arg = 0
+arg_literal_contains = "php://input"
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath"]
+note = "The raw request body. Only a source for the php:// wrapper; every other argument makes this a path sink."
+
+[[sources]]
+function = "fopen"
+arg = 0
+arg_literal_contains = "php://input"
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval"]
+
+[[sources]]
+function = "getenv"
+kinds = ["shell", "path"]
+note = "Environment-derived, not request-derived, but still outside the code's control."
+
+# =============================================================================
+# PROPAGATORS — pass taint through unchanged
+# =============================================================================
+#
+# These are string operations. None of them escapes anything. They exist here
+# so that taint survives them, and so that nobody mistakes their presence for
+# sanitisation.
+
+[[propagators]]
+function = "stripslashes"
+note = "Removes backslashes. Escapes nothing."
+
+[[propagators]]
+function = "stripslashes_deep"
+note = "Removes backslashes recursively. Escapes nothing."
+
+[[propagators]]
+function = "trim"
+
+[[propagators]]
+function = "ltrim"
+
+[[propagators]]
+function = "rtrim"
+
+[[propagators]]
+function = "strtolower"
+
+[[propagators]]
+function = "strtoupper"
+
+[[propagators]]
+function = "ucfirst"
+
+[[propagators]]
+function = "ucwords"
+
+[[propagators]]
+function = "lcfirst"
+
+[[propagators]]
+function = "substr"
+
+[[propagators]]
+function = "mb_substr"
+
+[[propagators]]
+function = "str_replace"
+note = "Taint flows from both the subject and the replacement."
+
+[[propagators]]
+function = "str_ireplace"
+
+[[propagators]]
+function = "preg_replace"
+note = "The replacement and the subject both propagate."
+
+[[propagators]]
+function = "preg_replace_callback"
+
+[[propagators]]
+function = "sprintf"
+
+[[propagators]]
+function = "vsprintf"
+
+[[propagators]]
+function = "implode"
+
+[[propagators]]
+function = "join"
+
+[[propagators]]
+function = "nl2br"
+note = "Converts newlines to <br>. Does not escape the rest of the string."
+
+[[propagators]]
+function = "wordwrap"
+
+[[propagators]]
+function = "str_pad"
+
+[[propagators]]
+function = "strrev"
+
+[[propagators]]
+function = "strval"
+
+[[propagators]]
+function = "json_decode"
+note = "Decoded structures carry the taint of the encoded string."
+
+[[propagators]]
+function = "array_map"
+
+[[propagators]]
+function = "array_values"
+
+[[propagators]]
+function = "array_filter"
+
+[[propagators]]
+function = "array_merge"
+
+[[propagators]]
+function = "reset"
+
+[[propagators]]
+function = "current"
+
+[[propagators]]
+function = "end"
+
+[[propagators]]
+function = "urldecode"
+note = "Decoding is the opposite of escaping."
+
+[[propagators]]
+function = "rawurldecode"
+
+[[propagators]]
+function = "html_entity_decode"
+note = "Actively un-escapes HTML. Never treat this as a sanitizer."
+
+[[propagators]]
+function = "htmlspecialchars_decode"
+note = "Actively un-escapes HTML."
+
+[[propagators]]
+function = "base64_decode"
+
+[[propagators]]
+function = "unserialize"
+note = "The result carries the taint of the payload, on top of being an object injection sink."
+
+# =============================================================================
+# SANITIZERS
+# =============================================================================
+
+[[sanitizers]]
+function = "intval"
+clears = "*"
+note = "An integer cannot carry a payload in any context."
+
+[[sanitizers]]
+function = "floatval"
+clears = "*"
+
+[[sanitizers]]
+function = "doubleval"
+clears = "*"
+
+[[sanitizers]]
+function = "boolval"
+clears = "*"
+
+[[sanitizers]]
+function = "htmlspecialchars"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "htmlentities"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "strip_tags"
+clears = ["html"]
+note = "Removes tags but not attribute-breaking characters, so html_attr survives."
+
+[[sanitizers]]
+function = "escapeshellarg"
+clears = ["shell"]
+
+[[sanitizers]]
+function = "escapeshellcmd"
+clears = ["shell"]
+
+[[sanitizers]]
+function = "basename"
+clears = ["path"]
+note = "Strips every directory component, which defeats traversal."
+
+[[sanitizers]]
+function = "urlencode"
+clears = ["html", "html_attr", "header"]
+note = "Percent-encoding removes the characters that break out of an attribute or a header."
+
+[[sanitizers]]
+function = "rawurlencode"
+clears = ["html", "html_attr", "header"]
+
+[[sanitizers]]
+function = "json_encode"
+clears = ["html"]
+imprecise = true
+note = "Only safe inside a JSON context. Marked imprecise so consumers can filter."
+
+[[sanitizers]]
+function = "md5"
+clears = "*"
+
+[[sanitizers]]
+function = "sha1"
+clears = "*"
+
+[[sanitizers]]
+function = "hash"
+arg = 1
+clears = "*"
+
+[[sanitizers]]
+function = "count"
+clears = "*"
+
+[[sanitizers]]
+function = "strlen"
+clears = "*"
+
+[[sanitizers]]
+function = "mb_strlen"
+clears = "*"
+
+[[sanitizers]]
+function = "in_array"
+clears = "*"
+note = "Returns a boolean, not the value."
+
+[[sanitizers]]
+function = "preg_match"
+clears = "*"
+note = "Returns a match count. Captured groups are a separate, by-reference output the engine does not follow."
+
+# =============================================================================
+# SINKS
+# =============================================================================
+
+[[sinks]]
+construct = "echo"
+kind = "html"
+severity = "high"
+rule_id = "wp.xss.unescaped-output"
+
+[[sinks]]
+construct = "print"
+kind = "html"
+severity = "high"
+rule_id = "wp.xss.unescaped-output"
+
+[[sinks]]
+construct = "eval"
+kind = "eval"
+severity = "critical"
+rule_id = "wp.rce.eval"
+
+[[sinks]]
+construct = "include"
+kind = "path"
+severity = "high"
+rule_id = "wp.lfi.dynamic-include"
+
+[[sinks]]
+construct = "include_once"
+kind = "path"
+severity = "high"
+rule_id = "wp.lfi.dynamic-include"
+
+[[sinks]]
+construct = "require"
+kind = "path"
+severity = "high"
+rule_id = "wp.lfi.dynamic-include"
+
+[[sinks]]
+construct = "require_once"
+kind = "path"
+severity = "high"
+rule_id = "wp.lfi.dynamic-include"
+
+[[sinks]]
+function = "printf"
+all_args = true
+kind = "html"
+severity = "high"
+rule_id = "wp.xss.unescaped-output"
+
+[[sinks]]
+function = "vprintf"
+all_args = true
+kind = "html"
+severity = "high"
+rule_id = "wp.xss.unescaped-output"
+
+[[sinks]]
+function = "var_dump"
+all_args = true
+kind = "html"
+severity = "medium"
+rule_id = "wp.xss.unescaped-output"
+
+[[sinks]]
+function = "exec"
+kind = "shell"
+severity = "critical"
+rule_id = "wp.rce.shell"
+
+[[sinks]]
+function = "shell_exec"
+kind = "shell"
+severity = "critical"
+rule_id = "wp.rce.shell"
+
+[[sinks]]
+function = "system"
+kind = "shell"
+severity = "critical"
+rule_id = "wp.rce.shell"
+
+[[sinks]]
+function = "passthru"
+kind = "shell"
+severity = "critical"
+rule_id = "wp.rce.shell"
+
+[[sinks]]
+function = "popen"
+kind = "shell"
+severity = "critical"
+rule_id = "wp.rce.shell"
+
+[[sinks]]
+function = "proc_open"
+kind = "shell"
+severity = "critical"
+rule_id = "wp.rce.shell"
+
+[[sinks]]
+function = "assert"
+kind = "eval"
+severity = "critical"
+rule_id = "wp.rce.eval"
+
+[[sinks]]
+function = "create_function"
+args = [1]
+kind = "eval"
+severity = "critical"
+rule_id = "wp.rce.eval"
+
+[[sinks]]
+function = "unserialize"
+kind = "unserialize"
+severity = "critical"
+rule_id = "wp.rce.unserialize"
+
+[[sinks]]
+function = "file_get_contents"
+kind = "path"
+severity = "high"
+rule_id = "wp.path.file-read"
+
+[[sinks]]
+function = "fopen"
+kind = "path"
+severity = "high"
+rule_id = "wp.path.file-read"
+
+[[sinks]]
+function = "readfile"
+kind = "path"
+severity = "high"
+rule_id = "wp.path.file-read"
+
+[[sinks]]
+function = "file"
+kind = "path"
+severity = "high"
+rule_id = "wp.path.file-read"
+
+[[sinks]]
+function = "file_put_contents"
+kind = "path"
+severity = "high"
+rule_id = "wp.path.file-write"
+
+[[sinks]]
+function = "unlink"
+kind = "path"
+severity = "high"
+rule_id = "wp.path.file-write"
+
+[[sinks]]
+function = "rename"
+all_args = true
+kind = "path"
+severity = "high"
+rule_id = "wp.path.file-write"
+
+[[sinks]]
+function = "copy"
+all_args = true
+kind = "path"
+severity = "high"
+rule_id = "wp.path.file-write"
+
+[[sinks]]
+function = "rmdir"
+kind = "path"
+severity = "high"
+rule_id = "wp.path.file-write"
+
+[[sinks]]
+function = "mkdir"
+kind = "path"
+severity = "medium"
+rule_id = "wp.path.file-write"
+
+[[sinks]]
+function = "header"
+kind = "header"
+severity = "medium"
+rule_id = "wp.header.injection"
+
+[[sinks]]
+function = "setcookie"
+all_args = true
+kind = "header"
+severity = "medium"
+rule_id = "wp.header.injection"
+
+[[sinks]]
+function = "setrawcookie"
+all_args = true
+kind = "header"
+severity = "medium"
+rule_id = "wp.header.injection"
+
+[[sinks]]
+function = "ldap_search"
+args = [1, 2]
+kind = "ldap"
+severity = "high"
+rule_id = "wp.ldap.injection"
+
+[[sinks]]
+function = "ldap_list"
+args = [1, 2]
+kind = "ldap"
+severity = "high"
+rule_id = "wp.ldap.injection"
+
+# =============================================================================
+# RULE METADATA
+# =============================================================================
+
+[[rules]]
+id = "wp.xss.unescaped-output"
+title = "Untrusted input reaches output without HTML escaping"
+description = "A value derived from user-controlled input reaches an output construct with html taint intact."
+remediation = "Apply esc_html() for text, esc_attr() for attribute values, esc_url() for URLs, or wp_kses_post() where limited markup is intended."
+cwe = "CWE-79"
+message = "Untrusted input reaches output without HTML escaping."
+
+[[rules]]
+id = "wp.rce.eval"
+title = "Untrusted input reaches a code evaluation sink"
+description = "A value derived from user-controlled input is evaluated as PHP code."
+remediation = "Remove the dynamic evaluation. If a dispatch table is what is wanted, map the input to a fixed set of callables instead."
+cwe = "CWE-95"
+message = "Untrusted input is evaluated as PHP code."
+
+[[rules]]
+id = "wp.rce.shell"
+title = "Untrusted input reaches a shell command"
+description = "A value derived from user-controlled input is interpolated into a shell command."
+remediation = "Wrap every interpolated value in escapeshellarg(), or use an API that does not spawn a shell."
+cwe = "CWE-78"
+message = "Untrusted input reaches a shell command."
+
+[[rules]]
+id = "wp.rce.unserialize"
+title = "Untrusted input reaches unserialize()"
+description = "A value derived from user-controlled input is deserialised, allowing PHP object injection when a suitable gadget chain exists in the codebase."
+remediation = "Use json_decode() for untrusted payloads. If unserialize() is unavoidable, pass ['allowed_classes' => false]."
+cwe = "CWE-502"
+message = "Untrusted input is deserialised."
+
+[[rules]]
+id = "wp.lfi.dynamic-include"
+title = "Untrusted input reaches include or require"
+description = "A value derived from user-controlled input is used to build the path of an included file."
+remediation = "Map the input to an allowlist of known template names rather than interpolating it into a path."
+cwe = "CWE-98"
+message = "Untrusted input reaches an include path."
+
+[[rules]]
+id = "wp.path.file-read"
+title = "Untrusted input reaches a file read"
+description = "A value derived from user-controlled input is used as a path to read, allowing arbitrary file disclosure."
+remediation = "Apply basename() or sanitize_file_name(), and validate the resolved path stays inside the intended directory."
+cwe = "CWE-22"
+message = "Untrusted input reaches a file read path."
+
+[[rules]]
+id = "wp.path.file-write"
+title = "Untrusted input reaches a file write or delete"
+description = "A value derived from user-controlled input is used as a path to write, move or delete."
+remediation = "Apply sanitize_file_name() and confirm the resolved path is inside the uploads directory before touching it."
+cwe = "CWE-22"
+message = "Untrusted input reaches a file write path."
+
+[[rules]]
+id = "wp.header.injection"
+title = "Untrusted input reaches an HTTP header"
+description = "A value derived from user-controlled input is written into a response header, allowing header injection or response splitting."
+remediation = "Strip CR and LF from the value, or use a WordPress helper that does so."
+cwe = "CWE-113"
+message = "Untrusted input reaches an HTTP header."
+
+[[rules]]
+id = "wp.ldap.injection"
+title = "Untrusted input reaches an LDAP filter"
+description = "A value derived from user-controlled input is interpolated into an LDAP filter."
+remediation = "Escape the value with ldap_escape() using LDAP_ESCAPE_FILTER."
+cwe = "CWE-90"
+message = "Untrusted input reaches an LDAP filter."

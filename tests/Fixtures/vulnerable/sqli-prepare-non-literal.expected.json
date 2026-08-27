@@ -1,0 +1,10 @@
+{
+    "expectation": "vulnerable",
+    "findings": [
+        {
+            "ruleId": "wp.sqli.prepare-non-literal",
+            "kind": "sql",
+            "line": 17
+        }
+    ]
+}

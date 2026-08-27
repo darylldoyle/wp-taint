@@ -1,0 +1,74 @@
+# WordPress VIP platform rules.
+#
+# Extends the WordPress catalogue with the additional restrictions the VIP
+# platform enforces, and with the VIP-specific helpers that make otherwise
+# discouraged patterns acceptable.
+
+[meta]
+name = "wordpress-vip"
+extends = ["wordpress"]
+description = "WordPress VIP platform restrictions and helpers"
+
+# =============================================================================
+# VIP HELPERS
+# =============================================================================
+
+[[sanitizers]]
+function = "wpcom_vip_get_term_link"
+clears = ["html", "html_attr", "url"]
+
+[[sanitizers]]
+function = "vip_safe_wp_remote_get"
+clears = ["url"]
+note = "Applies the VIP timeout and retry policy but does not validate the host; kept here because VIP requires it in place of wp_remote_get."
+
+# =============================================================================
+# DISCOURAGED ON VIP
+# =============================================================================
+#
+# Direct database access is discouraged on VIP: it bypasses object caching and
+# the query is not visible to the platform's monitoring. Raising the severity
+# of an already-critical sink is not possible, so these entries lower the bar
+# for what counts as reportable rather than restating the injection rules.
+
+[[sinks]]
+function = "wp_remote_get"
+kind = "url"
+severity = "high"
+rule_id = "wp.vip.remote-request"
+note = "VIP requires vip_safe_wp_remote_get(), which applies platform timeouts."
+
+[[sinks]]
+function = "file_get_contents"
+kind = "path"
+severity = "critical"
+rule_id = "wp.vip.filesystem"
+note = "The VIP filesystem is read-only outside the uploads directory."
+
+[[sinks]]
+function = "file_put_contents"
+kind = "path"
+severity = "critical"
+rule_id = "wp.vip.filesystem"
+
+[[sinks]]
+function = "fopen"
+kind = "path"
+severity = "critical"
+rule_id = "wp.vip.filesystem"
+
+[[rules]]
+id = "wp.vip.remote-request"
+title = "Untrusted input reaches an outbound request without the VIP wrapper"
+description = "VIP requires vip_safe_wp_remote_get() for outbound HTTP so that platform timeouts and circuit breaking apply. Passing user-controlled input to the unwrapped function is both an SSRF risk and a platform violation."
+remediation = "Use vip_safe_wp_remote_get() and validate the host against an allowlist."
+cwe = "CWE-918"
+message = "Untrusted input reaches an outbound request without the VIP wrapper."
+
+[[rules]]
+id = "wp.vip.filesystem"
+title = "Untrusted input reaches the filesystem on VIP"
+description = "The VIP filesystem is read-only outside the uploads directory, and direct filesystem access bypasses the platform's object storage. A user-controlled path makes this both a platform violation and a traversal risk."
+remediation = "Use the WordPress attachment and uploads APIs rather than direct filesystem calls."
+cwe = "CWE-22"
+message = "Untrusted input reaches the filesystem on VIP."

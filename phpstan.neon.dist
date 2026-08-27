@@ -1,0 +1,40 @@
+includes:
+    - vendor/phpstan/phpstan-strict-rules/rules.neon
+
+parameters:
+    level: max
+    phpVersion: 80200
+
+    paths:
+        - bin
+        - src
+        - tools
+
+    excludePaths:
+        analyse:
+            - tests/Fixtures
+
+    tmpDir: build/phpstan
+
+    treatPhpDocTypesAsCertain: false
+    checkMissingCallableSignature: true
+    checkUninitializedProperties: true
+    checkBenevolentUnionTypes: true
+    reportPossiblyNonexistentGeneralArrayOffset: true
+    reportPossiblyNonexistentConstantArrayOffset: true
+    reportAlwaysTrueInLastCondition: true
+    reportAnyTypeWideningInVarTag: true
+
+    ignoreErrors:
+        # php-cfg 0.8.1 is written for PHP 7.x and has almost no type
+        # declarations. Its public API is documented in docs/php-cfg-api-notes.md
+        # and wrapped by src/Cfg. These suppressions are scoped to that wrapper
+        # boundary and to the analyser passes that must touch raw php-cfg
+        # properties.
+        -
+            message: '#PHPTypes\\Type#'
+            reportUnmatched: false
+        -
+            identifier: missingType.property
+            path: src/Cfg/*
+            reportUnmatched: false

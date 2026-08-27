@@ -1,0 +1,616 @@
+# The WordPress catalogue.
+#
+# Cross-checked against the WPCS sniffs WordPress.Security.EscapeOutput,
+# WordPress.Security.ValidatedSanitizedInput and WordPress.DB.PreparedSQL.
+# WPCS is the curated source of truth for which WordPress functions escape
+# what; this file is that catalogue expressed as data.
+#
+# Adding a function here must never require a code change.
+
+[meta]
+name = "wordpress"
+extends = ["php-core"]
+description = "WordPress core sources, sinks, sanitizers and escapers"
+
+[options]
+# Interpolating a table name from $wpdb into a prepare() format string is the
+# standard, correct WordPress idiom. The engine treats a format string built
+# only from literals and these identifiers as effectively literal, because
+# flagging it would produce a false positive on nearly every plugin.
+safe_database_identifiers = [
+    "prefix", "base_prefix", "posts", "postmeta", "users", "usermeta", "terms",
+    "termmeta", "term_taxonomy", "term_relationships", "comments", "commentmeta",
+    "options", "links", "blogs", "blogmeta", "site", "sitemeta", "signups",
+    "registration_log", "blog_versions", "sitecategories",
+]
+
+# =============================================================================
+# SOURCES — request layer
+# =============================================================================
+
+[[sources]]
+class = "WP_REST_Request"
+method = "get_param"
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize"]
+
+[[sources]]
+class = "WP_REST_Request"
+method = "get_params"
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize"]
+
+[[sources]]
+class = "WP_REST_Request"
+method = "get_json_params"
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize"]
+
+[[sources]]
+class = "WP_REST_Request"
+method = "get_query_params"
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize"]
+
+[[sources]]
+class = "WP_REST_Request"
+method = "get_body_params"
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize"]
+
+[[sources]]
+class = "WP_REST_Request"
+method = "get_body"
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize"]
+
+[[sources]]
+class = "WP_REST_Request"
+method = "get_file_params"
+kinds = ["html", "html_attr", "sql", "path", "header"]
+
+[[sources]]
+class = "WP_REST_Request"
+method = "get_header"
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval"]
+
+[[sources]]
+function = "get_query_var"
+kinds = ["html", "html_attr", "sql", "url", "path"]
+
+[[sources]]
+function = "wp_get_referer"
+kinds = ["html", "html_attr", "url", "header"]
+
+[[sources]]
+function = "wp_get_raw_referer"
+kinds = ["html", "html_attr", "url", "header"]
+
+[[sources]]
+function = "wp_get_original_referer"
+kinds = ["html", "html_attr", "url", "header"]
+
+# =============================================================================
+# SOURCES — second order (stored)
+# =============================================================================
+#
+# Stored XSS is most of the WordPress CVE population, so these are on by
+# default. `--no-stored-taint` turns them off for teams triaging reflected
+# issues first.
+
+[[sources]]
+function = "get_post_meta"
+kinds = ["html", "html_attr", "sql", "url", "path"]
+stored = true
+note = "Second-order taint. Stored XSS lives here."
+
+[[sources]]
+function = "get_user_meta"
+kinds = ["html", "html_attr", "sql", "url", "path"]
+stored = true
+
+[[sources]]
+function = "get_term_meta"
+kinds = ["html", "html_attr", "sql", "url", "path"]
+stored = true
+
+[[sources]]
+function = "get_comment_meta"
+kinds = ["html", "html_attr", "sql", "url", "path"]
+stored = true
+
+[[sources]]
+function = "get_metadata"
+kinds = ["html", "html_attr", "sql", "url", "path"]
+stored = true
+
+[[sources]]
+function = "get_option"
+kinds = ["html", "html_attr", "sql", "url", "path"]
+stored = true
+
+[[sources]]
+function = "get_site_option"
+kinds = ["html", "html_attr", "sql", "url", "path"]
+stored = true
+
+[[sources]]
+function = "get_transient"
+kinds = ["html", "html_attr", "sql", "url", "path"]
+stored = true
+
+[[sources]]
+function = "get_site_transient"
+kinds = ["html", "html_attr", "sql", "url", "path"]
+stored = true
+
+[[sources]]
+function = "get_theme_mod"
+kinds = ["html", "html_attr", "sql", "url", "path"]
+stored = true
+
+[[sources]]
+class = "wpdb"
+method = "get_results"
+kinds = ["html", "html_attr", "sql", "url", "path"]
+stored = true
+
+[[sources]]
+class = "wpdb"
+method = "get_var"
+kinds = ["html", "html_attr", "sql", "url", "path"]
+stored = true
+
+[[sources]]
+class = "wpdb"
+method = "get_row"
+kinds = ["html", "html_attr", "sql", "url", "path"]
+stored = true
+
+[[sources]]
+class = "wpdb"
+method = "get_col"
+kinds = ["html", "html_attr", "sql", "url", "path"]
+stored = true
+
+# =============================================================================
+# PROPAGATORS — the ones people mistake for escapers
+# =============================================================================
+
+[[propagators]]
+function = "wp_unslash"
+note = "Strips slashes only. Pure pass-through. This is the single most common misunderstanding in WordPress code review: wp_unslash() is NOT a sanitizer and must never be moved to [[sanitizers]]. If a test passes because wp_unslash cleared taint, the test is wrong."
+
+[[propagators]]
+function = "maybe_unserialize"
+note = "Unserialises when the string looks serialised, so it propagates taint on top of being an object injection sink."
+
+[[propagators]]
+function = "wp_specialchars_decode"
+note = "Un-escapes. The opposite of a sanitizer."
+
+[[propagators]]
+function = "wptexturize"
+
+[[propagators]]
+function = "wpautop"
+note = "Adds paragraph tags. Escapes nothing."
+
+[[propagators]]
+function = "make_clickable"
+note = "Turns URLs into anchors. Escapes nothing else."
+
+[[propagators]]
+function = "wp_trim_words"
+
+[[propagators]]
+function = "wp_strip_all_tags"
+note = "Removes tags but leaves quotes and ampersands, so it is not sufficient for attribute context."
+
+[[propagators]]
+function = "apply_filters"
+args = [1]
+note = "The filtered value passes through. Callbacks registered elsewhere are not followed; see KNOWN_LIMITATIONS.md."
+
+[[propagators]]
+function = "get_the_title"
+
+[[propagators]]
+function = "get_the_content"
+
+[[propagators]]
+function = "get_the_excerpt"
+
+# =============================================================================
+# SANITIZERS AND ESCAPERS
+# =============================================================================
+
+[[sanitizers]]
+function = "esc_html"
+clears = ["html"]
+
+[[sanitizers]]
+function = "esc_html__"
+clears = ["html"]
+
+[[sanitizers]]
+function = "esc_html_e"
+clears = ["html"]
+
+[[sanitizers]]
+function = "esc_html_x"
+clears = ["html"]
+
+[[sanitizers]]
+function = "esc_attr"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "esc_attr__"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "esc_attr_e"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "esc_attr_x"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "esc_textarea"
+clears = ["html"]
+
+[[sanitizers]]
+function = "esc_js"
+clears = ["html"]
+
+[[sanitizers]]
+function = "esc_xml"
+clears = ["html"]
+
+[[sanitizers]]
+function = "esc_url"
+clears = ["html", "html_attr", "url"]
+
+[[sanitizers]]
+function = "esc_url_raw"
+clears = ["url"]
+note = "For database storage and redirects. NOT an HTML escaper: output through esc_url_raw is still XSS."
+
+[[sanitizers]]
+function = "sanitize_url"
+clears = ["url"]
+note = "Alias of esc_url_raw. Not an HTML escaper."
+
+[[sanitizers]]
+function = "wp_kses"
+clears = ["html"]
+
+[[sanitizers]]
+function = "wp_kses_post"
+clears = ["html"]
+
+[[sanitizers]]
+function = "wp_kses_data"
+clears = ["html"]
+
+[[sanitizers]]
+function = "sanitize_text_field"
+clears = ["html", "html_attr", "header"]
+note = "Strips tags and control characters, including CR and LF. Does nothing for SQL."
+
+[[sanitizers]]
+function = "sanitize_textarea_field"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "sanitize_key"
+clears = ["html", "html_attr", "sql", "path", "url", "header"]
+note = "Restricted to lowercase alphanumerics, dashes and underscores."
+
+[[sanitizers]]
+function = "sanitize_html_class"
+clears = ["html", "html_attr", "sql"]
+
+[[sanitizers]]
+function = "sanitize_title"
+clears = ["html", "html_attr", "sql", "path"]
+
+[[sanitizers]]
+function = "sanitize_title_with_dashes"
+clears = ["html", "html_attr", "sql", "path"]
+
+[[sanitizers]]
+function = "sanitize_email"
+clears = ["html", "html_attr", "path", "header"]
+
+[[sanitizers]]
+function = "sanitize_file_name"
+clears = ["html", "html_attr", "path"]
+
+[[sanitizers]]
+function = "sanitize_user"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "sanitize_mime_type"
+clears = ["html", "html_attr", "path", "header"]
+
+[[sanitizers]]
+function = "tag_escape"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "absint"
+clears = "*"
+note = "Casts to a non-negative integer, which cannot carry a payload in any context."
+
+[[sanitizers]]
+function = "esc_sql"
+clears = ["sql"]
+
+[[sanitizers]]
+class = "wpdb"
+method = "_real_escape"
+clears = ["sql"]
+
+[[sanitizers]]
+function = "wp_validate_redirect"
+clears = ["url"]
+note = "Falls back to the second argument when the host is not allowed."
+
+[[sanitizers]]
+function = "wp_json_encode"
+clears = ["html"]
+imprecise = true
+note = "Only safe when the output lands inside a <script> JSON context. Modelled as clearing html but flagged imprecise."
+
+[[sanitizers]]
+function = "wp_nonce_field"
+clears = "*"
+
+[[sanitizers]]
+function = "wp_create_nonce"
+clears = "*"
+
+[[sanitizers]]
+function = "wp_hash"
+clears = "*"
+
+# wpdb::prepare is the interesting one. It only sanitises when its first
+# argument is an effectively literal format string. When that argument is built
+# from a variable, prepare() provides no protection at all and the call is
+# reported under wp.sqli.prepare-non-literal instead.
+[[sanitizers]]
+class = "wpdb"
+method = "prepare"
+all_args = true
+clears = ["sql"]
+requires_literal_arg = 0
+literal_violation_rule_id = "wp.sqli.prepare-non-literal"
+note = "Only sanitises with a literal first argument. Interpolating a variable into the format string defeats it entirely."
+
+# =============================================================================
+# EXPLICITLY SAFE — do not re-add these as sinks
+# =============================================================================
+
+[[safe]]
+class = "wpdb"
+method = "insert"
+note = "Escapes its data internally via prepare(). Flagging it is a guaranteed false positive."
+
+[[safe]]
+class = "wpdb"
+method = "update"
+note = "Escapes its data internally via prepare()."
+
+[[safe]]
+class = "wpdb"
+method = "delete"
+note = "Escapes its where clause internally via prepare()."
+
+[[safe]]
+class = "wpdb"
+method = "replace"
+note = "Escapes its data internally via prepare()."
+
+[[safe]]
+function = "wp_safe_redirect"
+note = "Validates the target host against the allowed list. wp_redirect() is the unsafe variant."
+
+[[safe]]
+function = "esc_html_e"
+note = "Escapes and echoes in one call, so the echo is not a separate sink."
+
+# =============================================================================
+# SINKS
+# =============================================================================
+
+[[sinks]]
+class = "wpdb"
+method = "query"
+kind = "sql"
+severity = "critical"
+rule_id = "wp.sqli.wpdb-query"
+
+[[sinks]]
+class = "wpdb"
+method = "get_results"
+kind = "sql"
+severity = "critical"
+rule_id = "wp.sqli.wpdb-query"
+
+[[sinks]]
+class = "wpdb"
+method = "get_var"
+kind = "sql"
+severity = "critical"
+rule_id = "wp.sqli.wpdb-query"
+
+[[sinks]]
+class = "wpdb"
+method = "get_row"
+kind = "sql"
+severity = "critical"
+rule_id = "wp.sqli.wpdb-query"
+
+[[sinks]]
+class = "wpdb"
+method = "get_col"
+kind = "sql"
+severity = "critical"
+rule_id = "wp.sqli.wpdb-query"
+
+[[sinks]]
+function = "_e"
+kind = "html"
+severity = "high"
+rule_id = "wp.xss.unescaped-output"
+
+[[sinks]]
+function = "_ex"
+kind = "html"
+severity = "high"
+rule_id = "wp.xss.unescaped-output"
+
+[[sinks]]
+function = "wp_redirect"
+kind = "url"
+severity = "medium"
+rule_id = "wp.redirect.open-redirect"
+
+[[sinks]]
+function = "maybe_unserialize"
+kind = "unserialize"
+severity = "critical"
+rule_id = "wp.rce.unserialize"
+
+[[sinks]]
+function = "wp_remote_get"
+kind = "url"
+severity = "medium"
+rule_id = "wp.ssrf.remote-request"
+
+[[sinks]]
+function = "wp_remote_post"
+kind = "url"
+severity = "medium"
+rule_id = "wp.ssrf.remote-request"
+
+[[sinks]]
+function = "wp_remote_request"
+kind = "url"
+severity = "medium"
+rule_id = "wp.ssrf.remote-request"
+
+# Stored-taint writes. Off unless --stored-taint-writes is passed.
+[[sinks]]
+function = "update_option"
+args = [1]
+kind = "html"
+severity = "low"
+rule_id = "wp.stored.untrusted-write"
+stored_write = true
+
+[[sinks]]
+function = "add_option"
+args = [1]
+kind = "html"
+severity = "low"
+rule_id = "wp.stored.untrusted-write"
+stored_write = true
+
+[[sinks]]
+function = "update_post_meta"
+args = [2]
+kind = "html"
+severity = "low"
+rule_id = "wp.stored.untrusted-write"
+stored_write = true
+
+[[sinks]]
+function = "add_post_meta"
+args = [2]
+kind = "html"
+severity = "low"
+rule_id = "wp.stored.untrusted-write"
+stored_write = true
+
+[[sinks]]
+function = "update_user_meta"
+args = [2]
+kind = "html"
+severity = "low"
+rule_id = "wp.stored.untrusted-write"
+stored_write = true
+
+# =============================================================================
+# RULE METADATA
+# =============================================================================
+
+[[rules]]
+id = "wp.sqli.wpdb-query"
+title = "Untrusted input reaches a database query without preparation"
+description = "A value derived from user-controlled input is interpolated into SQL passed to $wpdb, with sql taint intact."
+remediation = "Pass the value as a placeholder argument to $wpdb->prepare() with a literal format string. esc_sql() is acceptable but prepare() is preferred."
+cwe = "CWE-89"
+message = "Untrusted input reaches a database query without preparation."
+
+[[rules]]
+id = "wp.sqli.prepare-non-literal"
+title = "$wpdb->prepare() called with a non-literal format string"
+description = "prepare() only escapes placeholder arguments against a literal format string. When the format string is itself built from a variable, prepare() provides no protection and the interpolated value reaches the database unescaped."
+remediation = "Move every variable out of the format string and into a placeholder argument. Interpolating $wpdb table properties such as {$wpdb->prefix} is fine; interpolating request data is not."
+cwe = "CWE-89"
+message = "$wpdb->prepare() cannot protect a format string built from untrusted input."
+
+[[rules]]
+id = "wp.sqli.unprepared-query"
+title = "Variable interpolated into a database query"
+description = "A query string passed to $wpdb is built by interpolating or concatenating a variable that is not a known-safe database identifier. Taint analysis could not prove the value is attacker-controlled, but the shape alone is unsafe."
+remediation = "Use $wpdb->prepare() with a literal format string and placeholder arguments."
+cwe = "CWE-89"
+message = "Variable interpolated into a database query without prepare()."
+
+[[rules]]
+id = "wp.redirect.open-redirect"
+title = "Untrusted input reaches wp_redirect()"
+description = "A value derived from user-controlled input is used as a redirect target. wp_redirect() does not validate the host."
+remediation = "Use wp_safe_redirect(), or pass the value through wp_validate_redirect() with a safe fallback first."
+cwe = "CWE-601"
+message = "Untrusted input reaches wp_redirect() without host validation."
+
+[[rules]]
+id = "wp.ssrf.remote-request"
+title = "Untrusted input reaches an outbound HTTP request"
+description = "A value derived from user-controlled input is used as the URL of a server-side HTTP request, which allows an attacker to reach internal services."
+remediation = "Validate the host against an allowlist before making the request."
+cwe = "CWE-918"
+message = "Untrusted input controls the URL of a server-side request."
+
+[[rules]]
+id = "wp.stored.untrusted-write"
+title = "Untrusted input written to persistent storage without sanitisation"
+description = "A value derived from user-controlled input is stored in an option or meta field with html taint intact, which becomes stored XSS when it is later rendered."
+remediation = "Sanitise on write with sanitize_text_field() or wp_kses_post(), and escape again on output."
+cwe = "CWE-79"
+message = "Untrusted input written to storage without sanitisation."
+
+[[rules]]
+id = "wp.authz.rest-missing-permission-callback"
+title = "REST route registered without a permission_callback"
+description = "register_rest_route() was called without a permission_callback. WordPress treats such a route as public and has emitted a _doing_it_wrong notice for it since 5.5."
+remediation = "Add a permission_callback that checks the capability the route requires. Use __return_true only for genuinely public read-only data."
+cwe = "CWE-862"
+message = "REST route registered without a permission_callback."
+
+[[rules]]
+id = "wp.authz.rest-public-write"
+title = "REST route allows unauthenticated writes"
+description = "A route handling POST, PUT, PATCH or DELETE declares permission_callback => '__return_true', which permits any unauthenticated request to invoke it."
+remediation = "Replace __return_true with a current_user_can() check for the capability the operation requires."
+cwe = "CWE-862"
+message = "REST write route is callable by anyone."
+
+[[rules]]
+id = "wp.authz.ajax-missing-check"
+title = "AJAX handler performs no capability or nonce check"
+description = "A callback registered on a wp_ajax_* or wp_ajax_nopriv_* hook contains no current_user_can(), check_ajax_referer(), check_admin_referer() or wp_verify_nonce() call, so it is reachable by any logged-in user, or by anyone at all in the nopriv case."
+remediation = "Add check_ajax_referer() to verify the nonce and current_user_can() to verify the capability. Both are needed: the nonce proves intent, the capability proves authorisation."
+cwe = "CWE-862"
+message = "AJAX handler has no capability or nonce check."

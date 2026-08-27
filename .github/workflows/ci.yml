@@ -1,0 +1,166 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Tests (PHP ${{ matrix.php }}${{ matrix.dependencies == 'lowest' && ', lowest deps' || '' }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.2', '8.3', '8.4']
+        dependencies: ['highest']
+        include:
+          # The lowest-dependency run is what catches "works on my lockfile".
+          - php: '8.2'
+            dependencies: 'lowest'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: json, zip
+          coverage: none
+          ini-values: memory_limit=1G
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v3
+        with:
+          dependency-versions: ${{ matrix.dependencies }}
+
+      - name: Run the test suite
+        run: composer test
+
+  static-analysis:
+    name: PHPStan
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+          ini-values: memory_limit=1G
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v3
+
+      - name: Analyse
+        run: composer analyse
+
+  coding-standards:
+    name: PHP_CodeSniffer
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v3
+
+      - name: Lint
+        run: composer lint
+
+  type-coverage:
+    name: Type coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: xdebug
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v3
+
+      - name: Check type coverage
+        run: composer test:types
+
+  fixtures:
+    name: Fixture expectations in sync
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v3
+
+      # The .expected.json files are generated from the inline
+      # wp-taint-expect annotations. Editing one without the other is a
+      # drift hazard in the one place the project cannot afford it.
+      - name: Check fixture expectations
+        run: composer fixtures:check
+
+  dogfood:
+    name: Scan a real plugin
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: json, zip
+          coverage: none
+          ini-values: memory_limit=1G
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v3
+
+      # A smaller corpus than the local one: enough to catch a regression that
+      # only shows up on real code, without a five-minute download on every run.
+      - name: Fetch a small corpus
+        run: php tools/fetch-corpus.php --count=5
+
+      # The parse rate is the project's first kill gate. Anything below 99.5%
+      # means files are being silently skipped, which is a silent false negative.
+      - name: Check the parse rate
+        run: php bin/wp-taint scan tests/Fixtures/corpus --parse-report --no-ansi
+
+      - name: Scan the corpus
+        run: php bin/wp-taint scan tests/Fixtures/corpus --format=sarif --output=corpus.sarif --fail-on=never --no-ansi
+
+      - name: Upload the SARIF report
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-sarif
+          path: corpus.sarif
+          retention-days: 7

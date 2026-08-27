@@ -1,0 +1,10 @@
+{
+    "expectation": "vulnerable",
+    "findings": [
+        {
+            "ruleId": "wp.sqli.wpdb-query",
+            "kind": "sql",
+            "line": 11
+        }
+    ]
+}

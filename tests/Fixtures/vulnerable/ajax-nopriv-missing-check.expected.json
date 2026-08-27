@@ -1,0 +1,10 @@
+{
+    "expectation": "vulnerable",
+    "findings": [
+        {
+            "ruleId": "wp.authz.ajax-missing-check",
+            "kind": "authz",
+            "line": 8
+        }
+    ]
+}

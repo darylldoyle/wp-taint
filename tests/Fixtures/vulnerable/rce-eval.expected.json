@@ -1,0 +1,10 @@
+{
+    "expectation": "vulnerable",
+    "findings": [
+        {
+            "ruleId": "wp.rce.eval",
+            "kind": "eval",
+            "line": 9
+        }
+    ]
+}

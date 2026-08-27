@@ -1,0 +1,89 @@
+{
+    "name": "enshrined/wp-taint",
+    "description": "Interprocedural taint analysis for WordPress PHP. Finds real XSS, SQL injection and authorization bugs.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": [
+        "wordpress",
+        "security",
+        "static-analysis",
+        "taint-analysis",
+        "xss",
+        "sql-injection"
+    ],
+    "authors": [
+        {
+            "name": "Daryll Doyle",
+            "email": "daryll.doyle@fueled.com"
+        }
+    ],
+    "require": {
+        "php": ">=8.2",
+        "ext-json": "*",
+        "ircmaxell/php-cfg": "^0.8.1",
+        "nikic/php-parser": "^5.0",
+        "symfony/console": "^7.0",
+        "yosymfony/toml": "^1.0"
+    },
+    "require-dev": {
+        "pestphp/pest": "^3.0",
+        "pestphp/pest-plugin-type-coverage": "^3.0",
+        "phpstan/phpstan": "^2.0",
+        "phpstan/phpstan-strict-rules": "^2.0",
+        "slevomat/coding-standard": "^8.15",
+        "squizlabs/php_codesniffer": "^3.10",
+        "symfony/process": "^7.4"
+    },
+    "bin": [
+        "bin/wp-taint"
+    ],
+    "autoload": {
+        "psr-4": {
+            "Enshrined\\WpTaint\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Enshrined\\WpTaint\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true,
+            "dealerdirect/phpcodesniffer-composer-installer": true
+        }
+    },
+    "scripts": {
+        "test": "pest",
+        "test:unit": "pest --testsuite=Unit",
+        "test:feature": "pest --testsuite=Feature",
+        "test:fixtures": "pest --testsuite=Fixtures",
+        "test:coverage": "pest --coverage --min=80",
+        "test:types": "pest --type-coverage --min=100",
+        "analyse": "phpstan analyse",
+        "lint": "phpcs",
+        "lint:fix": "phpcbf",
+        "corpus:fetch": "php tools/fetch-corpus.php",
+        "check": [
+            "@lint",
+            "@analyse",
+            "@test"
+        ],
+        "fixtures:build": "php tools/build-fixture-expectations.php",
+        "fixtures:check": "php tools/build-fixture-expectations.php --check"
+    },
+    "scripts-descriptions": {
+        "test": "Run the full Pest suite",
+        "test:fixtures": "Run the fixture expectation harness",
+        "analyse": "Run PHPStan at level max",
+        "lint": "Run PHP_CodeSniffer",
+        "lint:fix": "Auto-fix PHP_CodeSniffer violations",
+        "corpus:fetch": "Download the WordPress.org plugin corpus into tests/Fixtures/corpus",
+        "check": "Lint, analyse and test",
+        "fixtures:build": "Regenerate fixture expectations from the inline wp-taint-expect annotations",
+        "fixtures:check": "Fail if the fixture expectations are out of date"
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
