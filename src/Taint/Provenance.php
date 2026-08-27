@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Taint;
 
+use Enshrined\WpTaint\Finding\TraceStep;
 use Enshrined\WpTaint\Finding\TraceVerb;
 use PHPCfg\Op;
 use PHPCfg\Operand;
@@ -31,6 +32,14 @@ final class Provenance
         public readonly ?string $callee = null,
         public readonly ?int $parameterIndex = null,
         public readonly bool $imprecise = false,
+        /**
+         * Steps to splice in before this one, for a flow that enters through
+         * something the def-use graph cannot walk back through — currently
+         * only a property read, whose write happened in another function body.
+         *
+         * @var list<TraceStep>
+         */
+        public readonly array $prefix = [],
     ) {
     }
 }

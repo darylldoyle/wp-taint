@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Taint;
 
+use Enshrined\WpTaint\Finding\TraceStep;
+
 /**
  * Taint held by object properties, keyed by `class::property`.
  *
@@ -14,6 +16,11 @@ namespace Enshrined\WpTaint\Taint;
  *
  * Not path-sensitive and not per-instance. A tainted `Foo::$value` taints every
  * read of `$value` on any `Foo`. Recorded in KNOWN_LIMITATIONS.md.
+ *
+ * Each entry carries the trace of the write that tainted it, so a finding whose
+ * flow enters through a property read still shows where the value came from. A
+ * trace that begins "read from property $x" and stops there tells a reviewer
+ * nothing, and a finding a reviewer cannot judge is one they learn to ignore.
  */
 final class PropertyTaintMap
 {
@@ -31,6 +38,13 @@ final class PropertyTaintMap
      */
     private array $tracked = [];
 
+    /**
+     * The trace of the write that put taint into each property.
+     *
+     * @var array<string, list<TraceStep>>
+     */
+    private array $origins = [];
+
     public function get(?string $class, string $property): TaintSet
     {
         return $this->taint[self::key($class, $property)] ?? TaintSet::empty();
@@ -42,6 +56,17 @@ final class PropertyTaintMap
     }
 
     /**
+     * The trace of the write that tainted a property, for prefixing onto a
+     * finding whose flow enters by reading it.
+     *
+     * @return list<TraceStep>
+     */
+    public function originOf(?string $class, string $property): array
+    {
+        return $this->origins[self::key($class, $property)] ?? [];
+    }
+
+    /**
      * Record that a property was written, whatever the value's taint.
      */
     public function track(?string $class, string $property): void
@@ -49,7 +74,10 @@ final class PropertyTaintMap
         $this->tracked[self::key($class, $property)] = true;
     }
 
-    public function add(?string $class, string $property, TaintSet $taint): bool
+    /**
+     * @param list<TraceStep> $origin the trace of the write that produced this taint
+     */
+    public function add(?string $class, string $property, TaintSet $taint, array $origin = []): bool
     {
         $this->track($class, $property);
 
@@ -58,6 +86,13 @@ final class PropertyTaintMap
         }
 
         $key = self::key($class, $property);
+
+        // Keep the first origin recorded for a property. Writes are visited in
+        // a fixed order, so this is deterministic; taking the newest would
+        // change with whichever round the write happened to land in.
+        if ($origin !== [] && ! isset($this->origins[$key])) {
+            $this->origins[$key] = $origin;
+        }
         $existing = $this->taint[$key] ?? TaintSet::empty();
         $merged = $existing->union($taint);
 
@@ -81,9 +116,16 @@ final class PropertyTaintMap
     {
         $changed = false;
 
-        foreach ($other->tracked as $key => $unused) {
+        foreach (array_keys($other->tracked) as $key) {
             if (! isset($this->tracked[$key])) {
                 $this->tracked[$key] = true;
+                $changed = true;
+            }
+        }
+
+        foreach ($other->origins as $key => $origin) {
+            if (! isset($this->origins[$key])) {
+                $this->origins[$key] = $origin;
                 $changed = true;
             }
         }

@@ -404,7 +404,12 @@ final class FunctionAnalysis
                 ? $this->propertyOwnerClass($target)
                 : $this->staticOwnerClass($target);
 
-            return $this->properties->add($owner, $property, $taint);
+            return $this->properties->add(
+                $owner,
+                $property,
+                $taint,
+                $this->writeTrace($op, $property, $taint),
+            );
         }
 
         return false;
@@ -480,7 +485,8 @@ final class FunctionAnalysis
             return $this->state->set($op->result, TaintSet::empty());
         }
 
-        $stored = $this->properties->get($this->propertyOwnerClass($op), $property);
+        $owner = $this->propertyOwnerClass($op);
+        $stored = $this->properties->get($owner, $property);
         $taint = $stored->union($this->state->taintOf($op->var));
 
         if ($taint->isEmpty()) {
@@ -495,6 +501,7 @@ final class FunctionAnalysis
                 $op,
                 sprintf('Read from property $%s.', $property),
                 [$op->var],
+                prefix: $this->properties->originOf($owner, $property),
             ),
         );
     }
@@ -513,7 +520,8 @@ final class FunctionAnalysis
             return $this->state->set($op->result, TaintSet::empty());
         }
 
-        $taint = $this->properties->get($this->staticOwnerClass($op), $property);
+        $owner = $this->staticOwnerClass($op);
+        $taint = $this->properties->get($owner, $property);
 
         if ($taint->isEmpty()) {
             return $this->state->set($op->result, $taint);
@@ -526,8 +534,33 @@ final class FunctionAnalysis
                 TraceVerb::Propagate,
                 $op,
                 sprintf('Read from static property $%s.', $property),
+                prefix: $this->properties->originOf($owner, $property),
             ),
         );
+    }
+
+    /**
+     * The trace of a property write, recorded so that a read elsewhere can show
+     * where the value came from.
+     *
+     * @return list<TraceStep>
+     */
+    private function writeTrace(Op\Expr\Assign|Op\Expr\AssignRef $op, string $property, TaintSet $taint): array
+    {
+        $kind = $taint->kinds()[0] ?? null;
+
+        if ($kind === null) {
+            return [];
+        }
+
+        $step = $this->traces->step(
+            TraceVerb::Propagate,
+            $op,
+            $taint,
+            sprintf('Written to property $%s.', $property),
+        );
+
+        return $this->traces->build($op->expr, $kind, $step);
     }
 
     private function staticOwnerClass(Op\Expr\StaticPropertyFetch $fetch): ?string

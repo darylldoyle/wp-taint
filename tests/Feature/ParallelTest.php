@@ -42,10 +42,10 @@ function scanTreeWithJobs(string $directory, int $jobs): array
                 (string) $finding->column,
                 $finding->fingerprint,
                 (string) count($finding->trace),
-                implode(
-                    '>',
-                    array_map(static fn (object $step): string => $step->verb->value . '@' . $step->line, $finding->trace),
-                ),
+                implode('>', array_map(
+                    static fn (object $step): string => $step->verb->value . '@' . $step->line,
+                    $finding->trace,
+                )),
             ]),
             $result->findings->all(),
         ),

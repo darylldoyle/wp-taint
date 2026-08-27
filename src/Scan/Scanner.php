@@ -144,38 +144,35 @@ final class Scanner
         $pool = new WorkerPool($graph === null ? $this->jobs : 1);
 
         /** @var list<array{findings: list<Finding>, warnings: list<AnalysisWarning>}> $shards */
-        $shards = $pool->run(static function (int $shard, int $shardCount) use (
-            $contexts,
-            $analyzer,
-            $resolution,
-            $graph,
-        ): array {
-            $shardFindings = [];
-            $shardWarnings = [];
+        $shards = $pool->run(
+            static function (int $shard, int $shardCount) use ($contexts, $analyzer, $resolution, $graph): array {
+                $shardFindings = [];
+                $shardWarnings = [];
 
-            foreach ($contexts as $index => $context) {
-                if ($index % $shardCount !== $shard) {
-                    continue;
+                foreach ($contexts as $index => $context) {
+                    if ($index % $shardCount !== $shard) {
+                        continue;
+                    }
+
+                    $result = $analyzer->analyze(
+                        $context,
+                        $resolution['summaries'],
+                        $resolution['properties'],
+                        null,
+                        true,
+                    );
+
+                    $shardFindings = [...$shardFindings, ...$result->findings];
+                    $shardWarnings = [...$shardWarnings, ...$result->warnings];
+
+                    if ($graph !== null && $result->state !== null) {
+                        $graph->addFunction($context, $result->state);
+                    }
                 }
 
-                $result = $analyzer->analyze(
-                    $context,
-                    $resolution['summaries'],
-                    $resolution['properties'],
-                    null,
-                    true,
-                );
-
-                $shardFindings = [...$shardFindings, ...$result->findings];
-                $shardWarnings = [...$shardWarnings, ...$result->warnings];
-
-                if ($graph !== null && $result->state !== null) {
-                    $graph->addFunction($context, $result->state);
-                }
-            }
-
-            return ['findings' => $shardFindings, 'warnings' => $shardWarnings];
-        });
+                return ['findings' => $shardFindings, 'warnings' => $shardWarnings];
+            },
+        );
 
         // Merged in shard order; FindingCollection sorts afterwards, so the
         // result is identical whatever --jobs was.

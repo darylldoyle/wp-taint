@@ -184,6 +184,11 @@ A project-local `wp-taint.toml` in the scan root is loaded last and can add or
 override anything. Unknown keys are a hard error, not a warning: a typo in a
 security catalogue silently creates false negatives.
 
+Stored sources — `get_option()`, `get_post_meta()` and friends — are on by
+default, because stored XSS is most of the WordPress CVE population.
+`--no-stored-taint` turns them off if you want to triage reflected issues
+first.
+
 Read the resolved catalogue with `wp-taint registry:dump`.
 
 ## Design principles

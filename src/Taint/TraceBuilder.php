@@ -48,6 +48,16 @@ final class TraceBuilder
             }
 
             $steps[] = $this->stepFor($provenance, $current, $kind);
+
+            // A property read has no predecessor in this function's def-use
+            // graph: the write happened in another body. The recorded write
+            // trace goes in ahead of it so the finding still reaches a source.
+            if ($provenance->prefix !== []) {
+                $steps = [...$steps, ...array_reverse($provenance->prefix)];
+
+                break;
+            }
+
             $current = $this->nextOperand($provenance, $kind);
         }
 

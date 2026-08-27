@@ -94,77 +94,77 @@ kinds = ["html", "html_attr", "url", "header"]
 
 [[sources]]
 function = "get_post_meta"
-kinds = ["html", "html_attr", "sql", "url", "path"]
+kinds = ["html", "html_attr", "sql"]
 stored = true
-note = "Second-order taint. Stored XSS lives here."
+note = "Second-order taint. Stored XSS lives here. Deliberately NOT path or url: an attacker who can write arbitrary options or post meta already has the access those sinks would give them, and treating stored data as filesystem or SSRF input drowned the corpus in noise."
 
 [[sources]]
 function = "get_user_meta"
-kinds = ["html", "html_attr", "sql", "url", "path"]
+kinds = ["html", "html_attr", "sql"]
 stored = true
 
 [[sources]]
 function = "get_term_meta"
-kinds = ["html", "html_attr", "sql", "url", "path"]
+kinds = ["html", "html_attr", "sql"]
 stored = true
 
 [[sources]]
 function = "get_comment_meta"
-kinds = ["html", "html_attr", "sql", "url", "path"]
+kinds = ["html", "html_attr", "sql"]
 stored = true
 
 [[sources]]
 function = "get_metadata"
-kinds = ["html", "html_attr", "sql", "url", "path"]
+kinds = ["html", "html_attr", "sql"]
 stored = true
 
 [[sources]]
 function = "get_option"
-kinds = ["html", "html_attr", "sql", "url", "path"]
+kinds = ["html", "html_attr", "sql"]
 stored = true
 
 [[sources]]
 function = "get_site_option"
-kinds = ["html", "html_attr", "sql", "url", "path"]
+kinds = ["html", "html_attr", "sql"]
 stored = true
 
 [[sources]]
 function = "get_transient"
-kinds = ["html", "html_attr", "sql", "url", "path"]
+kinds = ["html", "html_attr", "sql"]
 stored = true
 
 [[sources]]
 function = "get_site_transient"
-kinds = ["html", "html_attr", "sql", "url", "path"]
+kinds = ["html", "html_attr", "sql"]
 stored = true
 
 [[sources]]
 function = "get_theme_mod"
-kinds = ["html", "html_attr", "sql", "url", "path"]
+kinds = ["html", "html_attr", "sql"]
 stored = true
 
 [[sources]]
 class = "wpdb"
 method = "get_results"
-kinds = ["html", "html_attr", "sql", "url", "path"]
+kinds = ["html", "html_attr", "sql"]
 stored = true
 
 [[sources]]
 class = "wpdb"
 method = "get_var"
-kinds = ["html", "html_attr", "sql", "url", "path"]
+kinds = ["html", "html_attr", "sql"]
 stored = true
 
 [[sources]]
 class = "wpdb"
 method = "get_row"
-kinds = ["html", "html_attr", "sql", "url", "path"]
+kinds = ["html", "html_attr", "sql"]
 stored = true
 
 [[sources]]
 class = "wpdb"
 method = "get_col"
-kinds = ["html", "html_attr", "sql", "url", "path"]
+kinds = ["html", "html_attr", "sql"]
 stored = true
 
 # =============================================================================

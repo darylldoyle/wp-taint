@@ -39,7 +39,28 @@ negatives.
 `Foo::$value` is one slot. Taint written to `$this->value` in any instance of
 `Foo` is visible from every read of `$value` on any `Foo`.
 
+The trace does reach back to the source: the map records the trace of the write
+that tainted a property, and a read splices it in ahead of its own step. Without
+that, roughly a fifth of corpus findings had traces that began "read from
+property `$x`" and stopped, which is not something a reviewer can act on.
+
 **Direction:** over-approximating.
+
+### Stored sources carry HTML and SQL taint only, not path or url
+
+`get_option()`, `get_post_meta()` and the rest are modelled as introducing
+`html`, `html_attr` and `sql`. They are deliberately **not** modelled as
+introducing `path` or `url`.
+
+Stored XSS and second-order SQL injection are real and common. "An option holds
+a directory name, therefore every `unlink()` downstream is path traversal" is
+not: an attacker who can write arbitrary options already has the access those
+sinks would give them. Modelling it that way produced several hundred findings
+on the corpus with no plausible attack behind any of them.
+
+**Direction:** under-approximating, deliberately. If a codebase really does let
+a low-privilege user write a path into an option, add a project-local
+`[[sources]]` entry with `kinds = ["path"]`.
 
 ### Dynamic calls are not followed
 

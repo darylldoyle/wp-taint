@@ -198,3 +198,64 @@ it('follows taint through a static property', function (): void {
     expect($result->findings)->toHaveCount(1);
     expect($result->findings->all()[0]->ruleId)->toBe('wp.xss.unescaped-output');
 });
+
+it('traces a property flow back to its source across method boundaries', function (): void {
+    // A trace that begins "read from property $x" and stops there tells a
+    // reviewer nothing, and a finding they cannot judge is one they learn to
+    // ignore. On the corpus roughly a fifth of findings entered through a
+    // property read, so this is not a corner case.
+    $result = scanCode(<<<'PHP'
+        <?php
+        class Acme
+        {
+            private $label;
+
+            public function capture()
+            {
+                $this->label = $_GET['label'];
+            }
+
+            public function render()
+            {
+                echo $this->label;
+            }
+        }
+        PHP);
+
+    expect($result->findings)->toHaveCount(1);
+
+    $trace = $result->findings->all()[0]->trace;
+    $verbs = array_map(static fn (object $step): string => $step->verb->value, $trace);
+
+    expect($verbs[0])->toBe('source');
+    expect($verbs[count($verbs) - 1])->toBe('sink');
+
+    $descriptions = implode("\n", array_map(static fn (object $step): string => $step->description, $trace));
+
+    expect($descriptions)->toContain('superglobal $_GET');
+    expect($descriptions)->toContain('Written to property $label');
+    expect($descriptions)->toContain('Read from property $label');
+});
+
+it('traces a static property flow back to its source', function (): void {
+    $result = scanCode(<<<'PHP'
+        <?php
+        class Acme
+        {
+            private static $label;
+
+            public static function capture()
+            {
+                self::$label = $_POST['label'];
+            }
+
+            public static function render()
+            {
+                echo self::$label;
+            }
+        }
+        PHP);
+
+    expect($result->findings)->toHaveCount(1);
+    expect($result->findings->all()[0]->trace[0]->verb->value)->toBe('source');
+});

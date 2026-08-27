@@ -124,16 +124,24 @@ final class MissingAjaxCapabilityCheck implements StructuralRule
 
             $name = AstHelper::functionName($call);
 
-            if ($name !== null && in_array($name, self::AUTHORIZATION_FUNCTIONS, true)) {
+            if ($name === null) {
+                continue;
+            }
+
+            if (in_array($name, self::AUTHORIZATION_FUNCTIONS, true) || $this->looksLikeCheck($name)) {
                 return true;
             }
         }
 
-        // `$this->verify_request()` and friends. A method call whose name reads
-        // like a check is accepted: the alternative is a false positive on
-        // every codebase that factors its checks into a helper, and a false
-        // positive on an authorization rule is exactly the kind that gets the
-        // tool muted.
+        // `$this->verify_request()` and friends. A call whose name reads like a
+        // check is accepted, whether it is a function or a method: the
+        // alternative is a false positive on every codebase that factors its
+        // checks into a helper, and a false positive on an authorization rule
+        // is exactly the kind that gets the tool muted.
+        //
+        // Advanced Custom Fields is the case that forced this. Its nopriv
+        // handlers all begin `if ( ! acf_verify_ajax() )`, which is a plain
+        // function call, and we reported every one of them.
         foreach ((new NodeFinder())->findInstanceOf($stmts, Node\Expr\MethodCall::class) as $call) {
             if (! $call instanceof Node\Expr\MethodCall || ! $call->name instanceof Node\Identifier) {
                 continue;
