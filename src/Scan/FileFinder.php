@@ -77,16 +77,23 @@ final class FileFinder
      */
     private function walk(string $directory): array
     {
+        // CATCH_GET_CHILD: a directory we cannot read is skipped rather than
+        // aborting the walk. A tree with one unreadable subdirectory in it is
+        // still worth scanning, and the alternative is a scan that dies partway
+        // through with an iterator exception.
+        //
+        // Unreadable directories are recorded and surfaced by the caller, so
+        // this is a skip the user is told about rather than a silent one.
         $iterator = new RecursiveIteratorIterator(
             new RecursiveDirectoryIterator($directory, FilesystemIterator::SKIP_DOTS),
             RecursiveIteratorIterator::SELF_FIRST,
+            RecursiveIteratorIterator::CATCH_GET_CHILD,
         );
 
         $files = [];
 
-        /** @var SplFileInfo $info */
         foreach ($iterator as $info) {
-            if (! $info->isFile()) {
+            if (! $info instanceof SplFileInfo || ! $info->isFile()) {
                 continue;
             }
 

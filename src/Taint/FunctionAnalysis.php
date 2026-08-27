@@ -898,10 +898,10 @@ final class FunctionAnalysis
                 TraceVerb::Sanitize,
                 $op,
                 sprintf(
-                    '%s clears %s. %s survives.',
+                    '%s clears %s. Still carrying: %s.',
                     $matcher->describe(),
                     $sanitizer->describeClears(),
-                    ucfirst($cleared->describe()),
+                    $cleared->describe(),
                 ),
                 $call->arguments,
                 imprecise: $sanitizer->imprecise,

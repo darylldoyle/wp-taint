@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Enshrined\WpTaint\Taint;
 
 use Enshrined\WpTaint\Cfg\ParsedFile;
+use Enshrined\WpTaint\Finding\TraceVerb;
 use Enshrined\WpTaint\Registry\Registry;
 use PHPCfg\Op;
 use PHPCfg\Operand;
@@ -77,7 +78,7 @@ final class Explainer
 
                     $observations = [
                         ...$observations,
-                        ...$this->observeOperands($op, $context, $state, $types),
+                        ...$this->observeOperands($op, $context, $state, $types, $kind),
                     ];
                 }
             }
@@ -97,14 +98,32 @@ final class Explainer
     /**
      * @return list<string>
      */
-    private function observeOperands(Op $op, FunctionContext $context, TaintState $state, ClassTypeMap $types): array
-    {
+    private function observeOperands(
+        Op $op,
+        FunctionContext $context,
+        TaintState $state,
+        ClassTypeMap $types,
+        ?TaintKind $kind,
+    ): array {
         $observations = [];
 
         foreach (OperandHelper::operandsOf($op) as $operand) {
             $provenance = $state->provenanceOf($operand);
 
             if ($provenance !== null) {
+                // When the question is about a specific kind that is *absent*,
+                // "assigned to $safe" is not an answer. Walk back and name the
+                // sanitizer that cleared it.
+                if ($kind !== null && ! $state->effectiveTaintOf($operand)->has($kind)) {
+                    $cleared = $this->findSanitizer($operand, $state, 0);
+
+                    if ($cleared !== null) {
+                        $observations[] = 'sanitize: ' . $cleared;
+
+                        continue;
+                    }
+                }
+
                 $observations[] = sprintf('%s: %s', $provenance->verb->value, $provenance->description);
 
                 continue;
@@ -114,6 +133,36 @@ final class Explainer
         }
 
         return $observations;
+    }
+
+    /**
+     * The nearest sanitize step upstream of an operand.
+     */
+    private function findSanitizer(Operand $operand, TaintState $state, int $depth): ?string
+    {
+        if ($depth > 24) {
+            return null;
+        }
+
+        $provenance = $state->provenanceOf($operand);
+
+        if ($provenance === null) {
+            return null;
+        }
+
+        if ($provenance->verb === TraceVerb::Sanitize) {
+            return $provenance->description;
+        }
+
+        foreach ($provenance->predecessors as $predecessor) {
+            $found = $this->findSanitizer($predecessor, $state, $depth + 1);
+
+            if ($found !== null) {
+                return $found;
+            }
+        }
+
+        return null;
     }
 
     /**
