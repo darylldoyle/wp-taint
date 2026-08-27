@@ -20,19 +20,41 @@ namespace Enshrined\WpTaint\Taint;
  * directions, keyed by name.
  *
  * So this table sits alongside {@see PropertyTaintMap} and converges in the same
- * interprocedural loop. Each entry is what a file's `{main}` body may find in a
- * variable when it starts, unioned over every site that includes it — an
- * over-approximation, and the honest one: a template included from two places
- * really can see either caller's state.
+ * interprocedural loop.
+ *
+ * ## Two halves, deliberately
+ *
+ * **In** is what a file may find in a variable when it starts, unioned over
+ * every site that includes it. **Out** is what the file's own top-level code
+ * leaves behind, and only for names it actually assigns.
+ *
+ * Keeping them apart is not tidiness. With one entry per file, a variable
+ * pushed *in* by one includer came straight back *out* to every other:
+ * Jetpack's `constants.php` handed `$page_routes` — a name it never mentions —
+ * to a function that merely required it, and twenty findings followed. The
+ * conflation makes every shared partial a channel between unrelated callers.
+ *
+ * `in` is still unioned across includers, which is a real over-approximation and
+ * the honest one: a template included from two places can see either caller's
+ * state.
  *
  * Union only, so the loop terminates.
  */
 final class ScopeTable
 {
     /**
+     * What each file may find in scope on entry.
+     *
      * @var array<string, array<string, TaintSet>> file key => variable name => taint
      */
-    private array $scopes = [];
+    private array $in = [];
+
+    /**
+     * What each file leaves behind, for names it assigns itself.
+     *
+     * @var array<string, array<string, TaintSet>> file key => variable name => taint
+     */
+    private array $out = [];
 
     /**
      * How many names to track per file.
@@ -43,53 +65,36 @@ final class ScopeTable
      */
     private const MAX_NAMES = 128;
 
-    public function taintOf(string $key, string $name): TaintSet
+    /**
+     * @return array<string, TaintSet>
+     */
+    public function scopeInto(string $key): array
     {
-        return $this->scopes[$key][$name] ?? TaintSet::empty();
+        return $this->in[$key] ?? [];
     }
 
     /**
      * @return array<string, TaintSet>
      */
-    public function scopeOf(string $key): array
+    public function scopeOutOf(string $key): array
     {
-        return $this->scopes[$key] ?? [];
-    }
-
-    public function add(string $key, string $name, TaintSet $taint): bool
-    {
-        if ($taint->isEmpty()) {
-            return false;
-        }
-
-        if (! isset($this->scopes[$key][$name]) && count($this->scopes[$key] ?? []) >= self::MAX_NAMES) {
-            return false;
-        }
-
-        $existing = $this->scopes[$key][$name] ?? TaintSet::empty();
-        $merged = $existing->union($taint);
-
-        if ($merged->equals($existing)) {
-            return false;
-        }
-
-        $this->scopes[$key][$name] = $merged;
-
-        return true;
+        return $this->out[$key] ?? [];
     }
 
     /**
      * @param array<string, TaintSet> $scope
      */
-    public function addAll(string $key, array $scope): bool
+    public function addInto(string $key, array $scope): bool
     {
-        $changed = false;
+        return self::merge($this->in, $key, $scope);
+    }
 
-        foreach ($scope as $name => $taint) {
-            $changed = $this->add($key, $name, $taint) || $changed;
-        }
-
-        return $changed;
+    /**
+     * @param array<string, TaintSet> $scope
+     */
+    public function addOutOf(string $key, array $scope): bool
+    {
+        return self::merge($this->out, $key, $scope);
     }
 
     /**
@@ -100,8 +105,12 @@ final class ScopeTable
     {
         $changed = false;
 
-        foreach ($other->scopes as $key => $scope) {
-            $changed = $this->addAll($key, $scope) || $changed;
+        foreach ($other->in as $key => $scope) {
+            $changed = $this->addInto($key, $scope) || $changed;
+        }
+
+        foreach ($other->out as $key => $scope) {
+            $changed = $this->addOutOf($key, $scope) || $changed;
         }
 
         return $changed;
@@ -109,6 +118,37 @@ final class ScopeTable
 
     public function count(): int
     {
-        return count($this->scopes);
+        return count($this->in) + count($this->out);
+    }
+
+    /**
+     * @param array<string, array<string, TaintSet>> $target
+     * @param array<string, TaintSet>                $scope
+     */
+    private static function merge(array &$target, string $key, array $scope): bool
+    {
+        $changed = false;
+
+        foreach ($scope as $name => $taint) {
+            if ($taint->isEmpty()) {
+                continue;
+            }
+
+            if (! isset($target[$key][$name]) && count($target[$key] ?? []) >= self::MAX_NAMES) {
+                continue;
+            }
+
+            $existing = $target[$key][$name] ?? TaintSet::empty();
+            $merged = $existing->union($taint);
+
+            if ($merged->equals($existing)) {
+                continue;
+            }
+
+            $target[$key][$name] = $merged;
+            $changed = true;
+        }
+
+        return $changed;
     }
 }

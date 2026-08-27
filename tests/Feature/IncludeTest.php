@@ -185,3 +185,46 @@ it('can be turned off', function (): void {
 
     expect($result->findings)->toBeEmpty();
 });
+
+it('does not pass one includer variables through a shared partial to another', function (): void {
+    // The failure that nearly shipped. With one scope entry per file, a variable
+    // pushed *in* by one includer came straight back *out* to every other, and a
+    // partial neither of them wrote became a channel between them.
+    //
+    // Jetpack's constants.php was handing out $page_routes, a name it never
+    // mentions, and twenty findings followed.
+    $result = scanTree([
+        'shared.php' => <<<'PHP'
+            <?php
+            $acme_version = '1.0';
+            PHP,
+        'tainted.php' => <<<'PHP'
+            <?php
+            $payload = $_GET['payload'];
+            require __DIR__ . '/shared.php';
+            PHP,
+        'clean.php' => <<<'PHP'
+            <?php
+            require __DIR__ . '/shared.php';
+            echo $payload;
+            PHP,
+    ]);
+
+    expect($result->findings)->toBeEmpty();
+});
+
+it('still carries what the partial does assign', function (): void {
+    $result = scanTree([
+        'shared.php' => <<<'PHP'
+            <?php
+            $acme_mode = $_GET['mode'];
+            PHP,
+        'index.php' => <<<'PHP'
+            <?php
+            require __DIR__ . '/shared.php';
+            echo $acme_mode;
+            PHP,
+    ]);
+
+    expect(findingSignatures($result))->toBe(['wp.xss.unescaped-output@3']);
+});

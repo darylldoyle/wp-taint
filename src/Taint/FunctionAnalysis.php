@@ -209,10 +209,9 @@ final class FunctionAnalysis
      * which is how a config partial works: `include 'config.php'` and the
      * settings it assigned are in scope afterwards.
      *
-     * One entry per file, holding both what includers pass in and what the file
-     * itself produces. That conflates two includers' values, which is the same
-     * over-approximation the inbound direction already makes — a template
-     * included from two places really can see either caller's state.
+     * Only names this file *assigns*. A variable that merely passed through —
+     * seeded in by an includer and never touched — is not something this file
+     * produced.
      */
     private function publishScope(): void
     {
@@ -220,7 +219,47 @@ final class FunctionAnalysis
             return;
         }
 
-        $this->scopes->addAll($this->context->key, $this->namedScope());
+        $assigned = $this->assignedNames();
+
+        if ($assigned === []) {
+            return;
+        }
+
+        $scope = [];
+
+        foreach ($this->namedScope() as $name => $taint) {
+            if (isset($assigned[$name])) {
+                $scope[$name] = $taint;
+            }
+        }
+
+        $this->scopes->addOutOf($this->context->key, $scope);
+    }
+
+    /**
+     * Names this body assigns to, as a set.
+     *
+     * @return array<string, true>
+     */
+    private function assignedNames(): array
+    {
+        $names = [];
+
+        foreach ($this->blocks as $block) {
+            foreach ($block->children as $op) {
+                if (! $op instanceof Op\Expr\Assign && ! $op instanceof Op\Expr\AssignRef) {
+                    continue;
+                }
+
+                $name = OperandHelper::variableName($op->var);
+
+                if ($name !== null) {
+                    $names[$name] = true;
+                }
+            }
+        }
+
+        return $names;
     }
 
     /**
@@ -238,7 +277,7 @@ final class FunctionAnalysis
         }
 
         $this->seedScope(
-            $this->scopes->scopeOf($this->context->key),
+            $this->scopes->scopeInto($this->context->key),
             '$%s was in scope at the include that loaded this file.',
         );
     }
@@ -326,7 +365,7 @@ final class FunctionAnalysis
         $visible = $this->namedScope();
 
         foreach ($targets as $target) {
-            $changed = $this->scopes->addAll(strtolower($target . '::{main}'), $visible) || $changed;
+            $changed = $this->scopes->addInto(strtolower($target . '::{main}'), $visible) || $changed;
         }
 
         return $changed;
@@ -362,7 +401,7 @@ final class FunctionAnalysis
 
                 foreach ($this->includes->targetsFor($site) as $target) {
                     $this->seedScope(
-                        $this->scopes->scopeOf(strtolower($target . '::{main}')),
+                        $this->scopes->scopeOutOf(strtolower($target . '::{main}')),
                         sprintf('$%%s was left in scope by %s.', $target),
                     );
                 }
