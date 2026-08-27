@@ -33,6 +33,15 @@ final class AnalysisOptions
          * previous cap of 8 was clipping eleven of the fifty.
          */
         public readonly int $maxInterproceduralRounds = 32,
+        /**
+         * Whether `include` and `require` join the two files' scopes.
+         *
+         * On by default — it is the shape WordPress themes are made of. The
+         * escape hatch exists because it is also the change most likely to
+         * connect request data to a template that has never been analysed in
+         * context.
+         */
+        public readonly bool $followIncludes = true,
     ) {
     }
 

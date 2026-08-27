@@ -16,7 +16,10 @@ use Enshrined\WpTaint\Scan\WorkerPool;
  *
  * The property taint map converges in the same loop, because
  * `$this->value = $_GET['x']` in one method and `echo $this->value` in another
- * is a single flow the per-function analysis cannot see on its own.
+ * is a single flow the per-function analysis cannot see on its own. So does the
+ * scope table, for the same reason one step further out: an included template
+ * sees the includer's variables, and the includer sees whatever the template
+ * left behind.
  *
  * ## What each round is allowed to see
  *
@@ -47,15 +50,23 @@ final class InterproceduralResolver
     /**
      * @param list<FunctionContext> $functions
      *
-     * @return array{summaries: SummaryTable, properties: PropertyTaintMap, rounds: int, converged: bool}
+     * @return array{summaries: SummaryTable, properties: PropertyTaintMap, scopes: ScopeTable, rounds: int,
+     *     converged: bool}
      */
     public function resolve(array $functions): array
     {
         $summaries = new SummaryTable();
         $properties = new PropertyTaintMap();
+        $scopes = new ScopeTable();
 
         if (! $this->options->interprocedural) {
-            return ['summaries' => $summaries, 'properties' => $properties, 'rounds' => 0, 'converged' => true];
+            return [
+                'summaries' => $summaries,
+                'properties' => $properties,
+                'scopes' => $scopes,
+                'rounds' => 0,
+                'converged' => true,
+            ];
         }
 
         $ordered = self::callOrder($functions);
@@ -70,13 +81,16 @@ final class InterproceduralResolver
             // adds only its own results, so no worker sees another's.
             $previousSummaries = $summaries;
             $previousProperties = $properties;
+            $previousScopes = $scopes;
 
-            /** @var list<array{summaries: list<FunctionSummary>, properties: PropertyTaintMap}> $shards */
+            /** @var list<array{summaries: list<FunctionSummary>, properties: PropertyTaintMap,
+             *     scopes: ScopeTable}> $shards */
             $shards = $pool->run(
                 fn (int $shard, int $shardCount): array => $this->round(
                     $ordered,
                     $previousSummaries,
                     $previousProperties,
+                    $previousScopes,
                     $shard,
                     $shardCount,
                 ),
@@ -84,6 +98,7 @@ final class InterproceduralResolver
 
             $summaries = new SummaryTable();
             $properties = clone $previousProperties;
+            $scopes = clone $previousScopes;
             $changed = false;
 
             // Merged in shard order, then in the order each shard produced
@@ -94,6 +109,7 @@ final class InterproceduralResolver
                 }
 
                 $changed = $properties->mergeFrom($shardResult['properties']) || $changed;
+                $changed = $scopes->mergeFrom($shardResult['scopes']) || $changed;
             }
 
             foreach ($ordered as $context) {
@@ -109,6 +125,7 @@ final class InterproceduralResolver
         return [
             'summaries' => $summaries,
             'properties' => $properties,
+            'scopes' => $scopes,
             'rounds' => $rounds,
             'converged' => ! $changed,
         ];
@@ -119,18 +136,20 @@ final class InterproceduralResolver
      *
      * @param list<FunctionContext> $ordered
      *
-     * @return array{summaries: list<FunctionSummary>, properties: PropertyTaintMap}
+     * @return array{summaries: list<FunctionSummary>, properties: PropertyTaintMap, scopes: ScopeTable}
      */
     private function round(
         array $ordered,
         SummaryTable $summaries,
         PropertyTaintMap $properties,
+        ScopeTable $scopes,
         int $shard,
         int $shardCount,
     ): array {
         // A private copy, so a worker's property writes stay in that worker
         // until the parent merges them.
         $roundProperties = clone $properties;
+        $roundScopes = clone $scopes;
         $produced = [];
 
         // A private view: the previous round's summaries, plus whatever this
@@ -146,16 +165,16 @@ final class InterproceduralResolver
                 continue;
             }
 
-            $summary = $this->extractor->extract($context, $visible, $roundProperties);
+            $summary = $this->extractor->extract($context, $visible, $roundProperties, $roundScopes);
             $visible->put($summary);
             $produced[] = $summary;
 
             // A pass with no parameter seeded, purely so property writes in the
             // body land in the map. Findings are discarded.
-            $this->analyzer->analyze($context, $visible, $roundProperties, null, false);
+            $this->analyzer->analyze($context, $visible, $roundProperties, $roundScopes, null, false);
         }
 
-        return ['summaries' => $produced, 'properties' => $roundProperties];
+        return ['summaries' => $produced, 'properties' => $roundProperties, 'scopes' => $roundScopes];
     }
 
     /**

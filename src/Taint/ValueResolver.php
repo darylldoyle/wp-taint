@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Taint;
 
+use Enshrined\WpTaint\Cfg\ConstantTable;
 use PHPCfg\Op;
 use PHPCfg\Operand;
 
@@ -25,6 +26,23 @@ use PHPCfg\Operand;
  */
 final class ValueResolver
 {
+    public function __construct(private readonly ?ConstantTable $constants = null)
+    {
+    }
+
+    /**
+     * The same resolver, able to see a constant table.
+     *
+     * Returns a new instance rather than mutating, because the table is built
+     * by running the resolver over the code — and a resolver that gained
+     * knowledge halfway through a walk would give different answers to the same
+     * question depending on when it was asked.
+     */
+    public function withConstants(ConstantTable $constants): self
+    {
+        return new self($constants);
+    }
+
     /**
      * How far back to walk before giving up.
      *
@@ -68,6 +86,7 @@ final class ValueResolver
 
         return match (true) {
             $definition instanceof Op\Expr\Assign => $this->strings($definition->expr, $depth + 1),
+            $definition instanceof Op\Expr\ConstFetch => $this->fromConstant($definition),
             $definition instanceof Op\Phi => $this->fromPhi($definition, $depth),
             $definition instanceof Op\Expr\ConcatList => $this->fromParts($definition->list, $depth),
             $definition instanceof Op\Expr\BinaryOp\Concat => $this->fromParts(
@@ -76,6 +95,44 @@ final class ValueResolver
             ),
             default => [],
         };
+    }
+
+    /**
+     * A constant's value, from the table built over the whole scan.
+     *
+     * WordPress builds paths out of constants and almost nothing else, so this
+     * is what makes `require_once ACME_DIR . 'inc/settings.php'` resolvable at
+     * all.
+     *
+     * @return list<string>
+     */
+    private function fromConstant(Op\Expr\ConstFetch $op): array
+    {
+        if ($this->constants === null) {
+            return [];
+        }
+
+        // A namespaced constant falls back to the global one when the
+        // namespaced one does not exist, so both names have to be tried.
+        foreach ([$op->nsName, $op->name] as $operand) {
+            if ($operand === null) {
+                continue;
+            }
+
+            $name = OperandHelper::literalString($operand);
+
+            if ($name === null) {
+                continue;
+            }
+
+            $values = $this->constants->valuesOf($name);
+
+            if ($values !== []) {
+                return $values;
+            }
+        }
+
+        return [];
     }
 
     /**

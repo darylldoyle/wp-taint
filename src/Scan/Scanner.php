@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace Enshrined\WpTaint\Scan;
 
 use Enshrined\WpTaint\Cfg\CfgBuilder;
+use Enshrined\WpTaint\Cfg\ConstantTableBuilder;
+use Enshrined\WpTaint\Cfg\IncludeGraphBuilder;
+use Enshrined\WpTaint\Cfg\IncludeResolver;
 use Enshrined\WpTaint\Cfg\ParsedFile;
 use Enshrined\WpTaint\Cfg\ParseError;
 use Enshrined\WpTaint\Finding\Finding;
@@ -109,15 +112,20 @@ final class Scanner
             $functions->addFile($file);
         }
 
-        $values = new ValueResolver();
         $receivers = new ReceiverResolver();
-        $callables = new CallableResolver($this->registry, $functions, $values);
         $contexts = $functions->all();
 
-        // Built before the structural rules run, because the authorization
-        // rules walk it: "does this AJAX callback reach a capability check,
-        // through however many helpers" is a call-graph question, not a shape
-        // one.
+        // Constants first: WordPress builds include paths out of them and
+        // almost nothing else, so resolution stops dead without this, and
+        // everything downstream wants a resolver that can see them.
+        $constants = (new ConstantTableBuilder(new ValueResolver()))->build($contexts);
+        $values = (new ValueResolver())->withConstants($constants);
+        $callables = new CallableResolver($this->registry, $functions, $values);
+
+        // The hook and call graphs are built before the structural rules run,
+        // because the authorization rules walk them: "does this AJAX callback
+        // reach a capability check, through however many helpers" is a
+        // call-graph question, not a shape one.
         $hooks = (new HookGraphBuilder($callables, $values, $receivers))->build($contexts);
         $callGraph = (new CallGraphBuilder($this->registry, $functions, $values, $receivers, $callables, $hooks))
             ->build($contexts);
@@ -159,7 +167,22 @@ final class Scanner
             $receivers,
             $hooks,
         );
-        $analyzer = new IntraproceduralAnalyzer($this->registry, $functions, $resolver, $this->options);
+        // Include sites resolve before analysis, like the hook graph: which
+        // file an include loads is a static fact.
+        $includes = $this->options->followIncludes
+            ? (new IncludeGraphBuilder(
+                new IncludeResolver($values->withConstants($constants), $files, $this->root),
+                $this->root,
+            ))->build($contexts)
+            : null;
+
+        $analyzer = new IntraproceduralAnalyzer(
+            $this->registry,
+            $functions,
+            $resolver,
+            $this->options,
+            $includes,
+        );
         $extractor = new SummaryExtractor($analyzer, $this->options);
         $interprocedural = new InterproceduralResolver($analyzer, $extractor, $this->options, $this->jobs);
 
@@ -200,6 +223,7 @@ final class Scanner
                         $context,
                         $resolution['summaries'],
                         $resolution['properties'],
+                        $resolution['scopes'],
                         null,
                         true,
                     );

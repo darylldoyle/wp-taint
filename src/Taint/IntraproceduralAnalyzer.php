@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Taint;
 
+use Enshrined\WpTaint\Cfg\IncludeGraph;
 use Enshrined\WpTaint\Registry\Registry;
 
 /**
@@ -20,6 +21,7 @@ final class IntraproceduralAnalyzer
         private readonly UserFunctionTable $functions,
         private readonly CallResolver $resolver,
         private readonly AnalysisOptions $options,
+        private readonly ?IncludeGraph $includes = null,
     ) {
     }
 
@@ -33,6 +35,7 @@ final class IntraproceduralAnalyzer
         FunctionContext $context,
         SummaryTable $summaries,
         PropertyTaintMap $properties,
+        ScopeTable $scopes,
         ?int $seedParameterIndex = null,
         bool $collectFindings = true,
     ): AnalysisResult {
@@ -46,6 +49,8 @@ final class IntraproceduralAnalyzer
             new LiteralAnalyzer($this->registry, $properties),
             $summaries,
             $properties,
+            $scopes,
+            $this->includes,
             $this->options,
             $seedParameterIndex,
             $collectFindings,

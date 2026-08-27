@@ -71,7 +71,7 @@ final class CfgBuilder
             // Lower the constructs php-cfg cannot parse, before it sees them.
             // This runs ahead of php-cfg's own NameResolver, so the rewritten
             // nodes still get their names resolved normally.
-            $compatibility = new CompatibilityVisitor();
+            $compatibility = new CompatibilityVisitor($path);
             $traverser = new NodeTraverser();
             $traverser->addVisitor($compatibility);
             $ast = $traverser->traverse($ast);

@@ -31,6 +31,7 @@ final class SummaryExtractor
         FunctionContext $context,
         SummaryTable $summaries,
         PropertyTaintMap $properties,
+        ScopeTable $scopes,
     ): FunctionSummary {
         $parameterCount = $context->parameterCount();
         $analysed = min($parameterCount, $this->options->maxSummarisedParameters);
@@ -42,7 +43,7 @@ final class SummaryExtractor
         $imprecise = $parameterCount > $analysed;
 
         for ($index = 0; $index < $analysed; $index++) {
-            $result = $this->analyzer->analyze($context, $summaries, $properties, $index, false);
+            $result = $this->analyzer->analyze($context, $summaries, $properties, $scopes, $index, false);
 
             $paramToReturn[$index] = $result->returnTaint;
             $clears[$index] = TaintSet::allDataflowKinds()->without($result->returnTaint);
@@ -61,7 +62,7 @@ final class SummaryExtractor
         // What the function returns with no parameter tainted at all: a wrapper
         // around get_option() introduces stored taint regardless of its
         // arguments, and a caller has to know that.
-        $baseline = $this->analyzer->analyze($context, $summaries, $properties, null, false);
+        $baseline = $this->analyzer->analyze($context, $summaries, $properties, $scopes, null, false);
 
         return new FunctionSummary(
             $context->key,

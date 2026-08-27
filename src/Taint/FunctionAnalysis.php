@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Taint;
 
+use Enshrined\WpTaint\Cfg\IncludeGraph;
 use Enshrined\WpTaint\Finding\Finding;
 use Enshrined\WpTaint\Finding\Fingerprint;
 use Enshrined\WpTaint\Finding\Severity;
@@ -90,6 +91,9 @@ final class FunctionAnalysis
     /** Set when a pair is discovered, so the pass that found it reports a change. */
     private bool $aliasChanged = false;
 
+    /** Distinguishes several include sites sharing one line. Reset each pass. */
+    private int $includeOffset = 0;
+
     /**
      * Every named operand in the body, grouped by variable name.
      *
@@ -127,6 +131,8 @@ final class FunctionAnalysis
         private readonly LiteralAnalyzer $literals,
         private readonly SummaryTable $summaries,
         private readonly PropertyTaintMap $properties,
+        private readonly ScopeTable $scopes,
+        private readonly ?IncludeGraph $includes,
         private readonly AnalysisOptions $options,
         private readonly ?int $seedParameterIndex,
         private readonly bool $collectFindings,
@@ -151,6 +157,7 @@ final class FunctionAnalysis
     {
         $this->types->seedFromFunction($this->context);
         $this->seedSources();
+        $this->seedIncludedScope();
 
         $iterations = 0;
 
@@ -158,6 +165,8 @@ final class FunctionAnalysis
             $changed = $this->pass();
             $iterations++;
         } while ($changed && $iterations < $this->options->maxIterations);
+
+        $this->publishScope();
 
         if ($changed) {
             $this->warnings[] = new AnalysisWarning(
@@ -192,6 +201,190 @@ final class FunctionAnalysis
      * Superglobals are the only sources that are not calls, so they are seeded
      * up front by walking every operand the function mentions.
      */
+    /**
+     * Publish what a file's top-level code leaves in its variables.
+     *
+     * The other half of the join. An includer reads this back after the include,
+     * which is how a config partial works: `include 'config.php'` and the
+     * settings it assigned are in scope afterwards.
+     *
+     * One entry per file, holding both what includers pass in and what the file
+     * itself produces. That conflates two includers' values, which is the same
+     * over-approximation the inbound direction already makes — a template
+     * included from two places really can see either caller's state.
+     */
+    private function publishScope(): void
+    {
+        if (! $this->context->isMain()) {
+            return;
+        }
+
+        $this->scopes->addAll($this->context->key, $this->namedScope());
+    }
+
+    /**
+     * Start a file's top-level code with whatever its includers had in scope.
+     *
+     * An include shares the includer's variables, so `template.php` opens with
+     * `$title` already holding whatever the file that included it put there.
+     * Only `{main}` bodies: a function has its own scope and an include inside
+     * one shares *that*, which the site-level join below handles.
+     */
+    private function seedIncludedScope(): void
+    {
+        if (! $this->context->isMain()) {
+            return;
+        }
+
+        $scope = $this->scopes->scopeOf($this->context->key);
+
+        if ($scope === []) {
+            return;
+        }
+
+        foreach ($this->blocks as $block) {
+            foreach ($block->children as $op) {
+                if (! $op instanceof Op) {
+                    continue;
+                }
+
+                foreach (OperandHelper::operandsOf($op) as $operand) {
+                    $name = OperandHelper::variableName($operand);
+
+                    if ($name === null || ! isset($scope[$name])) {
+                        continue;
+                    }
+
+                    $this->state->add($operand, $scope[$name], new Provenance(
+                        TraceVerb::Propagate,
+                        $op,
+                        sprintf('$%s was in scope at the include that loaded this file.', $name),
+                    ));
+                }
+            }
+        }
+    }
+
+    /**
+     * Join the includer's scope to the included file's, both ways.
+     *
+     * PHP includes share the includer's variables, which is the whole reason
+     * the theme shape works — `$title = $_GET['title']; include 'tpl.php';` and
+     * the template echoes `$title`. Nothing in the call machinery models that:
+     * a call has positional parameters, an include has the caller's entire
+     * scope.
+     *
+     * Out, then back. The out half lands in the shared {@see ScopeTable}, which
+     * the interprocedural loop iterates to a fixed point exactly as it does the
+     * property map. The back half reads the includee's scope from that same
+     * table rather than descending into it, so an include cycle terminates.
+     */
+    private function joinIncludedScope(Op\Expr\Include_ $op): bool
+    {
+        if ($this->includes === null) {
+            return false;
+        }
+
+        $site = IncludeGraph::siteKey(
+            $this->context->file->relativePath,
+            $op->getLine(),
+            $this->includeOffset++,
+        );
+
+        $targets = $this->includes->targetsFor($site);
+
+        if ($targets === []) {
+            // An include we cannot follow is a hole the size of the file behind
+            // it, and the reader should know the engine stopped here.
+            $this->imprecise = true;
+
+            return false;
+        }
+
+        $changed = false;
+        $visible = $this->namedScope();
+
+        foreach ($targets as $target) {
+            $key = strtolower($target . '::{main}');
+            $changed = $this->scopes->addAll($key, $visible) || $changed;
+            $changed = $this->applyIncludedScope($op, $key, $target) || $changed;
+        }
+
+        return $changed;
+    }
+
+    /**
+     * What the included file left behind, back onto the includer's variables.
+     */
+    private function applyIncludedScope(Op\Expr\Include_ $op, string $key, string $target): bool
+    {
+        $scope = $this->scopes->scopeOf($key);
+
+        if ($scope === []) {
+            return false;
+        }
+
+        $changed = false;
+
+        foreach ($this->blocks as $block) {
+            foreach ($block->children as $inner) {
+                if (! $inner instanceof Op) {
+                    continue;
+                }
+
+                foreach (OperandHelper::operandsOf($inner) as $operand) {
+                    $name = OperandHelper::variableName($operand);
+
+                    if ($name === null || ! isset($scope[$name])) {
+                        continue;
+                    }
+
+                    $changed = $this->state->add($operand, $scope[$name], new Provenance(
+                        TraceVerb::Propagate,
+                        $op,
+                        sprintf('$%s was left in scope by %s.', $name, $target),
+                    )) || $changed;
+                }
+            }
+        }
+
+        return $changed;
+    }
+
+    /**
+     * Every named variable this body holds taint in, for handing to an include.
+     *
+     * @return array<string, TaintSet>
+     */
+    private function namedScope(): array
+    {
+        $scope = [];
+
+        foreach ($this->blocks as $block) {
+            foreach ($block->children as $op) {
+                if (! $op instanceof Op) {
+                    continue;
+                }
+
+                foreach (OperandHelper::operandsOf($op) as $operand) {
+                    $name = OperandHelper::variableName($operand);
+
+                    if ($name === null) {
+                        continue;
+                    }
+
+                    $taint = $this->state->effectiveTaintOf($operand);
+
+                    if (! $taint->isEmpty()) {
+                        $scope[$name] = ($scope[$name] ?? TaintSet::empty())->union($taint);
+                    }
+                }
+            }
+        }
+
+        return $scope;
+    }
+
     private function seedSources(): void
     {
         foreach ($this->blocks as $block) {
@@ -265,6 +458,8 @@ final class FunctionAnalysis
     private function pass(): bool
     {
         $changed = false;
+
+        $this->includeOffset = 0;
 
         foreach ($this->blocks as $block) {
             foreach ($block->phi as $phi) {
@@ -1038,10 +1233,9 @@ final class FunctionAnalysis
 
         $this->checkConstructSink($op, $construct, $op->expr);
 
-        // The included file is not followed across the CFG; see
-        // KNOWN_LIMITATIONS.md. The result of an include is whatever the
-        // included file returned, which we cannot know.
-        return $this->state->set($op->result, TaintSet::empty());
+        // An include's *result* is whatever the file returned, which we cannot
+        // know. Its scope, on the other hand, we can.
+        return $this->joinIncludedScope($op) || $this->state->set($op->result, TaintSet::empty());
     }
 
     private function transferConstructSink(Op\Expr $op, string $construct, Operand $operand): bool

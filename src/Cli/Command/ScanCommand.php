@@ -98,6 +98,12 @@ final class ScanCommand extends Command
                 InputOption::VALUE_NONE,
                 'Deprecated alias for --dynamic-calls=tainted',
             )
+            ->addOption(
+                'no-follow-includes',
+                null,
+                InputOption::VALUE_NONE,
+                'Do not join scopes across include and require',
+            )
             ->addOption('no-structural-rules', null, InputOption::VALUE_NONE, 'Run taint analysis only')
             ->addOption(
                 'exclude',
@@ -201,6 +207,7 @@ final class ScanCommand extends Command
             ! $reader->bool('no-stored-taint'),
             $reader->bool('stored-taint-writes'),
             $reader->dynamicCallPolicy(),
+            ! $reader->bool('no-follow-includes'),
             $reader->bool('parse-report'),
             $reader->nullableString('dump-taint-graph'),
             ! $reader->bool('no-structural-rules'),

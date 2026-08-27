@@ -31,8 +31,10 @@ use PhpParser\NodeVisitorAbstract;
  * enclosing namespace and class are still in hand, and everything downstream
  * gets it for free.
  *
- * `__DIR__` and `__FILE__` are deliberately left alone. They belong to include
- * resolution, where the path matters for more than its value.
+ * `__DIR__` and `__FILE__` fold too, to the real path of the file being parsed.
+ * That is what makes `require_once __DIR__ . '/inc/settings.php'` resolvable —
+ * 1,680 sites in the corpus — and it has to happen here because this is the only
+ * point that knows which file the AST came from.
  *
  * Two of those — `match` and `?->` — have been in the language since PHP 8.0
  * and are ordinary in any plugin written in the last few years. Without this
@@ -67,6 +69,10 @@ final class CompatibilityVisitor extends NodeVisitorAbstract
      * statically, so it is left opaque rather than folded to a wrong answer.
      */
     private int $traitDepth = 0;
+
+    public function __construct(private readonly ?string $path = null)
+    {
+    }
 
     /**
      * Which constructs were rewritten, for `dump-cfg --show-lowering`.
@@ -157,6 +163,10 @@ final class CompatibilityVisitor extends NodeVisitorAbstract
             $node instanceof Node\Scalar\MagicConst\Method => $class === ''
                 ? $function
                 : $class . '::' . $function,
+            $node instanceof Node\Scalar\MagicConst\File => $this->path,
+            $node instanceof Node\Scalar\MagicConst\Dir => $this->path === null
+                ? null
+                : dirname($this->path),
             default => null,
         };
 

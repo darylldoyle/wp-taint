@@ -44,6 +44,7 @@ final class Explainer
         array $contexts,
         SummaryTable $summaries,
         PropertyTaintMap $properties,
+        ScopeTable $scopes,
         ?TaintKind $kind,
     ): Explanation {
         $observations = [];
@@ -55,7 +56,7 @@ final class Explainer
                 continue;
             }
 
-            $result = $this->analyzer->analyze($context, $summaries, $properties, null, false);
+            $result = $this->analyzer->analyze($context, $summaries, $properties, $scopes, null, false);
             $state = $result->state;
 
             if ($state === null) {

@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace Enshrined\WpTaint\Cli\Command;
 
 use Enshrined\WpTaint\Cfg\CfgBuilder;
+use Enshrined\WpTaint\Cfg\ConstantTableBuilder;
+use Enshrined\WpTaint\Cfg\IncludeGraphBuilder;
+use Enshrined\WpTaint\Cfg\IncludeResolver;
 use Enshrined\WpTaint\Cli\Application;
 use Enshrined\WpTaint\Cli\ExitCode;
 use Enshrined\WpTaint\Cli\InputReader;
@@ -47,6 +50,12 @@ final class ExplainCommand extends Command
             ->addOption('kind', null, InputOption::VALUE_REQUIRED, 'The taint kind to ask about')
             ->addOption('registry', null, InputOption::VALUE_REQUIRED, 'Registry name or path', 'wordpress')
             ->addOption('scope', null, InputOption::VALUE_REQUIRED, 'Directory to analyse for cross-file flows')
+            ->addOption(
+                'no-follow-includes',
+                null,
+                InputOption::VALUE_NONE,
+                'Do not join scopes across include and require',
+            )
             ->addOption(
                 'dynamic-calls',
                 null,
@@ -109,6 +118,7 @@ final class ExplainCommand extends Command
 
         $options = new AnalysisOptions(
             dynamicCalls: $reader->dynamicCallPolicy(),
+            followIncludes: ! $reader->bool('no-follow-includes'),
         );
 
         $builder = new CfgBuilder($root);
@@ -147,26 +157,38 @@ final class ExplainCommand extends Command
             return ExitCode::ERROR;
         }
 
-        $values = new ValueResolver();
+        $contexts = $functions->all();
         $receivers = new ReceiverResolver();
+        $constants = (new ConstantTableBuilder(new ValueResolver()))->build($contexts);
+        $values = (new ValueResolver())->withConstants($constants);
         $callables = new CallableResolver($registry, $functions, $values);
 
         // The same hook graph the scan builds. Without it `explain` would say a
         // value is clean where `scan` reports a finding through a filter
         // callback, and the whole point of this command is that the two agree.
-        $hooks = (new HookGraphBuilder($callables, $values, $receivers))->build($functions->all());
+        $hooks = (new HookGraphBuilder($callables, $values, $receivers))->build($contexts);
+
+        // Same include graph the scan builds, or `explain` would report a value
+        // clean where `scan` reports a finding through a template.
+        $includes = $options->followIncludes
+            ? (new IncludeGraphBuilder(
+                new IncludeResolver($values, (new FileFinder())->find([$scope]), $root),
+                $root,
+            ))->build($contexts)
+            : null;
 
         $resolver = new CallResolver($registry, $functions, $callables, $values, $receivers, $hooks);
-        $analyzer = new IntraproceduralAnalyzer($registry, $functions, $resolver, $options);
+        $analyzer = new IntraproceduralAnalyzer($registry, $functions, $resolver, $options, $includes);
         $extractor = new SummaryExtractor($analyzer, $options);
-        $resolution = (new InterproceduralResolver($analyzer, $extractor, $options))->resolve($functions->all());
+        $resolution = (new InterproceduralResolver($analyzer, $extractor, $options))->resolve($contexts);
 
         $explanation = (new Explainer($registry, $resolver, $analyzer, $options))->explain(
             $target,
             $line,
-            $functions->all(),
+            $contexts,
             $resolution['summaries'],
             $resolution['properties'],
+            $resolution['scopes'],
             $kind,
         );
 

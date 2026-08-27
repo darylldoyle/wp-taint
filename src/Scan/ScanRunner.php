@@ -87,6 +87,7 @@ final class ScanRunner
             'identifiers' => $registry->safeDatabaseIdentifiers(),
             'interprocedural' => $analysis->interprocedural,
             'dynamicCalls' => $analysis->dynamicCalls->value,
+            'followIncludes' => $analysis->followIncludes,
             'structuralRules' => $this->configuration->structuralRules,
             'root' => $this->configuration->root,
         ]));

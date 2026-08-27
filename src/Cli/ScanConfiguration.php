@@ -65,6 +65,7 @@ final class ScanConfiguration
         bool $storedTaint,
         bool $storedTaintWrites,
         DynamicCallPolicy $dynamicCalls,
+        bool $followIncludes,
         bool $parseReport,
         ?string $dumpTaintGraph,
         bool $structuralRules,
@@ -105,6 +106,7 @@ final class ScanConfiguration
             new AnalysisOptions(
                 interprocedural: $interprocedural,
                 dynamicCalls: $dynamicCalls,
+                followIncludes: $followIncludes,
             ),
             $excludes,
             $format,
