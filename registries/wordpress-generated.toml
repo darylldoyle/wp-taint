@@ -1,0 +1,216 @@
+# Generated from the WordPress Coding Standards function lists.
+# Do not edit by hand: run `composer catalogue:generate`.
+#
+# WPCS says *that* a function escapes. It does not say which taint kinds it
+# clears, because a token-based sniff has no concept of kinds — and that is the
+# most important modelling decision in this engine. The kinds come from a table
+# in tools/generate-wpcs-catalogue.php, written by hand and reviewed as a
+# security decision; a function whose kinds are not stated is skipped rather
+# than guessed, because generating the wrong kind would launder real taint.
+#
+# Loaded before the hand-written catalogue, so any hand-written entry wins.
+
+[meta]
+extends = ["php-core"]
+name = "wordpress-generated"
+description = "Escapers, sanitizers and unslashers imported from WPCS"
+
+[[sanitizers]]
+function = "absint"
+clears = "*"
+
+[[sanitizers]]
+function = "esc_attr"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "esc_attr__"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "esc_attr_e"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "esc_attr_x"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "esc_html"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "esc_html__"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "esc_html_e"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "esc_html_x"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "esc_js"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "esc_sql"
+clears = ["sql"]
+
+[[sanitizers]]
+function = "esc_textarea"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "esc_url"
+clears = ["html", "html_attr", "url"]
+
+[[sanitizers]]
+function = "esc_url_raw"
+clears = ["url"]
+
+[[sanitizers]]
+function = "esc_xml"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "floatval"
+clears = "*"
+
+[[sanitizers]]
+function = "hash_equals"
+clears = "*"
+
+[[sanitizers]]
+function = "intval"
+clears = "*"
+
+[[sanitizers]]
+function = "is_email"
+clears = ["html", "html_attr", "header"]
+
+[[sanitizers]]
+function = "like_escape"
+clears = ["sql"]
+
+[[sanitizers]]
+function = "number_format"
+clears = "*"
+
+[[sanitizers]]
+function = "rawurlencode"
+clears = ["html", "html_attr", "sql", "path", "shell", "header", "ldap", "xpath"]
+
+[[sanitizers]]
+function = "sanitize_email"
+clears = ["html", "html_attr", "header"]
+
+[[sanitizers]]
+function = "sanitize_file_name"
+clears = ["html", "html_attr", "path"]
+
+[[sanitizers]]
+function = "sanitize_hex_color"
+clears = "*"
+
+[[sanitizers]]
+function = "sanitize_hex_color_no_hash"
+clears = "*"
+
+[[sanitizers]]
+function = "sanitize_html_class"
+clears = ["html", "html_attr", "sql"]
+
+[[sanitizers]]
+function = "sanitize_key"
+clears = "*"
+
+[[sanitizers]]
+function = "sanitize_locale_name"
+clears = "*"
+
+[[sanitizers]]
+function = "sanitize_mime_type"
+clears = ["html", "html_attr", "sql", "path"]
+
+[[sanitizers]]
+function = "sanitize_sql_orderby"
+clears = ["sql"]
+
+[[sanitizers]]
+function = "sanitize_text_field"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "sanitize_textarea_field"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "sanitize_title"
+clears = ["html", "html_attr", "sql"]
+
+[[sanitizers]]
+function = "sanitize_title_for_query"
+clears = ["html", "html_attr", "sql"]
+
+[[sanitizers]]
+function = "sanitize_title_with_dashes"
+clears = ["html", "html_attr", "sql"]
+
+[[sanitizers]]
+function = "sanitize_url"
+clears = ["url"]
+
+[[sanitizers]]
+function = "sanitize_user"
+clears = ["html", "html_attr", "sql"]
+
+[[sanitizers]]
+function = "tag_escape"
+clears = "*"
+
+[[sanitizers]]
+function = "urlencode"
+clears = ["html", "html_attr", "sql", "path", "shell", "header", "ldap", "xpath"]
+
+[[sanitizers]]
+function = "urlencode_deep"
+clears = ["html", "html_attr", "sql", "path", "shell", "header", "ldap", "xpath"]
+
+[[sanitizers]]
+function = "wp_kses"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "wp_kses_data"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "wp_kses_one_attr"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "wp_kses_post"
+clears = ["html", "html_attr"]
+
+[[sanitizers]]
+function = "wp_parse_id_list"
+clears = "*"
+
+[[sanitizers]]
+function = "wp_sanitize_redirect"
+clears = ["header"]
+
+[[propagators]]
+function = "stripslashes_deep"
+note = "Removes backslashes. Escapes nothing."
+
+[[propagators]]
+function = "stripslashes_from_strings_only"
+note = "Removes backslashes. Escapes nothing."
+
+[[propagators]]
+function = "wp_unslash"
+note = "Removes backslashes. Escapes nothing."

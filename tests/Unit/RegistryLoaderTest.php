@@ -26,7 +26,7 @@ function loadRegistry(string $toml): Registry
 it('loads the bundled registries and resolves inheritance', function (): void {
     $registry = testRegistry();
 
-    expect($registry->names)->toBe(['php-core', 'wordpress']);
+    expect($registry->names)->toBe(['php-core', 'wordpress-generated', 'wordpress']);
     expect($registry->source(Matcher::superglobal('_GET')))->not->toBeNull();
     expect($registry->sanitizer(Matcher::function('esc_html')))->not->toBeNull();
     expect($registry->sink(Matcher::construct('echo')))->not->toBeNull();
@@ -221,7 +221,7 @@ it('layers a project-local config last', function (): void {
     $registry = (new RegistryLoader(registryDirectory()))->load('wordpress', $local);
 
     expect($registry->sanitizer(Matcher::function('acme_escape')))->not->toBeNull();
-    expect($registry->names)->toBe(['php-core', 'wordpress', 'project']);
+    expect($registry->names)->toBe(['php-core', 'wordpress-generated', 'wordpress', 'project']);
 });
 
 it('sorts every catalogue map so registry:dump is diffable', function (): void {
@@ -242,4 +242,32 @@ it('sorts every catalogue map so registry:dump is diffable', function (): void {
 
         expect($keys)->toBe($sorted);
     }
+});
+
+it('keeps the generated catalogue in sync with WPCS', function (): void {
+    // The generated file is checked in so the diff is reviewable — a generated
+    // security catalogue nobody reads is worse than a short one somebody wrote.
+    // This fails if WPCS moved and nobody regenerated.
+    $process = new Symfony\Component\Process\Process(
+        ['php', 'tools/generate-wpcs-catalogue.php', '--check'],
+        projectRoot(),
+    );
+    $process->run();
+
+    expect($process->getExitCode())->toBe(
+        0,
+        "Generated catalogue is stale. Run: composer catalogue:generate\n" . $process->getErrorOutput(),
+    );
+});
+
+it('lets a hand-written entry beat a generated one', function (): void {
+    // The whole reason the generated file is loaded first. WPCS says esc_url_raw
+    // escapes; it does not say it is not an HTML escaper, and that distinction
+    // is the difference between a real finding and a laundered one.
+    $registry = (new Enshrined\WpTaint\Registry\RegistryLoader(projectRoot() . '/registries'))->load('wordpress');
+
+    $clears = $registry->sanitizer(Enshrined\WpTaint\Registry\Matcher::function('esc_url_raw'));
+
+    expect($clears)->not->toBeNull();
+    expect($clears->describeClears())->toBe('url');
 });

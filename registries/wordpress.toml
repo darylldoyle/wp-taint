@@ -9,7 +9,7 @@
 
 [meta]
 name = "wordpress"
-extends = ["php-core"]
+extends = ["php-core", "wordpress-generated"]
 description = "WordPress core sources, sinks, sanitizers and escapers"
 
 [options]

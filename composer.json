@@ -32,7 +32,8 @@
         "phpstan/phpstan-strict-rules": "^2.0",
         "slevomat/coding-standard": "^8.15",
         "squizlabs/php_codesniffer": "^3.10",
-        "symfony/process": "^7.4"
+        "symfony/process": "^7.4",
+        "wp-coding-standards/wpcs": "^3.1"
     },
     "bin": [
         "bin/wp-taint"
@@ -71,7 +72,9 @@
             "@test"
         ],
         "fixtures:build": "php tools/build-fixture-expectations.php",
-        "fixtures:check": "php tools/build-fixture-expectations.php --check"
+        "fixtures:check": "php tools/build-fixture-expectations.php --check",
+        "catalogue:generate": "php tools/generate-wpcs-catalogue.php",
+        "catalogue:check": "php tools/generate-wpcs-catalogue.php --check"
     },
     "scripts-descriptions": {
         "test": "Run the full Pest suite",
