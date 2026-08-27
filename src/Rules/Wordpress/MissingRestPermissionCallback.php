@@ -12,7 +12,9 @@ use Enshrined\WpTaint\Finding\Severity;
 use Enshrined\WpTaint\Finding\TraceStep;
 use Enshrined\WpTaint\Finding\TraceVerb;
 use Enshrined\WpTaint\Registry\Registry;
+use Enshrined\WpTaint\Rules\ArrayLiteralResolver;
 use Enshrined\WpTaint\Rules\AstHelper;
+use Enshrined\WpTaint\Rules\HookCallbackResolver;
 use Enshrined\WpTaint\Rules\RuleContext;
 use Enshrined\WpTaint\Rules\StructuralRule;
 use Enshrined\WpTaint\Taint\TaintKind;
@@ -27,12 +29,29 @@ use PhpParser\Node;
  * emitted a `_doing_it_wrong()` notice for it since 5.5. `__return_true` on a
  * read-only route is a deliberate choice for public data and is not reported;
  * on POST, PUT, PATCH or DELETE it is an authorization bypass.
+ *
+ * Three distinct problems, not one:
+ *
+ * | Reported | Severity | Why |
+ * | --- | --- | --- |
+ * | No `permission_callback` | high | The route is public and WordPress says so |
+ * | `__return_true` on a write | critical | An unauthenticated write |
+ * | A callback that checks nothing | medium | It resolves, and nothing below it checks a capability |
+ *
+ * The third is the new one, and it is deliberately the quietest: a callback can
+ * be doing something legitimate the engine cannot see, so it is reported at a
+ * lower severity than the two that are unambiguous.
  */
 final class MissingRestPermissionCallback implements StructuralRule
 {
     private const MISSING_RULE = 'wp.authz.rest-missing-permission-callback';
 
     private const PUBLIC_WRITE_RULE = 'wp.authz.rest-public-write';
+
+    private const NO_CHECK_RULE = 'wp.authz.rest-permission-callback-no-check';
+
+    /** @see MissingAjaxCapabilityCheck::MAX_DEPTH */
+    private const MAX_DEPTH = 6;
 
     private const WRITE_METHODS = ['post', 'put', 'patch', 'delete', 'editable', 'creatable', 'deletable'];
 
@@ -73,16 +92,20 @@ final class MissingRestPermissionCallback implements StructuralRule
         Registry $registry,
         RuleContext $context,
     ): ?Finding {
-        $options = AstHelper::argument($call, 2);
+        $argument = AstHelper::argument($call, 2);
+        $options = $argument === null
+            ? null
+            : (new ArrayLiteralResolver($file->ast()))->resolve($argument, $this->enclosingFunction($file, $call));
 
-        if (! $options instanceof Node\Expr\Array_) {
-            // A variable holding the options array. Reporting it would be a
-            // guess; counting it keeps the gap visible.
+        if ($options === null) {
+            // Options built conditionally, appended to, or handed in from
+            // somewhere this cannot fold. Reporting would be a guess; counting
+            // keeps the gap visible.
             $context->recordUnresolvedHook(
                 'register_rest_route',
                 $file->relativePath,
                 $call->getStartLine(),
-                'route options are not an inline array',
+                'route options could not be resolved to an array literal',
             );
 
             return null;
@@ -172,23 +195,123 @@ final class MissingRestPermissionCallback implements StructuralRule
             );
         }
 
-        if (! $this->isReturnTrue($permission)) {
+        if ($this->isReturnTrue($permission)) {
+            if (! $this->hasWriteMethod($definition)) {
+                return null;
+            }
+
+            return $this->finding(
+                self::PUBLIC_WRITE_RULE,
+                Severity::Critical,
+                $call,
+                $file,
+                $registry,
+                "permission_callback is '__return_true' on a route that writes, so any unauthenticated request can "
+                    . 'invoke it.',
+            );
+        }
+
+        return $this->inspectCallbackBody($call, $permission, $file, $registry, $context);
+    }
+
+    /**
+     * A `permission_callback` that is present but never checks anything.
+     *
+     * Presence used to be the whole test, which credited
+     * `'permission_callback' => array( $this, 'noop' )` exactly as much as a
+     * real capability check. With the call graph the question becomes whether
+     * anything below the callback reaches an authorization primitive.
+     *
+     * Only reported when the walk was complete. A callback the engine could not
+     * resolve, or one whose subgraph runs into something it cannot follow,
+     * stays silent: this rule is quiet by design, because the cost of being
+     * wrong on an authorization rule is the tool being muted.
+     */
+    private function inspectCallbackBody(
+        Node\Expr\FuncCall $call,
+        Node\Expr $permission,
+        ParsedFile $file,
+        Registry $registry,
+        RuleContext $context,
+    ): ?Finding {
+        $graph = $context->callGraph();
+
+        if ($graph === null) {
             return null;
         }
 
-        if (! $this->hasWriteMethod($definition)) {
+        $resolved = (new HookCallbackResolver($file->ast()))
+            ->resolve($permission, $this->enclosingClass($file, $call));
+
+        if ($resolved === null || $resolved['key'] === null || ! $graph->knows($resolved['key'])) {
+            return null;
+        }
+
+        $primitives = $registry->authorizationChecks();
+
+        if ($graph->reaches($resolved['key'], $primitives, self::MAX_DEPTH)) {
+            return null;
+        }
+
+        if (! $graph->walkWasComplete($resolved['key'], $primitives, self::MAX_DEPTH)) {
             return null;
         }
 
         return $this->finding(
-            self::PUBLIC_WRITE_RULE,
-            Severity::Critical,
+            self::NO_CHECK_RULE,
+            Severity::Medium,
             $call,
             $file,
             $registry,
-            "permission_callback is '__return_true' on a route that writes, so any unauthenticated request can "
-                . 'invoke it.',
+            sprintf(
+                'permission_callback is %s, and nothing reachable from it checks a capability or a nonce.',
+                $resolved['description'],
+            ),
         );
+    }
+
+    private function enclosingClass(ParsedFile $file, Node $node): ?string
+    {
+        $line = $node->getStartLine();
+
+        foreach (AstHelper::findAll($file->ast(), Node\Stmt\ClassLike::class) as $classLike) {
+            if (! $classLike instanceof Node\Stmt\ClassLike || $classLike->name === null) {
+                continue;
+            }
+
+            if ($classLike->getStartLine() <= $line && $line <= $classLike->getEndLine()) {
+                return $classLike->namespacedName?->toString() ?? $classLike->name->toString();
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The function or method the call sits inside, so a variable lookup does
+     * not wander into an unrelated scope.
+     */
+    private function enclosingFunction(ParsedFile $file, Node $node): ?Node\FunctionLike
+    {
+        $line = $node->getStartLine();
+        $best = null;
+
+        foreach (AstHelper::findAll($file->ast(), Node\FunctionLike::class) as $function) {
+            if (! $function instanceof Node\FunctionLike) {
+                continue;
+            }
+
+            if ($function->getStartLine() > $line || $line > $function->getEndLine()) {
+                continue;
+            }
+
+            // Innermost wins: a closure inside a method is its own scope.
+            if ($best === null || $function->getStartLine() > $best->getStartLine()) {
+                $best = $function;
+            }
+        }
+
+        return $best;
     }
 
     private function isReturnTrue(Node\Expr $permission): bool

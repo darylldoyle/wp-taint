@@ -25,4 +25,14 @@ enum DispatchReturn: string
      * are already modelled as propagators of their input array.
      */
     case Own = 'own';
+
+    /**
+     * Both: `apply_filters()`.
+     *
+     * A filter returns whatever its callbacks return, but a hook with no
+     * callbacks registered returns the value it was given — so the value has to
+     * pass through as well. Dropping either half is wrong in a different
+     * direction.
+     */
+    case Both = 'both';
 }

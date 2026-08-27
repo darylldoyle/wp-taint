@@ -27,31 +27,33 @@ use PhpParser\NodeFinder;
  * `wp_ajax_*` is reachable by any logged-in user, including a subscriber;
  * `wp_ajax_nopriv_*` is reachable by anyone at all. Neither hook implies any
  * authorization, and the check has to be written by hand in the callback.
+ *
+ * ## What counts as a check
+ *
+ * Walking the call graph from the callback, to a bounded depth, looking for one
+ * of the `[[authorization]]` primitives in the catalogue. That is what credits
+ * a helper for the right reason: `acf_verify_ajax()` counts because it calls
+ * `wp_verify_nonce`, which we can see.
+ *
+ * The name heuristic it replaced accepted any call containing `can`, `nonce`,
+ * `verify` and six other fragments. It credited `acf_verify_ajax()` by accident
+ * and would have credited `$this->can_haz_cheeseburger()` too. It survives only
+ * as a last resort for a callback that will not resolve, and findings that rest
+ * on it are marked imprecise so they can be filtered out.
  */
 final class MissingAjaxCapabilityCheck implements StructuralRule
 {
     private const RULE = 'wp.authz.ajax-missing-check';
 
-    private const AUTHORIZATION_FUNCTIONS = [
-        'current_user_can',
-        'current_user_can_for_blog',
-        'check_ajax_referer',
-        'check_admin_referer',
-        'wp_verify_nonce',
-        'is_user_logged_in',
-        'user_can',
-        'is_super_admin',
-        'auth_redirect',
-        'validate_ajax_nonce',
-    ];
-
     /**
-     * Deliberately absent: `wp_die()`, `wp_get_current_user()` and
-     * `get_current_user_id()`. All three appear constantly in handlers that
-     * have no authorization at all — `wp_die('ok')` is how a handler *ends*,
-     * not how it checks anything — and accepting them silently suppressed a
-     * real finding on the first run of the fixture suite.
+     * How far to walk from the callback before giving up.
+     *
+     * A cost control, not a correctness one. A capability check six helpers
+     * below the handler is not something a reviewer would credit at a glance
+     * either, and the walk reports an incomplete answer rather than a clean one
+     * when it stops early.
      */
+    private const MAX_DEPTH = 6;
 
     public function id(): string
     {
@@ -102,21 +104,75 @@ final class MissingAjaxCapabilityCheck implements StructuralRule
                 continue;
             }
 
-            if ($this->hasAuthorizationCheck($resolved['stmts'])) {
+            $verdict = $this->checkVerdict($resolved, $registry, $context);
+
+            if ($verdict['checked']) {
                 continue;
             }
 
-            $findings[] = $this->finding($call, $hook, $resolved['description'], $file, $registry);
+            $findings[] = $this->finding(
+                $call,
+                $hook,
+                $resolved['description'],
+                $file,
+                $registry,
+                ! $verdict['certain'],
+            );
         }
 
         return $findings;
     }
 
     /**
-     * @param list<Node\Stmt> $stmts
+     * Did this callback check anything, and do we actually know?
+     *
+     * Two separate questions. A callback that resolves and whose reachable
+     * subgraph contains no primitive is a finding we can stand behind. One that
+     * did not resolve, or whose walk ran into a call the engine could not
+     * follow, falls back to the name heuristic and the finding is marked
+     * imprecise.
+     *
+     * @param array{stmts: list<Node\Stmt>, description: string, key: string|null} $resolved
+     *
+     * @return array{checked: bool, certain: bool}
      */
-    private function hasAuthorizationCheck(array $stmts): bool
+    private function checkVerdict(array $resolved, Registry $registry, RuleContext $context): array
     {
+        $graph = $context->callGraph();
+        $key = $resolved['key'];
+        $primitives = $registry->authorizationChecks();
+
+        if ($graph !== null && $key !== null && $graph->knows($key)) {
+            if ($graph->reaches($key, $primitives, self::MAX_DEPTH)) {
+                return ['checked' => true, 'certain' => true];
+            }
+
+            // Nothing found. Whether that means "there is no check" depends on
+            // whether the walk saw everything it needed to.
+            if ($graph->walkWasComplete($key, $primitives, self::MAX_DEPTH)) {
+                return ['checked' => false, 'certain' => true];
+            }
+
+            return ['checked' => $this->looksLikeCheckAnywhere($resolved['stmts']), 'certain' => false];
+        }
+
+        // A closure has no key to walk from, so its own statements are all
+        // there is. The primitives still apply; the heuristic is the fallback.
+        if ($this->callsPrimitive($resolved['stmts'], $primitives)) {
+            return ['checked' => true, 'certain' => true];
+        }
+
+        return ['checked' => $this->looksLikeCheckAnywhere($resolved['stmts']), 'certain' => false];
+    }
+
+    /**
+     * @param list<Node\Stmt> $stmts
+     * @param list<string>    $primitives
+     */
+    private function callsPrimitive(array $stmts, array $primitives): bool
+    {
+        $wanted = array_flip($primitives);
+
         foreach ((new NodeFinder())->findInstanceOf($stmts, Node\Expr\FuncCall::class) as $call) {
             if (! $call instanceof Node\Expr\FuncCall) {
                 continue;
@@ -124,41 +180,39 @@ final class MissingAjaxCapabilityCheck implements StructuralRule
 
             $name = AstHelper::functionName($call);
 
-            if ($name === null) {
-                continue;
-            }
-
-            if (in_array($name, self::AUTHORIZATION_FUNCTIONS, true) || $this->looksLikeCheck($name)) {
+            if ($name !== null && isset($wanted[strtolower($name)])) {
                 return true;
             }
         }
 
-        // `$this->verify_request()` and friends. A call whose name reads like a
-        // check is accepted, whether it is a function or a method: the
-        // alternative is a false positive on every codebase that factors its
-        // checks into a helper, and a false positive on an authorization rule
-        // is exactly the kind that gets the tool muted.
-        //
-        // Advanced Custom Fields is the case that forced this. Its nopriv
-        // handlers all begin `if ( ! acf_verify_ajax() )`, which is a plain
-        // function call, and we reported every one of them.
-        foreach ((new NodeFinder())->findInstanceOf($stmts, Node\Expr\MethodCall::class) as $call) {
-            if (! $call instanceof Node\Expr\MethodCall || ! $call->name instanceof Node\Identifier) {
-                continue;
-            }
+        return false;
+    }
 
-            if ($this->looksLikeCheck($call->name->toString())) {
-                return true;
+    /**
+     * The heuristic, kept only for callbacks the graph cannot speak for.
+     *
+     * @param list<Node\Stmt> $stmts
+     */
+    private function looksLikeCheckAnywhere(array $stmts): bool
+    {
+        $finder = new NodeFinder();
+
+        foreach ($finder->findInstanceOf($stmts, Node\Expr\FuncCall::class) as $call) {
+            if ($call instanceof Node\Expr\FuncCall) {
+                $name = AstHelper::functionName($call);
+
+                if ($name !== null && $this->looksLikeCheck($name)) {
+                    return true;
+                }
             }
         }
 
-        foreach ((new NodeFinder())->findInstanceOf($stmts, Node\Expr\StaticCall::class) as $call) {
-            if (! $call instanceof Node\Expr\StaticCall || ! $call->name instanceof Node\Identifier) {
-                continue;
-            }
-
-            if ($this->looksLikeCheck($call->name->toString())) {
-                return true;
+        foreach ([Node\Expr\MethodCall::class, Node\Expr\StaticCall::class] as $class) {
+            foreach ($finder->findInstanceOf($stmts, $class) as $call) {
+                /** @var Node\Expr\MethodCall|Node\Expr\StaticCall $call */
+                if ($call->name instanceof Node\Identifier && $this->looksLikeCheck($call->name->toString())) {
+                    return true;
+                }
             }
         }
 
@@ -203,6 +257,7 @@ final class MissingAjaxCapabilityCheck implements StructuralRule
         string $callbackDescription,
         ParsedFile $file,
         Registry $registry,
+        bool $imprecise,
     ): Finding {
         $line = $call->getStartLine();
         $column = self::column($call, $file->sourceMap);
@@ -221,9 +276,12 @@ final class MissingAjaxCapabilityCheck implements StructuralRule
             null,
             $snippet,
             sprintf(
-                '%s The callback (%s) contains no capability or nonce check.',
+                '%s Nothing reachable from the callback (%s) checks a capability or a nonce.%s',
                 $reach,
                 $callbackDescription,
+                $imprecise
+                    ? ' The call graph below it could not be walked completely, so this is a best effort.'
+                    : '',
             ),
             TaintSet::of(TaintKind::Authz),
         );
@@ -240,7 +298,7 @@ final class MissingAjaxCapabilityCheck implements StructuralRule
             $registry->ruleMessage(self::RULE),
             [$step],
             Fingerprint::compute(self::RULE, $file->relativePath, $hook, $snippet),
-            false,
+            $imprecise,
             $hook,
         );
     }

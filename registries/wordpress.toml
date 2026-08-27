@@ -204,7 +204,11 @@ note = "Removes tags but leaves quotes and ampersands, so it is not sufficient f
 [[propagators]]
 function = "apply_filters"
 args = [1]
-note = "The filtered value passes through. Callbacks registered elsewhere are not followed; see KNOWN_LIMITATIONS.md."
+note = "The filtered value passes through even when no callback is registered. The callbacks themselves are followed through the hook graph; see [[dispatchers]] below."
+
+[[propagators]]
+function = "apply_filters_ref_array"
+args = [1]
 
 [[propagators]]
 function = "get_the_title"
@@ -543,6 +547,112 @@ stored_write = true
 # RULE METADATA
 # =============================================================================
 
+# ---------------------------------------------------------------------------
+# Hook dispatch.
+#
+# `apply_filters( 'the_content', $html )` is a call to every callback registered
+# on `the_content`. Modelling it as a call to `apply_filters` loses the 9,173
+# dispatch sites in the corpus, and with them every filter callback that reads
+# request data.
+#
+# `hook = true` says the `callable` argument names a hook rather than holding a
+# callable, so the callees come from the hook graph built from `add_action()`
+# and `add_filter()`. Everything after that is the ordinary dispatcher
+# machinery.
+#
+# `returns = "both"` for filters: a filter returns whatever its callbacks
+# return, but a hook with nothing registered returns the value it was handed, so
+# both have to count. Actions return nothing, so their callees' returns go
+# nowhere — they are analysed for the sinks inside them.
+# ---------------------------------------------------------------------------
+
+[[dispatchers]]
+function = "apply_filters"
+callable = 0
+hook = true
+argument_start = 1
+mode = "rest"
+returns = "both"
+
+[[dispatchers]]
+function = "apply_filters_ref_array"
+callable = 0
+hook = true
+argument_start = 1
+mode = "spread"
+returns = "both"
+
+[[dispatchers]]
+function = "do_action"
+callable = 0
+hook = true
+argument_start = 1
+mode = "rest"
+returns = "own"
+note = "An action returns nothing. Its callbacks are analysed for the sinks inside them."
+
+[[dispatchers]]
+function = "do_action_ref_array"
+callable = 0
+hook = true
+argument_start = 1
+mode = "spread"
+returns = "own"
+
+# ---------------------------------------------------------------------------
+# Authorization primitives.
+#
+# What it takes for a callback to be doing a real check. The AJAX and REST rules
+# walk the call graph from a callback looking for one of these, which is what
+# credits a helper properly: `acf_verify_ajax()` counts because it calls
+# `wp_verify_nonce`, not because its name contains "verify".
+#
+# Deliberately absent: `wp_die()`, `wp_get_current_user()` and
+# `get_current_user_id()`. All three appear constantly in handlers with no
+# authorization at all — `wp_die( 'ok' )` is how a handler *ends*, not how it
+# checks anything.
+# ---------------------------------------------------------------------------
+
+[[authorization]]
+function = "current_user_can"
+
+[[authorization]]
+function = "current_user_can_for_blog"
+
+[[authorization]]
+function = "user_can"
+
+[[authorization]]
+function = "author_can"
+
+[[authorization]]
+function = "is_super_admin"
+
+[[authorization]]
+function = "is_user_logged_in"
+
+[[authorization]]
+function = "auth_redirect"
+
+[[authorization]]
+function = "check_ajax_referer"
+
+[[authorization]]
+function = "check_admin_referer"
+
+[[authorization]]
+function = "wp_verify_nonce"
+
+[[authorization]]
+function = "wp_check_password"
+
+[[authorization]]
+function = "wp_validate_auth_cookie"
+
+[[authorization]]
+class = "WP_User"
+method = "has_cap"
+
 [[rules]]
 id = "wp.sqli.wpdb-query"
 title = "Untrusted input reaches a database query without preparation"
@@ -606,6 +716,14 @@ description = "A route handling POST, PUT, PATCH or DELETE declares permission_c
 remediation = "Replace __return_true with a current_user_can() check for the capability the operation requires."
 cwe = "CWE-862"
 message = "REST write route is callable by anyone."
+
+[[rules]]
+id = "wp.authz.rest-permission-callback-no-check"
+title = "REST permission callback checks nothing"
+description = "A route declares a permission_callback, but nothing reachable from that callback checks a capability, a nonce, or whether the user is logged in. Declaring a callback that always allows the request is the same bypass as declaring none, written less visibly."
+remediation = "Have the callback call current_user_can() for the capability the operation requires, or return a WP_Error when the caller is not permitted."
+cwe = "CWE-862"
+message = "REST permission callback reaches no authorization check."
 
 [[rules]]
 id = "wp.authz.ajax-missing-check"

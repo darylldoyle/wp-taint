@@ -1,0 +1,128 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Enshrined\WpTaint\Hooks;
+
+use Enshrined\WpTaint\Taint\CallTarget;
+
+/**
+ * Which callbacks run on which hook.
+ *
+ * The corpus holds 15,637 `add_action`/`add_filter` registrations and 9,173
+ * `apply_filters` calls. Until this existed, every one of those was a hole: a
+ * filter callback reading `$_GET` could taint a value the engine believed was
+ * clean, and an action's arguments never reached the sinks inside its
+ * callbacks.
+ *
+ * Once the graph exists, a hook dispatch is just a call with several callees,
+ * which the analysis already knows how to do — the same machinery that resolves
+ * `call_user_func()`. Priority does not change a union, so it is recorded for
+ * the trace text and otherwise ignored.
+ *
+ * ## What a missing hook name means
+ *
+ * A registration whose hook name will not resolve is recorded under a wildcard
+ * rather than dropped, because "we saw a registration we could not place" and
+ * "there are no callbacks on this hook" are very different answers. Dispatches
+ * union the wildcard set in and mark themselves imprecise.
+ */
+final class HookGraph
+{
+    /**
+     * Registrations whose hook name resolved, keyed by hook name.
+     *
+     * @var array<string, list<HookRegistration>>
+     */
+    private array $byHook = [];
+
+    /**
+     * Registrations whose hook name did not resolve.
+     *
+     * @var list<HookRegistration>
+     */
+    private array $unplaced = [];
+
+    /** @var array<string, true> */
+    private array $seen = [];
+
+    public function add(HookRegistration $registration): void
+    {
+        // The same registration can be reached more than once: a file included
+        // from two places, or a worker re-analysing a function in a later
+        // round. Deduplicated by position, so the graph is a set.
+        $identity = $registration->sortKey();
+
+        if (isset($this->seen[$identity])) {
+            return;
+        }
+
+        $this->seen[$identity] = true;
+
+        if ($registration->hook === '') {
+            $this->unplaced[] = $registration;
+
+            return;
+        }
+
+        $this->byHook[$registration->hook][] = $registration;
+    }
+
+    /**
+     * Every callback that can run on a hook.
+     *
+     * Includes the registrations whose hook name could not be resolved, because
+     * any of them might be this one. That is an over-approximation and the
+     * caller marks the dispatch imprecise because of it.
+     *
+     * @return list<HookRegistration>
+     */
+    public function callbacksFor(string $hook): array
+    {
+        $registrations = [...($this->byHook[$hook] ?? []), ...$this->unplaced];
+
+        usort(
+            $registrations,
+            static fn (HookRegistration $a, HookRegistration $b): int => $a->sortKey() <=> $b->sortKey(),
+        );
+
+        return $registrations;
+    }
+
+    /**
+     * @return list<CallTarget>
+     */
+    public function targetsFor(string $hook): array
+    {
+        return array_map(
+            static fn (HookRegistration $r): CallTarget => $r->callback,
+            $this->callbacksFor($hook),
+        );
+    }
+
+    public function hasUnplaced(): bool
+    {
+        return $this->unplaced !== [];
+    }
+
+    public function isKnown(string $hook): bool
+    {
+        return isset($this->byHook[$hook]);
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function hooks(): array
+    {
+        $hooks = array_keys($this->byHook);
+        sort($hooks);
+
+        return $hooks;
+    }
+
+    public function registrationCount(): int
+    {
+        return count($this->seen);
+    }
+}

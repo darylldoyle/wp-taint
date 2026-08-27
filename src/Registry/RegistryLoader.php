@@ -44,13 +44,16 @@ final class RegistryLoader
 
     private const DISPATCHER_KEYS = [
         'function', 'class', 'method', 'static_method',
-        'callable', 'mode', 'argument_start', 'returns', 'note',
+        'callable', 'mode', 'argument_start', 'returns', 'hook', 'note',
     ];
+
+    private const AUTHORIZATION_KEYS = ['function', 'class', 'method', 'static_method', 'note'];
 
     private const RULE_KEYS = ['id', 'title', 'description', 'remediation', 'cwe', 'message'];
 
     private const TABLE_KEYS = [
-        'meta', 'sources', 'sanitizers', 'propagators', 'sinks', 'safe', 'dispatchers', 'rules', 'options',
+        'meta', 'sources', 'sanitizers', 'propagators', 'sinks', 'safe', 'dispatchers', 'authorization',
+        'rules', 'options',
     ];
 
     private const OPTION_KEYS = ['safe_database_identifiers'];
@@ -129,6 +132,7 @@ final class RegistryLoader
         $this->loadSinks($canonical, $data['sinks'] ?? [], $accumulator);
         $this->loadSafeCalls($canonical, $data['safe'] ?? [], $accumulator);
         $this->loadDispatchers($canonical, $data['dispatchers'] ?? [], $accumulator);
+        $this->loadAuthorization($canonical, $data['authorization'] ?? [], $accumulator);
         $this->loadRules($canonical, $data['rules'] ?? [], $accumulator);
         $this->loadOptions($canonical, $data['options'] ?? [], $accumulator);
 
@@ -336,8 +340,21 @@ final class RegistryLoader
                 $mode,
                 $start,
                 $returns,
+                $this->boolValue($file, $context . ' hook', $entry['hook'] ?? false),
                 $this->optionalString($file, $context . ' note', $entry['note'] ?? null),
             ));
+        }
+    }
+
+    private function loadAuthorization(string $file, mixed $entries, RegistryAccumulator $accumulator): void
+    {
+        foreach ($this->tableList($file, 'authorization', $entries) as $index => $entry) {
+            $context = sprintf('[[authorization]] #%d', $index + 1);
+            $this->rejectUnknownKeys($file, $context, $entry, self::AUTHORIZATION_KEYS);
+
+            $accumulator->addAuthorization(
+                $this->matcherFor($file, $context, $entry, allowConstruct: false, allowSuperglobal: false),
+            );
         }
     }
 

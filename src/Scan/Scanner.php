@@ -9,6 +9,7 @@ use Enshrined\WpTaint\Cfg\ParsedFile;
 use Enshrined\WpTaint\Cfg\ParseError;
 use Enshrined\WpTaint\Finding\Finding;
 use Enshrined\WpTaint\Finding\FindingCollection;
+use Enshrined\WpTaint\Hooks\HookGraphBuilder;
 use Enshrined\WpTaint\Registry\Registry;
 use Enshrined\WpTaint\Rules\RuleContext;
 use Enshrined\WpTaint\Rules\StructuralRule;
@@ -17,6 +18,7 @@ use Enshrined\WpTaint\Rules\Wordpress\MissingRestPermissionCallback;
 use Enshrined\WpTaint\Taint\AnalysisOptions;
 use Enshrined\WpTaint\Taint\AnalysisWarning;
 use Enshrined\WpTaint\Taint\CallableResolver;
+use Enshrined\WpTaint\Taint\CallGraphBuilder;
 use Enshrined\WpTaint\Taint\CallResolver;
 use Enshrined\WpTaint\Taint\InterproceduralResolver;
 use Enshrined\WpTaint\Taint\IntraproceduralAnalyzer;
@@ -105,10 +107,26 @@ final class Scanner
 
         foreach ($parsed as $file) {
             $functions->addFile($file);
+        }
 
-            // Structural rules are pure AST shape checks, so they can run the
-            // moment a file is parsed — which is what lets the AST go before
-            // the whole-program taint pass starts.
+        $values = new ValueResolver();
+        $receivers = new ReceiverResolver();
+        $callables = new CallableResolver($this->registry, $functions, $values);
+        $contexts = $functions->all();
+
+        // Built before the structural rules run, because the authorization
+        // rules walk it: "does this AJAX callback reach a capability check,
+        // through however many helpers" is a call-graph question, not a shape
+        // one.
+        $hooks = (new HookGraphBuilder($callables, $values, $receivers))->build($contexts);
+        $callGraph = (new CallGraphBuilder($this->registry, $functions, $values, $receivers, $callables, $hooks))
+            ->build($contexts);
+        $ruleContext = $ruleContext->withGraphs($callGraph, $hooks);
+
+        foreach ($parsed as $file) {
+            // Structural rules are pure AST shape checks over one file, so they
+            // run before the whole-program taint pass — which is what lets the
+            // AST go early.
             if ($this->structuralRulesEnabled) {
                 foreach ($this->structuralRules as $rule) {
                     $findings = [...$findings, ...$rule->analyse($file, $this->registry, $ruleContext)];
@@ -121,15 +139,15 @@ final class Scanner
         $resolver = new CallResolver(
             $this->registry,
             $functions,
-            new CallableResolver($this->registry, $functions, $values = new ValueResolver()),
+            $callables,
             $values,
-            new ReceiverResolver(),
+            $receivers,
+            $hooks,
         );
         $analyzer = new IntraproceduralAnalyzer($this->registry, $functions, $resolver, $this->options);
         $extractor = new SummaryExtractor($analyzer, $this->options);
         $interprocedural = new InterproceduralResolver($analyzer, $extractor, $this->options, $this->jobs);
 
-        $contexts = $functions->all();
         $resolution = $interprocedural->resolve($contexts);
 
         /** @var list<AnalysisWarning> $warnings */

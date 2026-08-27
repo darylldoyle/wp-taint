@@ -25,18 +25,19 @@ final class HookCallbackResolver
     }
 
     /**
-     * @return array{stmts: list<Node\Stmt>, description: string}|null
+     * @return array{stmts: list<Node\Stmt>, description: string, key: string|null}|null
      */
     public function resolve(Node\Expr $callback, ?string $enclosingClass): ?array
     {
         if ($callback instanceof Node\Expr\Closure) {
-            return ['stmts' => array_values($callback->stmts), 'description' => 'inline closure'];
+            return ['stmts' => array_values($callback->stmts), 'description' => 'inline closure', 'key' => null];
         }
 
         if ($callback instanceof Node\Expr\ArrowFunction) {
             return [
                 'stmts' => [new Node\Stmt\Return_($callback->expr)],
                 'description' => 'inline arrow function',
+                'key' => null,
             ];
         }
 
@@ -60,7 +61,7 @@ final class HookCallbackResolver
     }
 
     /**
-     * @return array{stmts: list<Node\Stmt>, description: string}|null
+     * @return array{stmts: list<Node\Stmt>, description: string, key: string|null}|null
      */
     private function arrayCallback(Node\Expr\Array_ $callback, ?string $enclosingClass): ?array
     {
@@ -100,7 +101,7 @@ final class HookCallbackResolver
     }
 
     /**
-     * @return array{stmts: list<Node\Stmt>, description: string}|null
+     * @return array{stmts: list<Node\Stmt>, description: string, key: string|null}|null
      */
     private function function(string $name): ?array
     {
@@ -120,14 +121,18 @@ final class HookCallbackResolver
                 continue;
             }
 
-            return ['stmts' => array_values($function->stmts ?? []), 'description' => $name . '()'];
+            return [
+                'stmts' => array_values($function->stmts ?? []),
+                'description' => $name . '()',
+                'key' => strtolower(ltrim($qualified, '\\')),
+            ];
         }
 
         return null;
     }
 
     /**
-     * @return array{stmts: list<Node\Stmt>, description: string}|null
+     * @return array{stmts: list<Node\Stmt>, description: string, key: string|null}|null
      */
     private function method(string $class, string $method): ?array
     {
@@ -156,9 +161,12 @@ final class HookCallbackResolver
                     continue;
                 }
 
+                $qualified = $classLike->namespacedName?->toString() ?? $classLike->name->toString();
+
                 return [
                     'stmts' => array_values($classMethod->stmts ?? []),
                     'description' => $class . '::' . $method . '()',
+                    'key' => strtolower(ltrim($qualified, '\\') . '::' . $method),
                 ];
             }
         }

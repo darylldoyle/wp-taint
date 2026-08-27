@@ -30,6 +30,9 @@ final class RegistryAccumulator
     /** @var array<string, Dispatcher> */
     private array $dispatchers = [];
 
+    /** @var array<string, true> */
+    private array $authorization = [];
+
     /** @var array<string, RuleMetadata> */
     private array $rules = [];
 
@@ -74,6 +77,11 @@ final class RegistryAccumulator
         $this->dispatchers[$dispatcher->matcher->key()] = $dispatcher;
     }
 
+    public function addAuthorization(Matcher $matcher): void
+    {
+        $this->authorization[$matcher->identity()] = true;
+    }
+
     public function addRule(RuleMetadata $rule): void
     {
         $this->rules[$rule->id] = $rule;
@@ -101,6 +109,7 @@ final class RegistryAccumulator
         ksort($this->sinks);
         ksort($this->safeCalls);
         ksort($this->dispatchers);
+        ksort($this->authorization);
         ksort($this->rules);
 
         $identifiers = $this->safeDatabaseIdentifiers;
@@ -114,6 +123,7 @@ final class RegistryAccumulator
             $this->sinks,
             $this->safeCalls,
             $this->dispatchers,
+            array_keys($this->authorization),
             $this->rules,
             $identifiers,
         );

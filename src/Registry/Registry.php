@@ -24,6 +24,7 @@ final class Registry
      * @param array<string, Sink>         $sinks
      * @param array<string, SafeCall>     $safeCalls
      * @param array<string, Dispatcher>   $dispatchers
+     * @param list<string>                $authorization matcher identities that check a capability or a nonce
      * @param array<string, RuleMetadata> $rules
      * @param list<string>                $safeDatabaseIdentifiers
      */
@@ -35,6 +36,7 @@ final class Registry
         private readonly array $sinks,
         private readonly array $safeCalls,
         private readonly array $dispatchers,
+        private readonly array $authorization,
         private readonly array $rules,
         private readonly array $safeDatabaseIdentifiers,
     ) {
@@ -74,6 +76,20 @@ final class Registry
     public function dispatchers(): array
     {
         return $this->dispatchers;
+    }
+
+    /**
+     * Calls that constitute an authorization check.
+     *
+     * Returned as matcher identities so the call graph can be walked without
+     * reconstructing a Matcher per edge. Data rather than a constant, so a
+     * project can name its own gatekeeper.
+     *
+     * @return list<string>
+     */
+    public function authorizationChecks(): array
+    {
+        return $this->authorization;
     }
 
     public function isSafeCall(Matcher $matcher): bool
@@ -231,6 +247,7 @@ final class Registry
             $this->sinks,
             $this->safeCalls,
             $this->dispatchers,
+            $this->authorization,
             $this->rules,
             $this->safeDatabaseIdentifiers,
         );
@@ -251,6 +268,7 @@ final class Registry
             $sinks,
             $this->safeCalls,
             $this->dispatchers,
+            $this->authorization,
             $this->rules,
             $this->safeDatabaseIdentifiers,
         );

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Taint;
 
+use Enshrined\WpTaint\Hooks\HookGraph;
 use Enshrined\WpTaint\Registry\Dispatcher;
 use Enshrined\WpTaint\Registry\DispatchMode;
 use Enshrined\WpTaint\Registry\DispatchReturn;
@@ -37,6 +38,7 @@ final class CallResolver
         private readonly CallableResolver $callables,
         private readonly ValueResolver $values,
         private readonly ReceiverResolver $receivers,
+        private readonly ?HookGraph $hooks = null,
     ) {
     }
 
@@ -107,7 +109,9 @@ final class CallResolver
             return [$direct];
         }
 
-        $dispatched = $this->dispatched($direct, $dispatcher, $context, $types);
+        $dispatched = $dispatcher->hook
+            ? $this->dispatchedByHook($direct, $dispatcher)
+            : $this->dispatched($direct, $dispatcher, $context, $types);
 
         if ($dispatched === []) {
             // The callable could not be pinned down. When the dispatcher hands
@@ -116,13 +120,14 @@ final class CallResolver
             // would lose the flow without even marking it imprecise. When the
             // dispatcher returns its own input, its entry still knows the
             // answer and nothing is lost.
-            return $dispatcher->returns === DispatchReturn::Own
-                ? [$direct]
-                : [CallTarget::dynamic($direct->arguments, $direct->name())];
+            return match ($dispatcher->returns) {
+                DispatchReturn::Own, DispatchReturn::Both => [$direct],
+                default => [CallTarget::dynamic($direct->arguments, $direct->name())],
+            };
         }
 
         $mode = match ($dispatcher->returns) {
-            DispatchReturn::Callee => CallResultMode::Value,
+            DispatchReturn::Callee, DispatchReturn::Both => CallResultMode::Value,
             DispatchReturn::CalleeArray => CallResultMode::Container,
             DispatchReturn::Own => CallResultMode::Discard,
         };
@@ -132,9 +137,49 @@ final class CallResolver
             $dispatched,
         );
 
-        // `array_filter()` and friends still need their own entry to run: it is
-        // what puts the input array's taint on the result.
-        return $dispatcher->returns === DispatchReturn::Own ? [$direct, ...$targets] : $targets;
+        // `array_filter()` and `apply_filters()` both still need their own
+        // entry to run: one because it puts the input array's taint on the
+        // result, the other because a filter with no callbacks returns the
+        // value it was handed.
+        return match ($dispatcher->returns) {
+            DispatchReturn::Own, DispatchReturn::Both => [$direct, ...$targets],
+            default => $targets,
+        };
+    }
+
+    /**
+     * The callbacks a hook dispatch runs.
+     *
+     * `apply_filters( 'the_content', $html )` is a call to every callback
+     * registered on `the_content`, and until the hook graph existed it was a
+     * call to nothing at all. A filter callback reading `$_GET` could taint a
+     * value the engine believed was clean; an action's arguments never reached
+     * the sinks inside its callbacks.
+     *
+     * @return list<CallTarget>
+     */
+    private function dispatchedByHook(CallTarget $call, Dispatcher $dispatcher): array
+    {
+        if ($this->hooks === null) {
+            return [];
+        }
+
+        $name = $call->argument($dispatcher->callable);
+
+        if ($name === null) {
+            return [];
+        }
+
+        $arguments = $this->calleeArguments($call, $dispatcher);
+        $targets = [];
+
+        foreach ($this->values->strings($name) as $hook) {
+            foreach ($this->hooks->targetsFor($hook) as $target) {
+                $targets[] = $target->withArguments($arguments);
+            }
+        }
+
+        return $targets;
     }
 
     /**
