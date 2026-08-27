@@ -74,7 +74,10 @@
         "fixtures:build": "php tools/build-fixture-expectations.php",
         "fixtures:check": "php tools/build-fixture-expectations.php --check",
         "catalogue:generate": "php tools/generate-wpcs-catalogue.php",
-        "catalogue:check": "php tools/generate-wpcs-catalogue.php --check"
+        "catalogue:check": "php tools/generate-wpcs-catalogue.php --check",
+        "corpus:lock": "php tools/fetch-corpus.php --lock",
+        "corpus:baseline": "php tools/corpus-baseline.php",
+        "corpus:check": "php tools/corpus-baseline.php --check"
     },
     "scripts-descriptions": {
         "test": "Run the full Pest suite",

@@ -10,6 +10,12 @@
  *
  * Usage:
  *   php tools/fetch-corpus.php [--count=50] [--force]
+ *   php tools/fetch-corpus.php --lock [--force]
+ *
+ * `--lock` fetches the pinned subset in `tests/Fixtures/corpus-lock.json`
+ * instead of the popular list. Pinned because the tracked finding count in CI
+ * has to move only when *this* project changes: a baseline that drifts whenever
+ * a plugin releases teaches people to ignore it.
  *
  * This is the only part of the project that touches the network, and it is a
  * developer tool, never on the analysis path.
@@ -19,9 +25,10 @@ declare(strict_types=1);
 
 const API_ENDPOINT = 'https://api.wordpress.org/plugins/info/1.2/';
 
-$options = getopt('', ['count::', 'force']);
+$options = getopt('', ['count::', 'force', 'lock']);
 $count = isset($options['count']) ? max(1, (int) $options['count']) : 50;
 $force = isset($options['force']);
+$locked = isset($options['lock']);
 
 $root = dirname(__DIR__);
 $corpus = $root . '/tests/Fixtures/corpus';
@@ -35,12 +42,20 @@ foreach ([$corpus, $cache] as $directory) {
     }
 }
 
-echo "Querying the WordPress.org plugin API...\n";
+$versions = [];
 
-$slugs = fetchPopularSlugs($count);
+if ($locked) {
+    $versions = readLock($root . '/tests/Fixtures/corpus-lock.json');
+    $slugs = array_keys($versions);
+    printf("Fetching %d pinned plugins.\n", count($slugs));
+} else {
+    echo "Querying the WordPress.org plugin API...\n";
+
+    $slugs = fetchPopularSlugs($count);
+}
 
 if ($slugs === []) {
-    fwrite(STDERR, "The plugin API returned no results. Check network access and try again.\n");
+    fwrite(STDERR, "No plugins to fetch. Check network access and try again.\n");
 
     exit(1);
 }
@@ -64,7 +79,7 @@ foreach ($slugs as $index => $slug) {
     printf("  [%2d/%2d] %-40s ", $index + 1, count($slugs), $slug);
 
     try {
-        $zip = downloadZip($slug, $cache);
+        $zip = downloadZip($slug, $cache, $versions[$slug] ?? null);
         extractZip($zip, $corpus, $target, $force);
         printf("ok\n");
         $installed++;
@@ -138,15 +153,39 @@ function fetchPopularSlugs(int $count): array
     return array_slice($result, 0, $count);
 }
 
-function downloadZip(string $slug, string $cache): string
+/**
+ * @return array<string, string> slug => exact version
+ */
+function readLock(string $path): array
 {
-    $path = $cache . '/' . $slug . '.zip';
+    $body = file_get_contents($path);
+
+    if ($body === false) {
+        throw new RuntimeException(sprintf('Cannot read %s.', $path));
+    }
+
+    /** @var array{plugins?: array<string, string>} $data */
+    $data = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
+    $plugins = $data['plugins'] ?? [];
+
+    ksort($plugins);
+
+    return $plugins;
+}
+
+function downloadZip(string $slug, string $cache, ?string $version = null): string
+{
+    $path = $cache . '/' . $slug . ($version === null ? '' : '-' . $version) . '.zip';
 
     if (is_file($path) && filesize($path) > 0) {
         return $path;
     }
 
-    $body = httpGet(sprintf('https://downloads.wordpress.org/plugin/%s.latest-stable.zip', $slug));
+    // An exact version when one is pinned, so the tracked count in CI moves
+    // only when this project changes.
+    $body = httpGet($version === null
+        ? sprintf('https://downloads.wordpress.org/plugin/%s.latest-stable.zip', $slug)
+        : sprintf('https://downloads.wordpress.org/plugin/%s.%s.zip', $slug, $version));
 
     if (strlen($body) < 100) {
         throw new RuntimeException('download was empty');

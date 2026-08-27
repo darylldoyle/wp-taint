@@ -1,0 +1,33 @@
+{
+    "_comment": [
+        "Plugins pinned by exact version for the CI corpus check.",
+        "",
+        "The full corpus is fifty plugins at latest-stable, which is right for triage",
+        "and wrong for a tracked number: it moves whenever upstream releases, and a",
+        "baseline that drifts on its own teaches people to ignore it.",
+        "",
+        "These eight are pinned, and chosen to exercise different machinery rather",
+        "than to be the most popular:",
+        "",
+        "  akismet               the stays-clean canary; tuned to zero and expected to hold",
+        "  contact-form-7        constants and include resolution",
+        "  cookie-law-info       admin views reached through includes",
+        "  wp-super-cache        allowlist regexes, and filters that feed a filename",
+        "  wpforms-lite          keyed arrays crossing a call boundary, and numeric keys",
+        "  loginizer             per-key array taint",
+        "  duplicate-post        small and quiet; catches a change that taints everything",
+        "  better-search-replace SQL shapes",
+        "",
+        "Bump a version deliberately, and treat the baseline diff as the review."
+    ],
+    "plugins": {
+        "akismet": "5.7.2",
+        "better-search-replace": "1.4.11",
+        "contact-form-7": "6.1.7",
+        "cookie-law-info": "3.5.5",
+        "duplicate-post": "4.7",
+        "loginizer": "2.1.0",
+        "wp-super-cache": "3.1.3",
+        "wpforms-lite": "2.0.1.1"
+    }
+}

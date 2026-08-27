@@ -188,3 +188,42 @@ jobs:
           name: corpus-sarif
           path: sarif/
           retention-days: 7
+
+  corpus:
+    name: Corpus baseline
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: json, zip
+          coverage: none
+          ini-values: memory_limit=6G
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v3
+
+      # Eight plugins pinned by exact version. The full corpus is fifty at
+      # latest-stable, which is right for triage and wrong for a tracked number:
+      # it would move whenever upstream released, and a baseline that drifts on
+      # its own teaches people to ignore it.
+      - name: Cache the pinned plugins
+        uses: actions/cache@v4
+        with:
+          path: tools/corpus-cache
+          key: corpus-${{ hashFiles('tests/Fixtures/corpus-lock.json') }}
+
+      - name: Fetch the pinned corpus
+        run: composer corpus:lock
+
+      # The fixture suite proves the engine finds what it should on code written
+      # to be found. It proves nothing about the shapes real plugins are made
+      # of, and the corpus caught seventeen bugs the fixtures never saw — two of
+      # them false negatives, which make the count *fall*, the direction nobody
+      # thinks to look in.
+      - name: Check the corpus against its baseline
+        run: composer corpus:check
