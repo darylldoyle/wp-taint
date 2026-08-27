@@ -930,6 +930,11 @@ final class FunctionAnalysis
             $changed = $this->state->addContainerTaint($op->result, $container, $provenance) || $changed;
         }
 
+        // The per-key slots travel with the array. Without this `$b = $a` would
+        // lose the precision and fall back to the whole-array answer.
+        $changed = $this->state->copyKeyedTaint($value, $op->var) || $changed;
+        $changed = $this->state->copyKeyedTaint($value, $op->result) || $changed;
+
         return $this->propagateIndirectWrite($op, $taint->union($container)) || $changed;
     }
 
@@ -964,12 +969,31 @@ final class FunctionAnalysis
         }
 
         if ($target instanceof Op\Expr\ArrayDimFetch) {
-            // Over-approximate: the whole array becomes tainted, not just the
-            // written key. Recorded in KNOWN_LIMITATIONS.md.
+            $key = $target->dim === null ? null : OperandHelper::literalString($target->dim);
+
+            // A literal key is precise, and a read naming the same key sees
+            // only this. `$context['id'] = 42` no longer taints
+            // `$context['title']`.
+            if ($key !== null) {
+                return $this->state->addKeyedTaint(
+                    $target->var,
+                    $key,
+                    $taint,
+                    new Provenance(
+                        TraceVerb::Propagate,
+                        $op,
+                        sprintf("Written into %s['%s'].", OperandHelper::describe($target->var), $key),
+                        [$op->expr],
+                    ),
+                );
+            }
+
+            // A computed key can land anywhere, so it goes to the whole-array
+            // slot — which is what every element write did before.
             //
-            // Held in a separate slot from the operand's own taint, because SSA
-            // does not re-version an array for an element write: `$a = array();`
-            // and `$a[$k] = $tainted;` write the same operand, and letting them
+            // Held apart from the operand's own taint because SSA does not
+            // re-version an array for an element write: `$a = array();` and
+            // `$a[$k] = $tainted;` write the same operand, and letting them
             // share a slot makes the fixed point oscillate.
             return $this->state->addContainerTaint(
                 $target->var,
@@ -1022,10 +1046,51 @@ final class FunctionAnalysis
             return $this->transferSuperglobalFetch($op, $source, $superglobal ?? '');
         }
 
+        $key = $op->dim === null ? null : OperandHelper::literalString($op->dim);
+
+        if ($key !== null) {
+            return $this->transferKeyedRead($op, $key);
+        }
+
         return $this->transferContainerRead(
             $op,
             $op->var,
             sprintf('Read out of %s.', OperandHelper::describe($op->var)),
+        );
+    }
+
+    /**
+     * `$context['title']` — a read that names one constant key.
+     *
+     * Sees what was written to that key, plus whatever went in under a computed
+     * key, because a computed write could have been this one. What it does not
+     * see is another key's taint, which is the whole point.
+     */
+    private function transferKeyedRead(Op\Expr\ArrayDimFetch $op, string $key): bool
+    {
+        $keyed = $this->state->keyedTaintOf($op->var, $key);
+        $fallback = $this->state->containerTaintOf($op->var)
+            ->union($this->state->taintOf($op->var));
+        $taint = $keyed->union($fallback);
+
+        if ($taint->isEmpty()) {
+            return $this->state->set($op->result, $taint);
+        }
+
+        $provenance = $keyed->isEmpty()
+            ? $this->state->containerProvenanceOf($op->var) ?? $this->state->provenanceOf($op->var)
+            : $this->state->keyedProvenanceOf($op->var, $key);
+
+        return $this->state->set(
+            $op->result,
+            $taint,
+            new Provenance(
+                TraceVerb::Propagate,
+                $op,
+                sprintf("Read out of %s['%s'].", OperandHelper::describe($op->var), $key),
+                [$op->var],
+                prefix: $provenance === null ? [] : [],
+            ),
         );
     }
 
@@ -1055,9 +1120,12 @@ final class FunctionAnalysis
 
     private function transferContainerRead(Op\Expr $op, Operand $container, string $description): bool
     {
-        // A read out of a container flattens both slots: the value that comes
-        // out carries whatever was put in, however it got there.
-        $taint = $this->state->effectiveTaintOf($container);
+        // A read out of a container flattens every slot: the value that comes
+        // out carries whatever was put in, however it got there. That includes
+        // the per-key slots — a computed key could be any of them, and a
+        // `foreach` visits all of them.
+        $taint = $this->state->effectiveTaintOf($container)
+            ->union($this->state->allKeyedTaintOf($container));
 
         if ($taint->isEmpty()) {
             return $this->state->set($op->result, $taint);

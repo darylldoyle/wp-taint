@@ -15,24 +15,27 @@ Findings that crossed one of these carry `imprecise: true` in JSON output,
 
 ## Dataflow
 
-### Array element taint is per-array, not per-key
+### Array element taint is per-key when both ends name a constant key
 
 ```php
 $context = [];
-$context['title'] = $_GET['title'];   // taints the whole $context
+$context['title'] = $_GET['title'];
 $context['id']    = 42;
 
-echo $context['id'];                  // reported, and it should not be
+echo $context['id'];      // not reported
+echo $context['title'];   // reported
 ```
 
-php-cfg lowers `$arr['k'] = $v` to an `ArrayDimFetch` whose *result temporary*
-is then assigned, and a later read of the same key produces a different
-temporary with no SSA link back. Tracking per-key taint would mean a separate
-map keyed by (array operand, constant key), which does not help the moment the
-key is dynamic.
+A write with a literal key goes to a slot of its own, and a read naming that key
+sees only what went into it.
 
-**Direction:** over-approximating, so this produces false positives, not false
-negatives.
+**It stops helping the moment either end is dynamic.** A write with a computed
+key could land anywhere, so it goes to the whole-array slot; a read with a
+computed key could be any key, so it sees everything, including every per-key
+slot. Both are what the analysis did for all arrays before, and both are still
+the fallback.
+
+**Direction:** over-approximating at the dynamic ends, exact in the middle.
 
 ### Object properties are per class, not per instance
 
