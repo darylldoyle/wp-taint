@@ -48,13 +48,17 @@ final class RegistryLoader
         'callable', 'mode', 'argument_start', 'returns', 'hook', 'note',
     ];
 
+    private const BYREF_KEYS = [
+        'function', 'class', 'method', 'static_method', 'writes', 'from', 'as_container', 'note',
+    ];
+
     private const AUTHORIZATION_KEYS = ['function', 'class', 'method', 'static_method', 'note'];
 
     private const RULE_KEYS = ['id', 'title', 'description', 'remediation', 'cwe', 'message'];
 
     private const TABLE_KEYS = [
-        'meta', 'sources', 'sanitizers', 'propagators', 'sinks', 'safe', 'dispatchers', 'authorization',
-        'rules', 'options',
+        'meta', 'sources', 'sanitizers', 'propagators', 'sinks', 'safe', 'dispatchers', 'byref',
+        'authorization', 'rules', 'options',
     ];
 
     private const OPTION_KEYS = ['safe_database_identifiers'];
@@ -133,6 +137,7 @@ final class RegistryLoader
         $this->loadSinks($canonical, $data['sinks'] ?? [], $accumulator);
         $this->loadSafeCalls($canonical, $data['safe'] ?? [], $accumulator);
         $this->loadDispatchers($canonical, $data['dispatchers'] ?? [], $accumulator);
+        $this->loadByRefEffects($canonical, $data['byref'] ?? [], $accumulator);
         $this->loadAuthorization($canonical, $data['authorization'] ?? [], $accumulator);
         $this->loadRules($canonical, $data['rules'] ?? [], $accumulator);
         $this->loadOptions($canonical, $data['options'] ?? [], $accumulator);
@@ -386,6 +391,66 @@ final class RegistryLoader
                 $this->optionalString($file, $context . ' note', $entry['note'] ?? null),
             ));
         }
+    }
+
+    private function loadByRefEffects(string $file, mixed $entries, RegistryAccumulator $accumulator): void
+    {
+        foreach ($this->tableList($file, 'byref', $entries) as $index => $entry) {
+            $context = sprintf('[[byref]] #%d', $index + 1);
+            $this->rejectUnknownKeys($file, $context, $entry, self::BYREF_KEYS);
+
+            $writes = $this->intValue($file, $context . ' writes', $entry['writes'] ?? null);
+            $from = [];
+
+            foreach ($this->intList($file, $context . ' from', $entry['from'] ?? []) as $source) {
+                if ($source === $writes) {
+                    throw RegistryException::at($file, $context, 'from cannot include the argument it writes.');
+                }
+
+                $from[] = $source;
+            }
+
+            if ($writes < 0 || $from === []) {
+                throw RegistryException::at(
+                    $file,
+                    $context,
+                    'writes must be a non-negative argument index and from must name at least one argument. An '
+                        . 'effect that adds nothing cannot clear anything either, because the lattice only grows.',
+                );
+            }
+
+            $accumulator->addByRefEffect(new ByRefEffect(
+                $this->matcherFor($file, $context, $entry, allowConstruct: false, allowSuperglobal: false),
+                $writes,
+                $from,
+                $this->boolValue($file, $context . ' as_container', $entry['as_container'] ?? false),
+                $this->optionalString($file, $context . ' note', $entry['note'] ?? null),
+            ));
+        }
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function intList(string $file, string $context, mixed $value): array
+    {
+        if (! is_array($value)) {
+            throw RegistryException::at($file, $context, 'must be a list of argument indexes.');
+        }
+
+        $indexes = [];
+
+        foreach ($value as $item) {
+            if (! is_int($item) || $item < 0) {
+                throw RegistryException::at($file, $context, 'must be a list of non-negative argument indexes.');
+            }
+
+            $indexes[] = $item;
+        }
+
+        sort($indexes);
+
+        return $indexes;
     }
 
     private function loadAuthorization(string $file, mixed $entries, RegistryAccumulator $accumulator): void

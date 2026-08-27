@@ -884,6 +884,11 @@ final class FunctionAnalysis
 
         $matcher = $call->matcher;
 
+        // Applied before the role dispatch and folded into the result, because
+        // a call can write back through an argument *and* be a sanitizer,
+        // propagator or sink in its own right. Every branch below returns.
+        $changed = $matcher === null ? false : $this->applyByRefEffect($op, $call, $matcher);
+
         if ($matcher !== null) {
             $sink = $this->registry->sink($matcher);
 
@@ -894,7 +899,7 @@ final class FunctionAnalysis
             $sanitizer = $this->registry->sanitizer($matcher);
 
             if ($sanitizer !== null) {
-                return $this->transferSanitizer($op, $call, $sanitizer, $matcher);
+                return $this->transferSanitizer($op, $call, $sanitizer, $matcher) || $changed;
             }
 
             $source = $this->registry->source($matcher);
@@ -912,41 +917,98 @@ final class FunctionAnalysis
                             $source->stored ? 'stored, user-supplied' : 'user-supplied',
                         ),
                     ),
-                );
+                ) || $changed;
             }
 
             $propagator = $this->registry->propagator($matcher);
 
             if ($propagator !== null) {
-                return $this->transferPropagator($op, $call, $propagator->arguments, $matcher, $propagator->note);
+                return $this->transferPropagator($op, $call, $propagator->arguments, $matcher, $propagator->note)
+                    || $changed;
             }
 
             if ($this->registry->isSafeCall($matcher)) {
-                return $this->writeResult($op->result, TaintSet::empty());
+                return $this->writeResult($op->result, TaintSet::empty()) || $changed;
             }
 
             if ($sink !== null) {
                 // A sink with no other role consumes the value; whatever it
                 // returns is not derived from the tainted argument in a way we
                 // model.
-                return $this->writeResult($op->result, TaintSet::empty());
+                return $this->writeResult($op->result, TaintSet::empty()) || $changed;
             }
         }
 
         if ($this->options->interprocedural && $call->userFunctionKey !== null) {
-            return $this->transferUserCall($op, $call);
+            return $this->transferUserCall($op, $call) || $changed;
         }
 
         if ($call->userFunctionKey !== null) {
             // --no-interprocedural: user calls are opaque, which is exactly the
             // Phase 3 behaviour this flag exists to reproduce.
-            return $this->writeResult($op->result, TaintSet::empty());
+            return $this->writeResult($op->result, TaintSet::empty()) || $changed;
         }
 
         // A named function the catalogue has no model for. Returning clean is
         // the deliberate choice: a documented false negative beats an
         // undocumented false positive.
-        return $this->writeResult($op->result, TaintSet::empty());
+        return $this->writeResult($op->result, TaintSet::empty()) || $changed;
+    }
+
+    /**
+     * A call that writes back through one of its arguments.
+     *
+     * `preg_match( $re, $subject, $matches )` leaves the caller holding an array
+     * built from `$subject`, and SSA does not give that write its own operand —
+     * the argument the caller passed in *is* the slot. So this adds rather than
+     * sets: two ops share a slot, and only growing keeps the fixed point
+     * monotone.
+     */
+    private function applyByRefEffect(Op\Expr $op, CallTarget $call, Matcher $matcher): bool
+    {
+        $effect = $this->registry->byRefEffect($matcher);
+
+        if ($effect === null) {
+            return false;
+        }
+
+        $target = $call->argument($effect->writes);
+
+        if ($target === null) {
+            return false;
+        }
+
+        $sources = [];
+
+        foreach ($effect->from as $index) {
+            $argument = $call->argument($index);
+
+            if ($argument !== null) {
+                $sources[] = $argument;
+            }
+        }
+
+        $taint = $this->state->unionOf($sources);
+
+        if ($taint->isEmpty()) {
+            return false;
+        }
+
+        $provenance = new Provenance(
+            TraceVerb::Propagate,
+            $op,
+            sprintf(
+                '%s writes through argument %d, which carries %s out to the caller.',
+                $matcher->describe(),
+                $effect->writes + 1,
+                $taint->describe(),
+            ),
+            $sources,
+        );
+
+        return $effect->asContainer
+            ? $this->state->addContainerTaint($target, $taint, $provenance)
+            : $this->state->add($target, $taint, $provenance);
     }
 
     private function sourceApplies(Source $source, CallTarget $call): bool

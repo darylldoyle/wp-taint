@@ -1,0 +1,10 @@
+{
+    "expectation": "vulnerable",
+    "findings": [
+        {
+            "ruleId": "wp.redirect.open-redirect",
+            "kind": "url",
+            "line": 11
+        }
+    ]
+}

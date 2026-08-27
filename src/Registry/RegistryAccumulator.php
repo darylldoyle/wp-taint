@@ -30,6 +30,9 @@ final class RegistryAccumulator
     /** @var array<string, Dispatcher> */
     private array $dispatchers = [];
 
+    /** @var array<string, ByRefEffect> */
+    private array $byRef = [];
+
     /** @var array<string, true> */
     private array $authorization = [];
 
@@ -77,6 +80,11 @@ final class RegistryAccumulator
         $this->dispatchers[$dispatcher->matcher->key()] = $dispatcher;
     }
 
+    public function addByRefEffect(ByRefEffect $effect): void
+    {
+        $this->byRef[$effect->matcher->key()] = $effect;
+    }
+
     public function addAuthorization(Matcher $matcher): void
     {
         $this->authorization[$matcher->identity()] = true;
@@ -109,6 +117,7 @@ final class RegistryAccumulator
         ksort($this->sinks);
         ksort($this->safeCalls);
         ksort($this->dispatchers);
+        ksort($this->byRef);
         ksort($this->authorization);
         ksort($this->rules);
 
@@ -123,6 +132,7 @@ final class RegistryAccumulator
             $this->sinks,
             $this->safeCalls,
             $this->dispatchers,
+            $this->byRef,
             array_keys($this->authorization),
             $this->rules,
             $identifiers,

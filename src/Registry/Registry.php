@@ -24,6 +24,7 @@ final class Registry
      * @param array<string, Sink>         $sinks
      * @param array<string, SafeCall>     $safeCalls
      * @param array<string, Dispatcher>   $dispatchers
+     * @param array<string, ByRefEffect>  $byRef         calls that write back through an argument
      * @param list<string>                $authorization matcher identities that check a capability or a nonce
      * @param array<string, RuleMetadata> $rules
      * @param list<string>                $safeDatabaseIdentifiers
@@ -36,6 +37,7 @@ final class Registry
         private readonly array $sinks,
         private readonly array $safeCalls,
         private readonly array $dispatchers,
+        private readonly array $byRef,
         private readonly array $authorization,
         private readonly array $rules,
         private readonly array $safeDatabaseIdentifiers,
@@ -76,6 +78,22 @@ final class Registry
     public function dispatchers(): array
     {
         return $this->dispatchers;
+    }
+
+    /**
+     * The by-reference effect of a call, if it writes back through an argument.
+     */
+    public function byRefEffect(Matcher $matcher): ?ByRefEffect
+    {
+        return $this->byRef[$matcher->key()] ?? null;
+    }
+
+    /**
+     * @return array<string, ByRefEffect>
+     */
+    public function byRefEffects(): array
+    {
+        return $this->byRef;
     }
 
     /**
@@ -247,6 +265,7 @@ final class Registry
             $this->sinks,
             $this->safeCalls,
             $this->dispatchers,
+            $this->byRef,
             $this->authorization,
             $this->rules,
             $this->safeDatabaseIdentifiers,
@@ -268,6 +287,7 @@ final class Registry
             $sinks,
             $this->safeCalls,
             $this->dispatchers,
+            $this->byRef,
             $this->authorization,
             $this->rules,
             $this->safeDatabaseIdentifiers,

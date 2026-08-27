@@ -325,7 +325,7 @@ note = "Returns a boolean, not the value."
 [[sanitizers]]
 function = "preg_match"
 clears = "*"
-note = "Returns a match count. Captured groups are a separate, by-reference output the engine does not follow."
+note = "Returns a match count. The captured groups go out by reference; see [[byref]] below."
 
 # =============================================================================
 # SINKS
@@ -633,6 +633,66 @@ callable = 0
 argument_start = 1
 mode = "rest"
 returns = "callee"
+
+# ---------------------------------------------------------------------------
+# Calls that write back through an argument.
+#
+# `preg_match( $re, $subject, $matches )` fills $matches from $subject, and until
+# this section existed the caller's variable came back clean — a silent false
+# negative on 1,433 by-reference sites in the corpus plus every use of the
+# functions below.
+#
+# `writes` is the argument written through, `from` the arguments whose taint
+# lands in it, and `as_container` says the taint belongs in the element slot
+# rather than on the value itself: reading $matches[1] finds it, and `echo
+# $matches` — which prints "Array" — does not.
+#
+# Effects only ever add. The lattice grows, so a call that genuinely overwrites
+# its argument with something clean cannot be modelled as clearing it, and
+# listing one here would achieve nothing.
+# ---------------------------------------------------------------------------
+
+[[byref]]
+function = "preg_match"
+writes = 2
+from = [1]
+as_container = true
+
+[[byref]]
+function = "preg_match_all"
+writes = 2
+from = [1]
+as_container = true
+
+[[byref]]
+function = "parse_str"
+writes = 1
+from = [0]
+as_container = true
+note = "Takes attacker-controlled input by definition, and the result is a whole array of it."
+
+[[byref]]
+function = "array_push"
+writes = 0
+from = [1]
+as_container = true
+
+[[byref]]
+function = "array_unshift"
+writes = 0
+from = [1]
+as_container = true
+
+[[byref]]
+function = "array_splice"
+writes = 0
+from = [3]
+as_container = true
+
+[[byref]]
+function = "sscanf"
+writes = 2
+from = [0]
 
 [[rules]]
 id = "wp.xss.unescaped-output"
