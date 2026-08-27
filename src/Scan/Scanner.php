@@ -14,7 +14,6 @@ use Enshrined\WpTaint\Rules\RuleContext;
 use Enshrined\WpTaint\Rules\StructuralRule;
 use Enshrined\WpTaint\Rules\Wordpress\MissingAjaxCapabilityCheck;
 use Enshrined\WpTaint\Rules\Wordpress\MissingRestPermissionCallback;
-use Enshrined\WpTaint\Rules\Wordpress\UnpreparedWpdbQuery;
 use Enshrined\WpTaint\Taint\AnalysisOptions;
 use Enshrined\WpTaint\Taint\AnalysisWarning;
 use Enshrined\WpTaint\Taint\CallResolver;
@@ -55,10 +54,13 @@ final class Scanner
         private readonly bool $structuralRulesEnabled = true,
         private readonly ?string $taintGraphPath = null,
     ) {
+        // Both remaining structural rules are pure AST shape checks. The
+        // query-shape check that used to live here needs the dataflow verdict,
+        // so it moved into the engine as
+        // {@see \Enshrined\WpTaint\Taint\QueryShapeInspector}.
         $this->structuralRules = [
             new MissingRestPermissionCallback(),
             new MissingAjaxCapabilityCheck(),
-            new UnpreparedWpdbQuery(),
         ];
     }
 
@@ -92,9 +94,24 @@ final class Scanner
         }
 
         $functions = new UserFunctionTable();
+        $ruleContext = new RuleContext();
+
+        /** @var list<Finding> $findings */
+        $findings = [];
 
         foreach ($parsed as $file) {
             $functions->addFile($file);
+
+            // Structural rules are pure AST shape checks, so they can run the
+            // moment a file is parsed — which is what lets the AST go before
+            // the whole-program taint pass starts.
+            if ($this->structuralRulesEnabled) {
+                foreach ($this->structuralRules as $rule) {
+                    $findings = [...$findings, ...$rule->analyse($file, $this->registry, $ruleContext)];
+                }
+            }
+
+            $file->releaseAst();
         }
 
         $resolver = new CallResolver($this->registry, $functions);
@@ -104,9 +121,6 @@ final class Scanner
 
         $contexts = $functions->all();
         $resolution = $interprocedural->resolve($contexts);
-
-        /** @var list<Finding> $findings */
-        $findings = [];
 
         /** @var list<AnalysisWarning> $warnings */
         $warnings = [];
@@ -123,7 +137,6 @@ final class Scanner
             );
         }
 
-        $ruleContext = new RuleContext();
         $graph = $this->taintGraphPath === null ? null : new TaintGraphWriter();
 
         foreach ($contexts as $context) {
@@ -137,7 +150,6 @@ final class Scanner
 
             $findings = [...$findings, ...$result->findings];
             $warnings = [...$warnings, ...$result->warnings];
-            $ruleContext->markOriginsResolved($result->resolvedCleanSites);
 
             if ($graph !== null && $result->state !== null) {
                 $graph->addFunction($context, $result->state);
@@ -146,14 +158,6 @@ final class Scanner
 
         if ($graph !== null && $this->taintGraphPath !== null) {
             file_put_contents($this->taintGraphPath, $graph->render());
-        }
-
-        if ($this->structuralRulesEnabled) {
-            foreach ($parsed as $file) {
-                foreach ($this->structuralRules as $rule) {
-                    $findings = [...$findings, ...$rule->analyse($file, $this->registry, $ruleContext)];
-                }
-            }
         }
 
         $collection = FindingCollection::fromArray($findings)

@@ -14,7 +14,6 @@
     <arg name="basepath" value="."/>
     <arg name="colors"/>
     <arg name="parallel" value="8"/>
-    <arg name="cache" value="build/phpcs.cache"/>
     <arg value="ps"/>
     <arg name="extensions" value="php"/>
 

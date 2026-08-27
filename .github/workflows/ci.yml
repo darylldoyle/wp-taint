@@ -140,7 +140,7 @@ jobs:
           php-version: '8.3'
           extensions: json, zip
           coverage: none
-          ini-values: memory_limit=1G
+          ini-values: memory_limit=3G
 
       - name: Install dependencies
         uses: ramsey/composer-install@v3
@@ -150,17 +150,41 @@ jobs:
       - name: Fetch a small corpus
         run: php tools/fetch-corpus.php --count=5
 
+      # Analysis is whole-program, so a plugin is the natural unit. Scanning
+      # five unrelated plugins as one program is neither realistic nor cheap.
+      - name: List the corpus plugins
+        id: plugins
+        run: |
+          {
+            echo 'list<<EOF'
+            find tests/Fixtures/corpus -mindepth 1 -maxdepth 1 -type d | sort
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
       # The parse rate is the project's first kill gate. Anything below 99.5%
       # means files are being silently skipped, which is a silent false negative.
       - name: Check the parse rate
-        run: php bin/wp-taint scan tests/Fixtures/corpus --parse-report --no-ansi
+        run: |
+          while read -r plugin; do
+            echo "::group::$plugin"
+            php bin/wp-taint scan "$plugin" --parse-report --no-ansi
+            echo '::endgroup::'
+          done <<< '${{ steps.plugins.outputs.list }}'
 
-      - name: Scan the corpus
-        run: php bin/wp-taint scan tests/Fixtures/corpus --format=sarif --output=corpus.sarif --fail-on=never --no-ansi
+      - name: Scan each plugin
+        run: |
+          mkdir -p sarif
+          while read -r plugin; do
+            name=$(basename "$plugin")
+            echo "::group::$name"
+            php bin/wp-taint scan "$plugin" \
+              --format=sarif --output="sarif/$name.sarif" --fail-on=never --no-ansi
+            echo '::endgroup::'
+          done <<< '${{ steps.plugins.outputs.list }}'
 
-      - name: Upload the SARIF report
+      - name: Upload the SARIF reports
         uses: actions/upload-artifact@v4
         with:
           name: corpus-sarif
-          path: corpus.sarif
+          path: sarif/
           retention-days: 7

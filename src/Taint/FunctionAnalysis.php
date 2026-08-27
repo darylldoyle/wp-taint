@@ -30,6 +30,13 @@ use PHPCfg\Operand;
  */
 final class FunctionAnalysis
 {
+    /**
+     * Deliberately overlaps `wp.sqli.wpdb-query`. When both fire on the same
+     * line the taint finding wins — see
+     * {@see \Enshrined\WpTaint\Finding\FindingCollection::withRulePrecedence()}.
+     */
+    private const UNPREPARED_QUERY_RULE = 'wp.sqli.unprepared-query';
+
     private TaintState $state;
 
     private ClassTypeMap $types;
@@ -50,18 +57,7 @@ final class FunctionAnalysis
     /** @var list<AnalysisWarning> */
     private array $warnings = [];
 
-    /**
-     * Sink sites where the value carried no taint of the sink's kind *and* the
-     * engine could account for every contributor to it.
-     *
-     * The shape rules consult this so they only fire where dataflow genuinely
-     * had nothing to say.
-     *
-     * @var list<string>
-     */
-    private array $resolvedCleanSites = [];
-
-    private readonly OriginClassifier $origins;
+    private readonly QueryShapeInspector $queryShapes;
 
     private bool $collecting = false;
 
@@ -84,7 +80,7 @@ final class FunctionAnalysis
     ) {
         $this->state = new TaintState();
         $this->types = new ClassTypeMap();
-        $this->origins = new OriginClassifier($registry, $resolver);
+        $this->queryShapes = new QueryShapeInspector($literals, new OriginClassifier($registry, $resolver));
         $this->returnTaint = TaintSet::empty();
         $this->blocks = BlockOrder::of($this->context->func->cfg);
         $this->traces = new TraceBuilder(
@@ -131,7 +127,6 @@ final class FunctionAnalysis
             $this->sinksReached,
             $this->imprecise,
             $this->warnings,
-            $this->resolvedCleanSites,
             $this->state,
         );
     }
@@ -1005,7 +1000,7 @@ final class FunctionAnalysis
         $taint = $this->state->taintOf($operand);
 
         if (! $taint->has($sink->kind)) {
-            $this->recordResolvedCleanSite($op, $operand);
+            $this->checkQueryShape($sink, $op, $operand, $identity);
 
             return;
         }
@@ -1028,26 +1023,39 @@ final class FunctionAnalysis
     }
 
     /**
-     * A sink whose value is clean *and* whose every contributor is accounted
-     * for. The shape rules use this to stay quiet on the safe idioms.
+     * A database query that carries no SQL taint but is still built by
+     * interpolating something the engine could not account for.
+     *
+     * Reported at high rather than critical severity: unlike a taint finding it
+     * has no proven path from a source, so it is a "look at this" rather than a
+     * "this is exploitable".
      */
-    private function recordResolvedCleanSite(Op $op, Operand $operand): void
+    private function checkQueryShape(Sink $sink, Op $op, Operand $operand, string $identity): void
     {
-        if (! $this->collecting || ! $this->collectFindings) {
+        if (! $this->collecting || ! $this->collectFindings || $sink->kind !== TaintKind::Sql) {
             return;
         }
 
-        if (! $this->origins->isFullyResolved($operand, $this->context, $this->types)) {
+        $unaccounted = $this->queryShapes->unaccountedComponent($operand, $this->context, $this->types);
+
+        if ($unaccounted === null) {
             return;
         }
 
-        $position = OperandHelper::position($op, $this->context->file->sourceMap);
-
-        if ($position['line'] === 0) {
-            return;
-        }
-
-        $this->resolvedCleanSites[] = $this->context->file->relativePath . ':' . $position['line'];
+        $this->emit(
+            self::UNPREPARED_QUERY_RULE,
+            TaintKind::Sql,
+            Severity::High,
+            $op,
+            $identity,
+            $unaccounted,
+            sprintf(
+                'A variable is interpolated into the query passed to %s(). Taint analysis could not account for '
+                    . 'where %s comes from, but the shape is unsafe regardless.',
+                $identity,
+                OperandHelper::describe($unaccounted),
+            ),
+        );
     }
 
     /**

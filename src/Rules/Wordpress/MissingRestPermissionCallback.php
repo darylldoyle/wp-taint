@@ -48,7 +48,7 @@ final class MissingRestPermissionCallback implements StructuralRule
     {
         $findings = [];
 
-        foreach (AstHelper::findAll($file->ast, Node\Expr\FuncCall::class) as $call) {
+        foreach (AstHelper::findAll($file->ast(), Node\Expr\FuncCall::class) as $call) {
             if (! $call instanceof Node\Expr\FuncCall) {
                 continue;
             }

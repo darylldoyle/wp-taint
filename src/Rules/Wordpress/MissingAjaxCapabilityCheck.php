@@ -63,10 +63,10 @@ final class MissingAjaxCapabilityCheck implements StructuralRule
      */
     public function analyse(ParsedFile $file, Registry $registry, RuleContext $context): array
     {
-        $resolver = new HookCallbackResolver($file->ast);
+        $resolver = new HookCallbackResolver($file->ast());
         $findings = [];
 
-        foreach (AstHelper::findAll($file->ast, Node\Expr\FuncCall::class) as $call) {
+        foreach (AstHelper::findAll($file->ast(), Node\Expr\FuncCall::class) as $call) {
             if (! $call instanceof Node\Expr\FuncCall) {
                 continue;
             }
@@ -176,7 +176,7 @@ final class MissingAjaxCapabilityCheck implements StructuralRule
     {
         $line = $node->getStartLine();
 
-        foreach (AstHelper::findAll($file->ast, Node\Stmt\ClassLike::class) as $classLike) {
+        foreach (AstHelper::findAll($file->ast(), Node\Stmt\ClassLike::class) as $classLike) {
             if (! $classLike instanceof Node\Stmt\ClassLike || $classLike->name === null) {
                 continue;
             }

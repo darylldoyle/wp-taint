@@ -15,27 +15,6 @@ final class RuleContext
     /** @var array<string, UnresolvedHook> */
     private array $unresolvedHooks = [];
 
-    /** @var array<string, true> */
-    private array $resolvedCleanSites = [];
-
-    /**
-     * Tell the shape rules that the dataflow engine understood this sink
-     * completely and found it clean, so they should stay quiet about it.
-     *
-     * @param list<string> $sites `relative/path.php:line`
-     */
-    public function markOriginsResolved(array $sites): void
-    {
-        foreach ($sites as $site) {
-            $this->resolvedCleanSites[$site] = true;
-        }
-    }
-
-    public function originsAreResolved(string $file, int $line): bool
-    {
-        return isset($this->resolvedCleanSites[$file . ':' . $line]);
-    }
-
     /**
      * Record a hook whose callback could not be resolved.
      *

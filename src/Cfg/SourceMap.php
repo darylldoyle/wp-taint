@@ -11,6 +11,10 @@ namespace Enshrined\WpTaint\Cfg;
  * php-cfg gives us `startFilePos` but no column, so this is where columns come
  * from. Offsets are byte offsets, and columns are counted in bytes for the same
  * reason SARIF and most editors do.
+ *
+ * The original source string is deliberately *not* retained. One of these
+ * exists per file for the whole scan, and holding both the split lines and the
+ * raw text would double the cost for nothing.
  */
 final class SourceMap
 {
@@ -20,7 +24,7 @@ final class SourceMap
     /** @var list<string> */
     private array $lines;
 
-    public function __construct(private readonly string $source)
+    public function __construct(string $source)
     {
         $this->lines = explode("\n", str_replace(["\r\n", "\r"], "\n", $source));
 
@@ -85,10 +89,5 @@ final class SourceMap
     public function lineCount(): int
     {
         return count($this->lines);
-    }
-
-    public function source(): string
-    {
-        return $this->source;
     }
 }

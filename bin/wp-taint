@@ -29,10 +29,47 @@ if (! $loaded) {
     exit(2);
 }
 
-// Analysis holds every parsed file in memory at once, because interprocedural
-// taint crosses files. Large plugin trees need more than the CLI default.
-if (ini_get('memory_limit') !== '-1') {
-    ini_set('memory_limit', '1G');
-}
+/**
+ * Interprocedural taint crosses files, so the whole scan is held in memory at
+ * once: roughly 400MB for a 300-file plugin, and it scales with the tree.
+ *
+ * The default is raised to 2G, which covers everything in the WordPress.org top
+ * fifty. It is only ever raised, never lowered — an explicit `php -d
+ * memory_limit=...` or a higher `php.ini` always wins. Override with
+ * `WP_TAINT_MEMORY_LIMIT`, or set it to `-1` for no limit.
+ */
+(static function (): void {
+    $requested = getenv('WP_TAINT_MEMORY_LIMIT');
+    $target = is_string($requested) && $requested !== '' ? $requested : '2G';
+
+    $current = ini_get('memory_limit');
+
+    if ($current === false || $current === '-1') {
+        return;
+    }
+
+    if ($target === '-1') {
+        ini_set('memory_limit', '-1');
+
+        return;
+    }
+
+    $bytes = static function (string $value): int {
+        $value = trim($value);
+        $unit = strtolower(substr($value, -1));
+        $number = (int) $value;
+
+        return match ($unit) {
+            'g' => $number * 1024 * 1024 * 1024,
+            'm' => $number * 1024 * 1024,
+            'k' => $number * 1024,
+            default => $number,
+        };
+    };
+
+    if ($bytes($target) > $bytes($current)) {
+        ini_set('memory_limit', $target);
+    }
+})();
 
 exit((new Application())->run());

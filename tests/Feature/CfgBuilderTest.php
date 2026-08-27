@@ -41,7 +41,7 @@ it('keeps the AST alongside the CFG', function (): void {
     // the CFG has already dissolved.
     $parsed = build('<?php register_rest_route("a/v1", "/b", []);')->file();
 
-    expect($parsed->ast)->not->toBeEmpty();
+    expect($parsed->ast())->not->toBeEmpty();
     expect($parsed->script->main)->not->toBeNull();
 });
 
