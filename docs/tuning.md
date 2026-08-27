@@ -3,7 +3,8 @@
 What running the WordPress.org top fifty actually taught, and what changed as a
 result. This is the record of Phase 7.
 
-The corpus is 50 plugins, 24,792 PHP files, 3.7 million lines. It is not
+The corpus is 50 plugins; at the versions currently fetched, 21,148 PHP files
+and 4.1 million lines outside `vendor/`. It moves when upstream releases. It is not
 committed — it is third-party code under assorted licences that changes every
 time upstream releases — so `composer corpus:fetch` downloads it into
 `tests/Fixtures/corpus/`, which is gitignored.
