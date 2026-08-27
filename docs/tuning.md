@@ -315,6 +315,39 @@ minority of include sites *in a plugin*. The corpus is plugin-heavy, which the
 plan noted; on a theme-heavy codebase this number would be larger, and the +25%
 budget was not unreasonable for one.
 
+### Half the unresolved sites were three bugs, not dynamic paths
+
+The first run resolved roughly half of all include sites. Asking *why* the other
+half failed — rather than assuming they were genuinely dynamic — turned up three
+bugs:
+
+- **`plugin_dir_path()` forgot its `dirname()`.** It is
+  `trailingslashit( dirname( $f ) )`, implemented as the trailingslashit half
+  alone, so `JETPACK__PLUGIN_DIR` came out as `…/jetpack.php/`. Jetpack: 631
+  resolved to 841.
+- **A plugin's own `define()` wrapper was invisible.** WooCommerce declares every
+  constant through `$this->define( 'WC_ABSPATH', … )`.
+- **The two-pass constant build accumulated into one table**, so a constant the
+  first pass could not resolve was marked unresolvable and the second pass could
+  never clear it — defeating the entire reason the second pass exists.
+  WooCommerce: 266 resolved to 519.
+
+Across seven large plugins, resolution went from ~50% to **72%**. Corpus
+findings moved by **+4**, which is the same lesson as before in sharper form:
+the includes that were failing are overwhelmingly bootstrap, and bootstrap
+carries no variables.
+
+What remains unresolved, measured rather than guessed:
+
+| Bucket | Share | What it needs |
+| --- | --- | --- |
+| `ABSPATH . 'wp-admin/…'` | 40% | `--include-path` at a WordPress checkout. The path resolves; the file is not in the scan. |
+| A call in the path | 12% | `constantReturn` on `FunctionSummary` |
+| A bare variable | 13% | Dataflow, and often nothing: a `glob()` loop has no static answer |
+| Other constants | rest | Conditional and cross-plugin defines |
+
+The largest bucket is not include work at all.
+
 ### The unlock was pure path helpers, not includes
 
 Contact Form 7 resolved **none** of its 61 includes at first, because every one
