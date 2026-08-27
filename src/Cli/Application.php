@@ -18,10 +18,16 @@ final class Application extends ConsoleApplication
     {
         parent::__construct('wp-taint', self::VERSION);
 
-        $this->addCommand(new ScanCommand());
-        $this->addCommand(new DumpCfgCommand());
-        $this->addCommand(new RegistryDumpCommand());
-        $this->addCommand(new ExplainCommand());
+        // `add()` and not `addCommand()`, despite the deprecation notice on
+        // console 7.4. addCommand() arrived in 7.4 and this package supports
+        // ^7.0, so calling it breaks every consumer below that — the lowest-deps
+        // CI job failed exactly this way. Narrowing the constraint to ^7.4 to
+        // silence a notice would push that cost onto everyone installing this
+        // alongside an older Symfony, which is a worse trade than the notice.
+        $this->add(new ScanCommand());
+        $this->add(new DumpCfgCommand());
+        $this->add(new RegistryDumpCommand());
+        $this->add(new ExplainCommand());
 
         $this->setDefaultCommand('scan');
     }
