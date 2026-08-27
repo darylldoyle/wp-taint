@@ -56,6 +56,41 @@ final class PropertyTaintMap
     }
 
     /**
+     * Whether a property of this *name* was written somewhere in the scan and
+     * carries no taint under any class.
+     *
+     * Traits are why this exists. `$this->_table_img_optming` is read inside a
+     * trait method — whose declaring class, as far as the CFG is concerned, is
+     * the trait — and written in the class that uses the trait. Keyed lookup
+     * misses across that boundary, so the shape rules saw a property they had
+     * "never seen written" and fired. LiteSpeed Cache alone produced 42
+     * findings that way.
+     *
+     * Only the shape rules consult this, and only to decide whether to stay
+     * quiet. It never clears real taint, so the cost of being wrong is a missed
+     * shape finding rather than a missed flow.
+     */
+    public function isCleanEverywhere(string $property): bool
+    {
+        $suffix = '::' . $property;
+        $seen = false;
+
+        foreach (array_keys($this->tracked) as $key) {
+            if (! str_ends_with($key, $suffix)) {
+                continue;
+            }
+
+            $seen = true;
+
+            if (! ($this->taint[$key] ?? TaintSet::empty())->isEmpty()) {
+                return false;
+            }
+        }
+
+        return $seen;
+    }
+
+    /**
      * The trace of the write that tainted a property, for prefixing onto a
      * finding whose flow enters by reading it.
      *

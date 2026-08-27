@@ -361,11 +361,28 @@ final class FunctionAnalysis
      */
     private function propagateIndirectWrite(Op\Expr\Assign|Op\Expr\AssignRef $op, TaintSet $taint): bool
     {
+        $target = OperandHelper::definingOp($op->var);
+
+        // Record *every* property write, tainted or not. "We watched this
+        // property and nothing tainted ever went into it" is the answer the
+        // shape rules need, and skipping clean writes meant they could never
+        // reach it — so a table name assigned once in a constructor looked
+        // exactly like a property the scan had never seen.
+        if ($target instanceof Op\Expr\PropertyFetch || $target instanceof Op\Expr\StaticPropertyFetch) {
+            $property = OperandHelper::literalString($target->name);
+
+            if ($property !== null) {
+                $owner = $target instanceof Op\Expr\PropertyFetch
+                    ? $this->propertyOwnerClass($target)
+                    : $this->staticOwnerClass($target);
+
+                $this->properties->track($owner, $property);
+            }
+        }
+
         if ($taint->isEmpty()) {
             return false;
         }
-
-        $target = OperandHelper::definingOp($op->var);
 
         if ($target instanceof Op\Expr\ArrayDimFetch) {
             // Over-approximate: the whole array becomes tainted, not just the

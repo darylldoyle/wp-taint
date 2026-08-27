@@ -212,8 +212,14 @@ final class OriginClassifier
 
         $owner = $this->propertyOwner($fetch, $context, $types);
 
-        return $this->properties->isTracked($owner, $property)
-            && $this->properties->get($owner, $property)->isEmpty();
+        if ($this->properties->isTracked($owner, $property)) {
+            return $this->properties->get($owner, $property)->isEmpty();
+        }
+
+        // Not tracked under this class. That is usually a trait: the read is in
+        // the trait's method, the write is in the class that uses it, and the
+        // two have different keys.
+        return $this->properties->isCleanEverywhere($property);
     }
 
     private function propertyOwner(
