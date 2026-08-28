@@ -2044,6 +2044,38 @@ final class FunctionAnalysis
     }
 
     /**
+     * Drop an escape-voided claim a callee cannot substantiate at this site.
+     *
+     * WooCommerce's `wc_help_tip()` escapes and then hands the result to a
+     * filter, which is the shape this rule exists to find:
+     *
+     *     return apply_filters(
+     *         'wc_help_tip',
+     *         '<span … aria-label="' . esc_attr( $aria_label ) . '" …></span>',
+     *         $sanitized_tip, $tip, $allow_html
+     *     );
+     *
+     * A summary records that as introduced — produced whatever the arguments
+     * were — so every one of the 65 call sites in WooCommerce's status report
+     * inherited it, each passing a fixed English sentence.
+     *
+     * The markers are a claim about a value, and when nothing tainted was
+     * handed in they have no value to be about. A callee that reaches a source
+     * on its own introduces that source's kind alongside them, so this only
+     * ever discards a pair standing by itself.
+     */
+    private static function withoutUnearnedEscapeMarkers(TaintSet $result, bool $anyArgumentTainted): TaintSet
+    {
+        if ($anyArgumentTainted) {
+            return $result;
+        }
+
+        $markers = TaintSet::of(TaintKind::Escaped, TaintKind::EscapeVoided);
+
+        return $result->without($markers)->isEmpty() ? TaintSet::empty() : $result;
+    }
+
+    /**
      * Is every value this escaper was handed a compile-time constant?
      *
      * A literal has no attacker anywhere in its history, so escaping it proves
@@ -2309,6 +2341,7 @@ final class FunctionAnalysis
         $result = $summary->introduces();
         $contributors = [];
         $viaParameters = [];
+        $anyArgumentTainted = false;
 
         foreach ($call->arguments as $index => $argument) {
             // Both slots: the callee receives the whole value, and an array
@@ -2320,6 +2353,8 @@ final class FunctionAnalysis
                 continue;
             }
 
+            $anyArgumentTainted = true;
+
             $returned = $argumentTaint->intersect($summary->returnTaintFor($index));
 
             if (! $returned->isEmpty()) {
@@ -2330,6 +2365,8 @@ final class FunctionAnalysis
 
             $this->reportSummarySinks($op, $call, $summary, $index, $argument, $argumentTaint);
         }
+
+        $result = self::withoutUnearnedEscapeMarkers($result, $anyArgumentTainted);
 
         $changed = $this->applySummaryByRefEffects($op, $call, $summary);
 
