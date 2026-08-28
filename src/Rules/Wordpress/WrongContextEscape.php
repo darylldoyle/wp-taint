@@ -53,8 +53,23 @@ final class WrongContextEscape implements StructuralRule
     /**
      * What each escaper is for.
      *
-     * `esc_url_raw` is deliberately absent from the URL set: it is for storage
-     * and redirects, not for output, and using it in markup is its own mistake.
+     * `esc_url_raw` is absent from the URL set and handled as its own case,
+     * because "it is for storage, not output" is a style rule and this rule
+     * reports security. Both variants run the same filter, and the difference
+     * between them is one line of WordPress:
+     *
+     *     if ( 'display' === $_context ) {
+     *         $url = wp_kses_normalize_entities( $url );
+     *         $url = str_replace( '&amp;', '&#038;', $url );
+     *         $url = str_replace( "'", '&#039;', $url );
+     *     }
+     *
+     * Everything that matters here happens before it. The character filter
+     * strips `"`, `<`, `>`, backtick and space in both contexts, and the scheme
+     * allowlist rejects `javascript:` in both. Only the apostrophe survives —
+     * so `href="<?php echo esc_url_raw( $u ); ?>"` cannot be broken out of, and
+     * `href='...'` can. WP Super Cache writes the first shape 32 times and was
+     * told all 32 were wrong.
      */
     private const HTML_ESCAPERS = ['esc_html', 'esc_html__', 'esc_html_e', 'esc_html_x', 'wp_kses', 'wp_kses_post'];
 
@@ -313,15 +328,23 @@ final class WrongContextEscape implements StructuralRule
             return null;
         }
 
-        [$name, $quoted] = $attribute;
+        [$name, $quote] = $attribute;
 
-        if (! $quoted) {
+        if ($quote === null) {
             return ['an unquoted attribute can be escaped out of with a space', 'in an unquoted attribute'];
         }
 
         if (in_array($name, self::URL_ATTRIBUTES, true)) {
-            return in_array($escaper, self::URL_ESCAPERS, true)
-                ? null
+            if (in_array($escaper, self::URL_ESCAPERS, true)) {
+                return null;
+            }
+
+            if ($escaper === 'esc_url_raw' && $quote === '"') {
+                return null;
+            }
+
+            return $escaper === 'esc_url_raw'
+                ? ['esc_url_raw() leaves an apostrophe intact', sprintf("in a single-quoted %s attribute", $name)]
                 : ['only esc_url() rejects a javascript: scheme', sprintf('in a %s attribute', $name)];
         }
 
@@ -359,7 +382,9 @@ final class WrongContextEscape implements StructuralRule
      * Matching `name="` at the end of the text answers no there, and that is
      * the case the rule most wants: JavaScript inside an event handler.
      *
-     * @return array{0: string, 1: bool}|null
+     * @return array{0: string, 1: string|null}|null the attribute name, and the
+     *                                                quote character holding its
+     *                                                value, or null if unquoted
      */
     private function openAttribute(string $before): ?array
     {
@@ -437,10 +462,10 @@ final class WrongContextEscape implements StructuralRule
         // re-deriving the name with a regex over the tail loses exactly that
         // case, because the tail contains the other quote character.
         if ($quote !== null && $openName !== null) {
-            return [$openName, true];
+            return [$openName, $quote];
         }
 
-        return $inTag && $attribute !== null ? [$attribute, false] : null;
+        return $inTag && $attribute !== null ? [$attribute, null] : null;
     }
 
     private function isEventHandler(string $name): bool

@@ -39,6 +39,8 @@ final class IntraproceduralAnalyzer
         ?int $seedParameterIndex = null,
         bool $collectFindings = true,
     ): AnalysisResult {
+        $properties = $seedParameterIndex === null ? $properties : clone $properties;
+
         return (new FunctionAnalysis(
             $context,
             $this->registry,
