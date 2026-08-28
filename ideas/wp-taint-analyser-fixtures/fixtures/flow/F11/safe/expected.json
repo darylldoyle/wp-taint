@@ -1,0 +1,15 @@
+{
+  "id": "F11",
+  "variant": "safe",
+  "expected_findings": [],
+  "expected_clean_markers": [
+    {
+      "fixture": "F11",
+      "variant": "safe",
+      "file": "wp-content/themes/f11-theme/template.php",
+      "marker_line": 4,
+      "expect": "clean",
+      "must_report": false
+    }
+  ]
+}

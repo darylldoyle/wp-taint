@@ -1,0 +1,15 @@
+{
+  "id": "F09",
+  "variant": "safe",
+  "expected_findings": [],
+  "expected_clean_markers": [
+    {
+      "fixture": "F09",
+      "variant": "safe",
+      "file": "wp-content/plugins/f09-plugin/plugin.php",
+      "marker_line": 9,
+      "expect": "clean",
+      "must_report": false
+    }
+  ]
+}

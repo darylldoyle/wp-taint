@@ -1,0 +1,15 @@
+{
+  "id": "I02",
+  "variant": "vulnerable",
+  "expected_findings": [
+    {
+      "fixture": "I02",
+      "variant": "vulnerable",
+      "file": "wp-content/plugins/i02-plugin/plugin.php",
+      "marker_line": 7,
+      "expect": "input.unsanitized_storage",
+      "must_report": true
+    }
+  ],
+  "expected_clean_markers": []
+}

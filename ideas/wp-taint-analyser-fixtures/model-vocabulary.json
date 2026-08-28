@@ -1,0 +1,89 @@
+{
+  "sources": {
+    "request": [
+      "$_GET",
+      "$_POST",
+      "$_REQUEST",
+      "$_COOKIE",
+      "$_FILES",
+      "$_SERVER[REQUEST_URI]"
+    ],
+    "wordpress": [
+      "WP_REST_Request::get_param",
+      "shortcode attributes",
+      "get_query_var"
+    ],
+    "persistence_for_output": [
+      "get_option",
+      "get_post_meta",
+      "get_user_meta"
+    ],
+    "external": [
+      "wp_remote_retrieve_body"
+    ]
+  },
+  "input_sanitizers_or_validators": [
+    "sanitize_text_field",
+    "sanitize_textarea_field",
+    "sanitize_key",
+    "sanitize_file_name",
+    "sanitize_html_class",
+    "absint",
+    "map_deep(..., sanitize_text_field)",
+    "wp_kses_post"
+  ],
+  "output_escapers": {
+    "html_text": [
+      "esc_html"
+    ],
+    "html_attribute": [
+      "esc_attr"
+    ],
+    "url": [
+      "esc_url"
+    ],
+    "javascript_string": [
+      "esc_js"
+    ],
+    "textarea": [
+      "esc_textarea"
+    ],
+    "xml": [
+      "esc_xml"
+    ],
+    "allowed_html": [
+      "wp_kses",
+      "wp_kses_post",
+      "wp_kses_data"
+    ]
+  },
+  "known_propagators": [
+    "wp_unslash",
+    "shortcode_atts",
+    "trim",
+    "strtolower",
+    "sprintf",
+    "concatenation",
+    "array_merge",
+    "apply_filters"
+  ],
+  "sinks": {
+    "input_storage": [
+      "update_option",
+      "update_post_meta",
+      "update_user_meta"
+    ],
+    "output": [
+      "echo",
+      "print",
+      "printf",
+      "return HTML from render callbacks",
+      "wp_add_inline_script"
+    ]
+  },
+  "invalidators": [
+    "apply_filters after an escape",
+    "filter/callback replacement after an escape",
+    "concatenating newly-tainted data after an escape"
+  ]
+}

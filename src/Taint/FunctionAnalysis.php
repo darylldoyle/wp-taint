@@ -72,8 +72,6 @@ final class FunctionAnalysis
     /** A hook dispatch whose result should lose any escaping its arguments carried. */
     private ?CallTarget $voidingCall = null;
 
-    /** @var list<int>|null argument positions the voiding call's result derives from */
-    private ?array $voidingArguments = null;
 
     private bool $collecting = false;
 
@@ -2427,8 +2425,6 @@ final class FunctionAnalysis
         }
 
         if ($this->registry->dispatcher($matcher)?->hook === true) {
-            $this->voidingArguments = null;
-
             return true;
         }
 
@@ -2436,28 +2432,39 @@ final class FunctionAnalysis
             return false;
         }
 
-        $parameters = $this->registry->filterableParameters($matcher->name);
-
-        if ($parameters === null || $parameters === []) {
-            return false;
-        }
-
-        $this->voidingArguments = $parameters;
-
-        return true;
+        // Parameter positions no longer gate this — the return is what matters,
+        // not what was handed in — but a function whose filtered value comes
+        // from nothing at all still returns filtered content, so the entry
+        // existing is the test.
+        return $this->registry->filterableParameters($matcher->name) !== null;
     }
 
     /**
-     * Trade `escaped` for `escape_voided` across a hook dispatch.
+     * What an extension point returns is not safe to print.
      *
-     * `echo apply_filters( 'x', esc_html( $v ) )` prints whatever the filter
-     * returns, and any plugin on the site may be that filter. The escaper's
-     * guarantee ends at the call, which is the whole reason escaping is
-     * supposed to be the last thing that happens to a value.
+     * This started out narrower — trade `escaped` for `escape_voided` when an
+     * escaped value passes *through* a filter — and that is only half of it:
+     *
+     * ```php
+     * $safe   = esc_html( $value );
+     * $suffix = apply_filters( 'fx_suffix', '' );   // nothing escaped went in
+     * echo $safe . $suffix;                          // still unsafe
+     * ```
+     *
+     * Nothing escaped goes through that filter. The *return* is the problem: a
+     * plugin decides what `fx_suffix` produces, and concatenating it with an
+     * escaped string makes the whole string unescaped again. Asking what went
+     * in misses every case where the filter supplies a fragment rather than
+     * transforming one.
+     *
+     * So the result of a hook dispatch, a shortcode expansion, or a core
+     * function that returns filtered content carries `escape_voided` whatever
+     * its arguments were. Escaping *after* the call clears it, which is the
+     * order the practice asks for.
      *
      * Applied in writeResult() rather than in one of the role branches because
-     * a dispatcher can also be a propagator or resolve to callees, and every
-     * one of those paths ends here.
+     * a dispatcher can also be a propagator or resolve to callees, and all of
+     * those paths end here.
      */
     private function voidEscaping(TaintSet $taint): TaintSet
     {
@@ -2465,26 +2472,23 @@ final class FunctionAnalysis
             return $taint;
         }
 
-        // Only the arguments the filtered value actually comes from.
-        // `wp_update_comment( $comment )` filters its data and returns a row
-        // count; an escaped value going in is not the thing coming out.
-        $arguments = $this->voidingArguments === null
-            ? $this->voidingCall->arguments
-            : array_values(array_filter(
-                $this->voidingCall->arguments,
-                fn (mixed $_, int $index): bool => in_array($index, $this->voidingArguments ?? [], true),
-                ARRAY_FILTER_USE_BOTH,
-            ));
+        // `escaped` is carried across from the arguments rather than merely
+        // kept, because an unmodelled callee returns clean and would otherwise
+        // drop the marker before the sink ever sees it — `do_shortcode( $safe )`
+        // arrived at the echo carrying the voiding and no evidence that anyone
+        // had escaped anything.
+        //
+        // Both are needed at the sink: escaping happened, and something a third
+        // party controls reached the same output. Without that pairing,
+        // `echo get_option( 'x' )` reports twice — once as unescaped output,
+        // which is the real finding, and once as voided escaping, which adds
+        // nothing to it.
+        $incoming = $this->state->unionOf($this->voidingCall->arguments);
+        $voided = $taint->union(TaintSet::of(TaintKind::EscapeVoided));
 
-        $carried = $this->state->unionOf($arguments);
-
-        if (! $carried->has(TaintKind::Escaped)) {
-            return $taint;
-        }
-
-        return $taint
-            ->without(TaintSet::of(TaintKind::Escaped))
-            ->union(TaintSet::of(TaintKind::EscapeVoided));
+        return $incoming->has(TaintKind::Escaped)
+            ? $voided->union(TaintSet::of(TaintKind::Escaped))
+            : $voided;
     }
 
     /**
@@ -2502,6 +2506,7 @@ final class FunctionAnalysis
         return match ($sink->appliesBy) {
             Sink::UNANCHORED => ! $this->anchors->has($operand),
             Sink::UNSERIALIZE_ALLOWS_OBJECTS => $this->sinkCall === null || ! $this->forbidsClasses($this->sinkCall),
+            Sink::ESCAPED_THEN_VOIDED => $this->state->effectiveTaintOf($operand)->has(TaintKind::Escaped),
             default => true,
         };
     }

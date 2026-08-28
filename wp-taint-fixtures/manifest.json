@@ -1,0 +1,1122 @@
+{
+  "schema": "wp-taint-fixtures/manifest@1",
+  "root": "wp-taint-fixtures",
+  "total_annotations": 109,
+  "counts": {
+    "expected_positive": 64,
+    "expected_negative": 44,
+    "informational": 1
+  },
+  "rules_covered": [
+    "wp.flow.object-injection",
+    "wp.flow.open-redirect",
+    "wp.flow.output-not-escaped",
+    "wp.flow.path-traversal",
+    "wp.flow.sqli",
+    "wp.flow.ssrf",
+    "wp.flow.xss",
+    "wp.input.unsanitised",
+    "wp.input.weak-sanitiser",
+    "wp.output.csv-injection",
+    "wp.output.escape-voided",
+    "wp.output.unescaped",
+    "wp.output.wrong-context",
+    "wp.xcomp.action-carries-taint",
+    "wp.xcomp.filter-injects-taint",
+    "wp.xcomp.filter-return-unescaped",
+    "wp.xcomp.sink-from-action",
+    "wp.xcomp.sink-from-option"
+  ],
+  "entries": [
+    {
+      "file": "01-input/conditional-sanitisation.php",
+      "annotation_line": 15,
+      "finding_line": 16,
+      "kind": "ruleid",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "01-input/conditional-sanitisation.php",
+      "annotation_line": 26,
+      "finding_line": 27,
+      "kind": "ok",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "01-input/conditional-sanitisation.php",
+      "annotation_line": 36,
+      "finding_line": 37,
+      "kind": "ok",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "01-input/conditional-sanitisation.php",
+      "annotation_line": 46,
+      "finding_line": 47,
+      "kind": "ok",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "01-input/conditional-sanitisation.php",
+      "annotation_line": 58,
+      "finding_line": 59,
+      "kind": "todoruleid",
+      "rule": "wp.input.weak-sanitiser",
+      "expected_positive": false,
+      "expected_negative": false,
+      "informational": true
+    },
+    {
+      "file": "01-input/insufficient-sanitisers.php",
+      "annotation_line": 10,
+      "finding_line": 11,
+      "kind": "ruleid",
+      "rule": "wp.input.weak-sanitiser",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "01-input/insufficient-sanitisers.php",
+      "annotation_line": 14,
+      "finding_line": 15,
+      "kind": "ruleid",
+      "rule": "wp.input.weak-sanitiser",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "01-input/insufficient-sanitisers.php",
+      "annotation_line": 18,
+      "finding_line": 19,
+      "kind": "ruleid",
+      "rule": "wp.input.weak-sanitiser",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "01-input/insufficient-sanitisers.php",
+      "annotation_line": 23,
+      "finding_line": 24,
+      "kind": "ruleid",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "01-input/insufficient-sanitisers.php",
+      "annotation_line": 29,
+      "finding_line": 30,
+      "kind": "ruleid",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "01-input/insufficient-sanitisers.php",
+      "annotation_line": 38,
+      "finding_line": 39,
+      "kind": "ruleid",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "01-input/insufficient-sanitisers.php",
+      "annotation_line": 42,
+      "finding_line": 43,
+      "kind": "ruleid",
+      "rule": "wp.input.weak-sanitiser",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "01-input/sanitisers-recognised.php",
+      "annotation_line": 9,
+      "finding_line": 10,
+      "kind": "ok",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "01-input/sanitisers-recognised.php",
+      "annotation_line": 12,
+      "finding_line": 13,
+      "kind": "ok",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "01-input/sanitisers-recognised.php",
+      "annotation_line": 15,
+      "finding_line": 16,
+      "kind": "ok",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "01-input/sanitisers-recognised.php",
+      "annotation_line": 18,
+      "finding_line": 19,
+      "kind": "ok",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "01-input/sanitisers-recognised.php",
+      "annotation_line": 21,
+      "finding_line": 22,
+      "kind": "ok",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "01-input/sanitisers-recognised.php",
+      "annotation_line": 24,
+      "finding_line": 25,
+      "kind": "ok",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "01-input/sanitisers-recognised.php",
+      "annotation_line": 27,
+      "finding_line": 28,
+      "kind": "ok",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "01-input/sanitisers-recognised.php",
+      "annotation_line": 30,
+      "finding_line": 31,
+      "kind": "ok",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "01-input/sanitisers-recognised.php",
+      "annotation_line": 33,
+      "finding_line": 34,
+      "kind": "ok",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "01-input/sanitisers-recognised.php",
+      "annotation_line": 36,
+      "finding_line": 37,
+      "kind": "ok",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "01-input/unsanitised-inputs.php",
+      "annotation_line": 9,
+      "finding_line": 10,
+      "kind": "ruleid",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "01-input/unsanitised-inputs.php",
+      "annotation_line": 12,
+      "finding_line": 13,
+      "kind": "ruleid",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "01-input/unsanitised-inputs.php",
+      "annotation_line": 15,
+      "finding_line": 16,
+      "kind": "ruleid",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "01-input/unsanitised-inputs.php",
+      "annotation_line": 18,
+      "finding_line": 19,
+      "kind": "ruleid",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "01-input/unsanitised-inputs.php",
+      "annotation_line": 21,
+      "finding_line": 22,
+      "kind": "ruleid",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "01-input/unsanitised-inputs.php",
+      "annotation_line": 24,
+      "finding_line": 25,
+      "kind": "ruleid",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "01-input/unsanitised-inputs.php",
+      "annotation_line": 27,
+      "finding_line": 28,
+      "kind": "ruleid",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "01-input/unsanitised-inputs.php",
+      "annotation_line": 31,
+      "finding_line": 32,
+      "kind": "ruleid",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "01-input/unsanitised-inputs.php",
+      "annotation_line": 34,
+      "finding_line": 35,
+      "kind": "ruleid",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "02-output/attribute-and-uri-contexts.php",
+      "annotation_line": 10,
+      "finding_line": 11,
+      "kind": "ruleid",
+      "rule": "wp.output.wrong-context",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "02-output/attribute-and-uri-contexts.php",
+      "annotation_line": 14,
+      "finding_line": 15,
+      "kind": "ok",
+      "rule": "wp.output.unescaped",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "02-output/attribute-and-uri-contexts.php",
+      "annotation_line": 18,
+      "finding_line": 19,
+      "kind": "ok",
+      "rule": "wp.output.unescaped",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "02-output/attribute-and-uri-contexts.php",
+      "annotation_line": 24,
+      "finding_line": 25,
+      "kind": "ruleid",
+      "rule": "wp.output.unescaped",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "02-output/attribute-and-uri-contexts.php",
+      "annotation_line": 29,
+      "finding_line": 30,
+      "kind": "ok",
+      "rule": "wp.output.unescaped",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "02-output/escapers-recognised.php",
+      "annotation_line": 9,
+      "finding_line": 10,
+      "kind": "ok",
+      "rule": "wp.output.unescaped",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "02-output/escapers-recognised.php",
+      "annotation_line": 12,
+      "finding_line": 13,
+      "kind": "ok",
+      "rule": "wp.output.unescaped",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "02-output/escapers-recognised.php",
+      "annotation_line": 15,
+      "finding_line": 16,
+      "kind": "ok",
+      "rule": "wp.output.unescaped",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "02-output/escapers-recognised.php",
+      "annotation_line": 18,
+      "finding_line": 19,
+      "kind": "ok",
+      "rule": "wp.output.unescaped",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "02-output/escapers-recognised.php",
+      "annotation_line": 21,
+      "finding_line": 22,
+      "kind": "ok",
+      "rule": "wp.output.unescaped",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "02-output/escapers-recognised.php",
+      "annotation_line": 24,
+      "finding_line": 25,
+      "kind": "ok",
+      "rule": "wp.output.unescaped",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "02-output/escapers-recognised.php",
+      "annotation_line": 27,
+      "finding_line": 28,
+      "kind": "ok",
+      "rule": "wp.output.unescaped",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "02-output/escapers-recognised.php",
+      "annotation_line": 30,
+      "finding_line": 31,
+      "kind": "ok",
+      "rule": "wp.output.unescaped",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "02-output/escapers-recognised.php",
+      "annotation_line": 33,
+      "finding_line": 34,
+      "kind": "ok",
+      "rule": "wp.output.unescaped",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "02-output/unescaped-output.php",
+      "annotation_line": 9,
+      "finding_line": 10,
+      "kind": "ruleid",
+      "rule": "wp.output.unescaped",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "02-output/unescaped-output.php",
+      "annotation_line": 12,
+      "finding_line": 13,
+      "kind": "ruleid",
+      "rule": "wp.output.unescaped",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "02-output/unescaped-output.php",
+      "annotation_line": 15,
+      "finding_line": 16,
+      "kind": "ruleid",
+      "rule": "wp.output.unescaped",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "02-output/unescaped-output.php",
+      "annotation_line": 18,
+      "finding_line": 19,
+      "kind": "ruleid",
+      "rule": "wp.output.unescaped",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "02-output/unescaped-output.php",
+      "annotation_line": 21,
+      "finding_line": 22,
+      "kind": "ruleid",
+      "rule": "wp.output.unescaped",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "02-output/unescaped-output.php",
+      "annotation_line": 24,
+      "finding_line": 25,
+      "kind": "ruleid",
+      "rule": "wp.output.unescaped",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "02-output/unescaped-output.php",
+      "annotation_line": 28,
+      "finding_line": 29,
+      "kind": "ruleid",
+      "rule": "wp.output.unescaped",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "02-output/unescaped-output.php",
+      "annotation_line": 32,
+      "finding_line": 33,
+      "kind": "ruleid",
+      "rule": "wp.output.unescaped",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "02-output/wrong-escaper-for-context.php",
+      "annotation_line": 11,
+      "finding_line": 12,
+      "kind": "ruleid",
+      "rule": "wp.output.wrong-context",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "02-output/wrong-escaper-for-context.php",
+      "annotation_line": 15,
+      "finding_line": 16,
+      "kind": "ruleid",
+      "rule": "wp.output.wrong-context",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "02-output/wrong-escaper-for-context.php",
+      "annotation_line": 20,
+      "finding_line": 21,
+      "kind": "ruleid",
+      "rule": "wp.output.wrong-context",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "02-output/wrong-escaper-for-context.php",
+      "annotation_line": 25,
+      "finding_line": 26,
+      "kind": "ruleid",
+      "rule": "wp.output.wrong-context",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "02-output/wrong-escaper-for-context.php",
+      "annotation_line": 29,
+      "finding_line": 30,
+      "kind": "ok",
+      "rule": "wp.output.wrong-context",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "02-output/wrong-escaper-for-context.php",
+      "annotation_line": 32,
+      "finding_line": 33,
+      "kind": "ok",
+      "rule": "wp.output.wrong-context",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "03-flows/direct-reflected-xss.php",
+      "annotation_line": 9,
+      "finding_line": 10,
+      "kind": "ruleid",
+      "rule": "wp.flow.xss",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "03-flows/direct-reflected-xss.php",
+      "annotation_line": 18,
+      "finding_line": 19,
+      "kind": "ruleid",
+      "rule": "wp.flow.output-not-escaped",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "03-flows/direct-reflected-xss.php",
+      "annotation_line": 25,
+      "finding_line": 26,
+      "kind": "ok",
+      "rule": "wp.flow.xss",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "03-flows/interprocedural-flow.php",
+      "annotation_line": 14,
+      "finding_line": 15,
+      "kind": "ruleid",
+      "rule": "wp.flow.xss",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "03-flows/interprocedural-flow.php",
+      "annotation_line": 27,
+      "finding_line": 28,
+      "kind": "ruleid",
+      "rule": "wp.flow.output-not-escaped",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "03-flows/interprocedural-flow.php",
+      "annotation_line": 38,
+      "finding_line": 39,
+      "kind": "ok",
+      "rule": "wp.flow.xss",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "03-flows/interprocedural-flow.php",
+      "annotation_line": 47,
+      "finding_line": 48,
+      "kind": "ruleid",
+      "rule": "wp.flow.xss",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "03-flows/interprocedural-flow.php",
+      "annotation_line": 54,
+      "finding_line": 55,
+      "kind": "ok",
+      "rule": "wp.flow.xss",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "03-flows/sink-in-callback.php",
+      "annotation_line": 13,
+      "finding_line": 14,
+      "kind": "ruleid",
+      "rule": "wp.flow.xss",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "03-flows/sink-in-callback.php",
+      "annotation_line": 19,
+      "finding_line": 20,
+      "kind": "ok",
+      "rule": "wp.flow.xss",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "03-flows/sink-in-callback.php",
+      "annotation_line": 27,
+      "finding_line": 28,
+      "kind": "ruleid",
+      "rule": "wp.flow.xss",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "03-flows/sql-injection.php",
+      "annotation_line": 11,
+      "finding_line": 12,
+      "kind": "ruleid",
+      "rule": "wp.flow.sqli",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "03-flows/sql-injection.php",
+      "annotation_line": 17,
+      "finding_line": 18,
+      "kind": "ruleid",
+      "rule": "wp.flow.sqli",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "03-flows/sql-injection.php",
+      "annotation_line": 24,
+      "finding_line": 25,
+      "kind": "ok",
+      "rule": "wp.flow.sqli",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "03-flows/sql-injection.php",
+      "annotation_line": 32,
+      "finding_line": 33,
+      "kind": "ruleid",
+      "rule": "wp.flow.sqli",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "03-flows/sql-injection.php",
+      "annotation_line": 41,
+      "finding_line": 42,
+      "kind": "ok",
+      "rule": "wp.flow.sqli",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "03-flows/stored-xss-roundtrip.php",
+      "annotation_line": 11,
+      "finding_line": 12,
+      "kind": "ruleid",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "03-flows/stored-xss-roundtrip.php",
+      "annotation_line": 18,
+      "finding_line": 19,
+      "kind": "ruleid",
+      "rule": "wp.output.unescaped",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "03-flows/stored-xss-roundtrip.php",
+      "annotation_line": 25,
+      "finding_line": 26,
+      "kind": "ok",
+      "rule": "wp.output.unescaped",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "04-post-escape-mutation/filtered-after-escape.php",
+      "annotation_line": 18,
+      "finding_line": 19,
+      "kind": "ruleid",
+      "rule": "wp.output.escape-voided",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "04-post-escape-mutation/filtered-after-escape.php",
+      "annotation_line": 25,
+      "finding_line": 26,
+      "kind": "ok",
+      "rule": "wp.output.escape-voided",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "04-post-escape-mutation/filtered-after-escape.php",
+      "annotation_line": 34,
+      "finding_line": 35,
+      "kind": "ruleid",
+      "rule": "wp.output.escape-voided",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "04-post-escape-mutation/filtered-after-escape.php",
+      "annotation_line": 43,
+      "finding_line": 44,
+      "kind": "ruleid",
+      "rule": "wp.output.escape-voided",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "04-post-escape-mutation/shortcode-do_shortcode-after-escape.php",
+      "annotation_line": 12,
+      "finding_line": 13,
+      "kind": "ruleid",
+      "rule": "wp.output.escape-voided",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "04-post-escape-mutation/shortcode-do_shortcode-after-escape.php",
+      "annotation_line": 19,
+      "finding_line": 20,
+      "kind": "ok",
+      "rule": "wp.output.escape-voided",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "04-post-escape-mutation/sprintf-reintroduction.php",
+      "annotation_line": 13,
+      "finding_line": 14,
+      "kind": "ruleid",
+      "rule": "wp.output.escape-voided",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "04-post-escape-mutation/sprintf-reintroduction.php",
+      "annotation_line": 20,
+      "finding_line": 21,
+      "kind": "ok",
+      "rule": "wp.output.escape-voided",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "05-cross-component/plugin-a/plugin-a.php",
+      "annotation_line": 14,
+      "finding_line": 15,
+      "kind": "ruleid",
+      "rule": "wp.xcomp.action-carries-taint",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "05-cross-component/plugin-a/plugin-a.php",
+      "annotation_line": 21,
+      "finding_line": 22,
+      "kind": "ruleid",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "05-cross-component/plugin-a/plugin-a.php",
+      "annotation_line": 32,
+      "finding_line": 33,
+      "kind": "ruleid",
+      "rule": "wp.xcomp.filter-return-unescaped",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "05-cross-component/plugin-b/plugin-b.php",
+      "annotation_line": 12,
+      "finding_line": 13,
+      "kind": "ruleid",
+      "rule": "wp.xcomp.sink-from-action",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "05-cross-component/plugin-b/plugin-b.php",
+      "annotation_line": 20,
+      "finding_line": 21,
+      "kind": "ruleid",
+      "rule": "wp.xcomp.filter-injects-taint",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "05-cross-component/plugin-b/plugin-b.php",
+      "annotation_line": 27,
+      "finding_line": 28,
+      "kind": "ok",
+      "rule": "wp.xcomp.sink-from-action",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "05-cross-component/theme/template-parts/banner.php",
+      "annotation_line": 10,
+      "finding_line": 11,
+      "kind": "ruleid",
+      "rule": "wp.xcomp.sink-from-option",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "05-cross-component/theme/template-parts/banner.php",
+      "annotation_line": 19,
+      "finding_line": 20,
+      "kind": "ok",
+      "rule": "wp.xcomp.sink-from-option",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "06-cve-inspired/admin-ajax-nopriv-xss.php",
+      "annotation_line": 11,
+      "finding_line": 12,
+      "kind": "ruleid",
+      "rule": "wp.flow.xss",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "06-cve-inspired/csv-formula-injection.php",
+      "annotation_line": 15,
+      "finding_line": 16,
+      "kind": "ruleid",
+      "rule": "wp.output.csv-injection",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "06-cve-inspired/csv-formula-injection.php",
+      "annotation_line": 26,
+      "finding_line": 27,
+      "kind": "ok",
+      "rule": "wp.output.csv-injection",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "06-cve-inspired/open-redirect-and-ssrf.php",
+      "annotation_line": 11,
+      "finding_line": 12,
+      "kind": "ruleid",
+      "rule": "wp.flow.open-redirect",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "06-cve-inspired/open-redirect-and-ssrf.php",
+      "annotation_line": 19,
+      "finding_line": 20,
+      "kind": "ok",
+      "rule": "wp.flow.open-redirect",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "06-cve-inspired/open-redirect-and-ssrf.php",
+      "annotation_line": 27,
+      "finding_line": 28,
+      "kind": "ruleid",
+      "rule": "wp.flow.ssrf",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "06-cve-inspired/path-traversal-file-read.php",
+      "annotation_line": 11,
+      "finding_line": 12,
+      "kind": "ruleid",
+      "rule": "wp.flow.path-traversal",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "06-cve-inspired/path-traversal-file-read.php",
+      "annotation_line": 18,
+      "finding_line": 19,
+      "kind": "ok",
+      "rule": "wp.flow.path-traversal",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "06-cve-inspired/php-object-injection.php",
+      "annotation_line": 11,
+      "finding_line": 12,
+      "kind": "ruleid",
+      "rule": "wp.flow.object-injection",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "06-cve-inspired/php-object-injection.php",
+      "annotation_line": 19,
+      "finding_line": 20,
+      "kind": "ok",
+      "rule": "wp.flow.object-injection",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    },
+    {
+      "file": "06-cve-inspired/rest-callback-injection.php",
+      "annotation_line": 22,
+      "finding_line": 23,
+      "kind": "ruleid",
+      "rule": "wp.flow.xss",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "06-cve-inspired/rest-callback-injection.php",
+      "annotation_line": 29,
+      "finding_line": 30,
+      "kind": "ruleid",
+      "rule": "wp.flow.sqli",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "06-cve-inspired/settings-callback-stored-xss.php",
+      "annotation_line": 9,
+      "finding_line": 10,
+      "kind": "ruleid",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "06-cve-inspired/settings-callback-stored-xss.php",
+      "annotation_line": 17,
+      "finding_line": 18,
+      "kind": "ruleid",
+      "rule": "wp.output.unescaped",
+      "expected_positive": true,
+      "expected_negative": false,
+      "informational": false
+    },
+    {
+      "file": "06-cve-inspired/settings-callback-stored-xss.php",
+      "annotation_line": 23,
+      "finding_line": 24,
+      "kind": "ok",
+      "rule": "wp.input.unsanitised",
+      "expected_positive": false,
+      "expected_negative": true,
+      "informational": false
+    }
+  ]
+}

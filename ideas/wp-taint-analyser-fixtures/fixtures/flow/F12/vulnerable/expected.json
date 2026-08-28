@@ -1,0 +1,15 @@
+{
+  "id": "F12",
+  "variant": "vulnerable",
+  "expected_findings": [
+    {
+      "fixture": "F12",
+      "variant": "vulnerable",
+      "file": "wp-content/themes/f12-theme/template.php",
+      "marker_line": 4,
+      "expect": "output.unescaped",
+      "must_report": true
+    }
+  ],
+  "expected_clean_markers": []
+}

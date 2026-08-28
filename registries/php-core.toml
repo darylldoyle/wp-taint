@@ -337,6 +337,7 @@ construct = "echo"
 kind = "escape_voided"
 severity = "medium"
 rule_id = "wp.xss.escape-voided"
+applies_by = "escaped_then_voided"
 
 [[sinks]]
 construct = "echo"
@@ -349,6 +350,7 @@ construct = "print"
 kind = "escape_voided"
 severity = "medium"
 rule_id = "wp.xss.escape-voided"
+applies_by = "escaped_then_voided"
 
 [[sinks]]
 construct = "print"

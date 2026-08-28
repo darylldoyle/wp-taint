@@ -1,0 +1,15 @@
+{
+  "id": "F10",
+  "variant": "safe",
+  "expected_findings": [],
+  "expected_clean_markers": [
+    {
+      "fixture": "F10",
+      "variant": "safe",
+      "file": "wp-content/plugins/f10-plugin/plugin.php",
+      "marker_line": 6,
+      "expect": "clean",
+      "must_report": false
+    }
+  ]
+}

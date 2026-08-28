@@ -1,0 +1,15 @@
+{
+  "id": "F15",
+  "variant": "vulnerable",
+  "expected_findings": [
+    {
+      "fixture": "F15",
+      "variant": "vulnerable",
+      "file": "wp-content/themes/f15-theme/template.php",
+      "marker_line": 7,
+      "expect": "output.escape_invalidated",
+      "must_report": true
+    }
+  ],
+  "expected_clean_markers": []
+}

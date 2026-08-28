@@ -906,6 +906,14 @@ remediation = "Have the callback call current_user_can() for the capability the 
 cwe = "CWE-862"
 message = "REST permission callback reaches no authorization check."
 
+# Shortcode expansion is an extension point like any filter: a registered
+# shortcode decides what comes back, so escaping before it is escaping too early.
+[[filterable]]
+function = "do_shortcode"
+
+[[filterable]]
+function = "do_shortcode_tag"
+
 [[rules]]
 id = "wp.xss.escape-voided"
 title = "Escaped value passed through a filter before output"

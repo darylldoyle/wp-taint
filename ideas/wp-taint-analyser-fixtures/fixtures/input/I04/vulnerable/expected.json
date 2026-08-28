@@ -1,0 +1,15 @@
+{
+  "id": "I04",
+  "variant": "vulnerable",
+  "expected_findings": [
+    {
+      "fixture": "I04",
+      "variant": "vulnerable",
+      "file": "wp-content/plugins/i04-plugin/plugin.php",
+      "marker_line": 7,
+      "expect": "input.unsanitized_storage",
+      "must_report": true
+    }
+  ],
+  "expected_clean_markers": []
+}

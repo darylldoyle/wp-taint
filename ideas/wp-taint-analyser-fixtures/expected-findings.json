@@ -1,0 +1,578 @@
+[
+  {
+    "fixture": "I01",
+    "variant": "vulnerable",
+    "file": "wp-content/plugins/i01-plugin/plugin.php",
+    "marker_line": 7,
+    "expect": "input.unsanitized_storage",
+    "must_report": true
+  },
+  {
+    "fixture": "I01",
+    "variant": "safe",
+    "file": "wp-content/plugins/i01-plugin/plugin.php",
+    "marker_line": 7,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "I02",
+    "variant": "vulnerable",
+    "file": "wp-content/plugins/i02-plugin/plugin.php",
+    "marker_line": 7,
+    "expect": "input.unsanitized_storage",
+    "must_report": true
+  },
+  {
+    "fixture": "I02",
+    "variant": "safe",
+    "file": "wp-content/plugins/i02-plugin/plugin.php",
+    "marker_line": 8,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "I03",
+    "variant": "vulnerable",
+    "file": "wp-content/plugins/i03-plugin/plugin.php",
+    "marker_line": 7,
+    "expect": "input.unsanitized_storage",
+    "must_report": true
+  },
+  {
+    "fixture": "I03",
+    "variant": "safe",
+    "file": "wp-content/plugins/i03-plugin/plugin.php",
+    "marker_line": 7,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "I04",
+    "variant": "vulnerable",
+    "file": "wp-content/plugins/i04-plugin/plugin.php",
+    "marker_line": 7,
+    "expect": "input.unsanitized_storage",
+    "must_report": true
+  },
+  {
+    "fixture": "I04",
+    "variant": "safe",
+    "file": "wp-content/plugins/i04-plugin/plugin.php",
+    "marker_line": 7,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "I05",
+    "variant": "vulnerable",
+    "file": "wp-content/plugins/i05-plugin/plugin.php",
+    "marker_line": 6,
+    "expect": "input.unsanitized_storage",
+    "must_report": true
+  },
+  {
+    "fixture": "I05",
+    "variant": "safe",
+    "file": "wp-content/plugins/i05-plugin/plugin.php",
+    "marker_line": 6,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "I06",
+    "variant": "vulnerable",
+    "file": "wp-content/plugins/i06-plugin/plugin.php",
+    "marker_line": 6,
+    "expect": "input.unsanitized_storage",
+    "must_report": true
+  },
+  {
+    "fixture": "I06",
+    "variant": "safe",
+    "file": "wp-content/plugins/i06-plugin/plugin.php",
+    "marker_line": 7,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "I07",
+    "variant": "vulnerable",
+    "file": "wp-content/plugins/i07-plugin/plugin.php",
+    "marker_line": 7,
+    "expect": "input.unsanitized_storage",
+    "must_report": true
+  },
+  {
+    "fixture": "I07",
+    "variant": "safe",
+    "file": "wp-content/plugins/i07-plugin/plugin.php",
+    "marker_line": 7,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "I08",
+    "variant": "vulnerable",
+    "file": "wp-content/plugins/i08-plugin/plugin.php",
+    "marker_line": 8,
+    "expect": "input.unsanitized_storage",
+    "must_report": true
+  },
+  {
+    "fixture": "I08",
+    "variant": "safe",
+    "file": "wp-content/plugins/i08-plugin/plugin.php",
+    "marker_line": 9,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "O01",
+    "variant": "vulnerable",
+    "file": "wp-content/themes/o01-theme/template.php",
+    "marker_line": 5,
+    "expect": "output.unescaped",
+    "must_report": true
+  },
+  {
+    "fixture": "O01",
+    "variant": "safe",
+    "file": "wp-content/themes/o01-theme/template.php",
+    "marker_line": 5,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "O02",
+    "variant": "vulnerable",
+    "file": "wp-content/themes/o02-theme/template.php",
+    "marker_line": 5,
+    "expect": "output.unescaped",
+    "must_report": true
+  },
+  {
+    "fixture": "O02",
+    "variant": "safe",
+    "file": "wp-content/themes/o02-theme/template.php",
+    "marker_line": 5,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "O03",
+    "variant": "vulnerable",
+    "file": "wp-content/themes/o03-theme/template.php",
+    "marker_line": 5,
+    "expect": "output.unescaped",
+    "must_report": true
+  },
+  {
+    "fixture": "O03",
+    "variant": "safe",
+    "file": "wp-content/themes/o03-theme/template.php",
+    "marker_line": 5,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "O04",
+    "variant": "vulnerable",
+    "file": "wp-content/themes/o04-theme/template.php",
+    "marker_line": 6,
+    "expect": "output.unescaped",
+    "must_report": true
+  },
+  {
+    "fixture": "O04",
+    "variant": "safe",
+    "file": "wp-content/themes/o04-theme/template.php",
+    "marker_line": 6,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "O05",
+    "variant": "vulnerable",
+    "file": "wp-content/themes/o05-theme/template.php",
+    "marker_line": 5,
+    "expect": "output.unescaped",
+    "must_report": true
+  },
+  {
+    "fixture": "O05",
+    "variant": "safe",
+    "file": "wp-content/themes/o05-theme/template.php",
+    "marker_line": 5,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "O06",
+    "variant": "vulnerable",
+    "file": "wp-content/themes/o06-theme/template.php",
+    "marker_line": 5,
+    "expect": "output.unescaped",
+    "must_report": true
+  },
+  {
+    "fixture": "O06",
+    "variant": "safe",
+    "file": "wp-content/themes/o06-theme/template.php",
+    "marker_line": 5,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "O07",
+    "variant": "vulnerable",
+    "file": "wp-content/themes/o07-theme/template.php",
+    "marker_line": 5,
+    "expect": "output.unescaped",
+    "must_report": true
+  },
+  {
+    "fixture": "O07",
+    "variant": "safe",
+    "file": "wp-content/themes/o07-theme/template.php",
+    "marker_line": 5,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "O08",
+    "variant": "vulnerable",
+    "file": "wp-content/themes/o08-theme/feed.php",
+    "marker_line": 5,
+    "expect": "output.unescaped",
+    "must_report": true
+  },
+  {
+    "fixture": "O08",
+    "variant": "safe",
+    "file": "wp-content/themes/o08-theme/feed.php",
+    "marker_line": 5,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "O09",
+    "variant": "vulnerable",
+    "file": "wp-content/themes/o09-theme/template.php",
+    "marker_line": 5,
+    "expect": "output.wrong_context_escape",
+    "must_report": true
+  },
+  {
+    "fixture": "O09",
+    "variant": "safe",
+    "file": "wp-content/themes/o09-theme/template.php",
+    "marker_line": 5,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "O10",
+    "variant": "vulnerable",
+    "file": "wp-content/themes/o10-theme/template.php",
+    "marker_line": 8,
+    "expect": "output.escape_invalidated",
+    "must_report": true
+  },
+  {
+    "fixture": "O10",
+    "variant": "safe",
+    "file": "wp-content/themes/o10-theme/template.php",
+    "marker_line": 6,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "F01",
+    "variant": "vulnerable",
+    "file": "wp-content/plugins/f01-plugin/plugin.php",
+    "marker_line": 7,
+    "expect": "flow.unsanitized_unescaped",
+    "must_report": true
+  },
+  {
+    "fixture": "F01",
+    "variant": "safe",
+    "file": "wp-content/plugins/f01-plugin/plugin.php",
+    "marker_line": 7,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "F02",
+    "variant": "vulnerable",
+    "file": "wp-content/plugins/f02-plugin/plugin.php",
+    "marker_line": 12,
+    "expect": "flow.unsanitized_unescaped",
+    "must_report": true
+  },
+  {
+    "fixture": "F02",
+    "variant": "safe",
+    "file": "wp-content/plugins/f02-plugin/plugin.php",
+    "marker_line": 12,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "F03",
+    "variant": "vulnerable",
+    "file": "wp-content/plugins/f03-plugin/plugin.php",
+    "marker_line": 6,
+    "expect": "flow.unsanitized_unescaped",
+    "must_report": true
+  },
+  {
+    "fixture": "F03",
+    "variant": "safe",
+    "file": "wp-content/plugins/f03-plugin/plugin.php",
+    "marker_line": 7,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "F04",
+    "variant": "vulnerable",
+    "file": "wp-content/plugins/f04-plugin/plugin.php",
+    "marker_line": 7,
+    "expect": "flow.unsanitized_unescaped",
+    "must_report": true
+  },
+  {
+    "fixture": "F04",
+    "variant": "safe",
+    "file": "wp-content/plugins/f04-plugin/plugin.php",
+    "marker_line": 7,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "F05",
+    "variant": "vulnerable",
+    "file": "wp-content/plugins/f05-plugin/plugin.php",
+    "marker_line": 12,
+    "expect": "flow.unsanitized_unescaped",
+    "must_report": true
+  },
+  {
+    "fixture": "F05",
+    "variant": "safe",
+    "file": "wp-content/plugins/f05-plugin/plugin.php",
+    "marker_line": 12,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "F06",
+    "variant": "vulnerable",
+    "file": "wp-content/plugins/f06-plugin/plugin.php",
+    "marker_line": 11,
+    "expect": "flow.unsanitized_unescaped",
+    "must_report": true
+  },
+  {
+    "fixture": "F06",
+    "variant": "safe",
+    "file": "wp-content/plugins/f06-plugin/plugin.php",
+    "marker_line": 11,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "F07",
+    "variant": "vulnerable",
+    "file": "wp-content/plugins/f07-plugin/plugin.php",
+    "marker_line": 11,
+    "expect": "flow.unsanitized_unescaped",
+    "must_report": true
+  },
+  {
+    "fixture": "F07",
+    "variant": "safe",
+    "file": "wp-content/plugins/f07-plugin/plugin.php",
+    "marker_line": 11,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "F08",
+    "variant": "vulnerable",
+    "file": "wp-content/plugins/f08-plugin/plugin.php",
+    "marker_line": 12,
+    "expect": "flow.unsanitized_unescaped",
+    "must_report": true
+  },
+  {
+    "fixture": "F08",
+    "variant": "safe",
+    "file": "wp-content/plugins/f08-plugin/plugin.php",
+    "marker_line": 13,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "F09",
+    "variant": "vulnerable",
+    "file": "wp-content/plugins/f09-plugin/plugin.php",
+    "marker_line": 9,
+    "expect": "flow.unsanitized_unescaped",
+    "must_report": true
+  },
+  {
+    "fixture": "F09",
+    "variant": "safe",
+    "file": "wp-content/plugins/f09-plugin/plugin.php",
+    "marker_line": 9,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "F10",
+    "variant": "vulnerable",
+    "file": "wp-content/plugins/f10-plugin/plugin.php",
+    "marker_line": 7,
+    "expect": "flow.unsanitized_unescaped",
+    "must_report": true
+  },
+  {
+    "fixture": "F10",
+    "variant": "safe",
+    "file": "wp-content/plugins/f10-plugin/plugin.php",
+    "marker_line": 6,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "F11",
+    "variant": "vulnerable",
+    "file": "wp-content/themes/f11-theme/template.php",
+    "marker_line": 4,
+    "expect": "flow.unsanitized_unescaped",
+    "must_report": true
+  },
+  {
+    "fixture": "F11",
+    "variant": "safe",
+    "file": "wp-content/themes/f11-theme/template.php",
+    "marker_line": 4,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "F12",
+    "variant": "vulnerable",
+    "file": "wp-content/themes/f12-theme/template.php",
+    "marker_line": 4,
+    "expect": "output.unescaped",
+    "must_report": true
+  },
+  {
+    "fixture": "F12",
+    "variant": "safe",
+    "file": "wp-content/themes/f12-theme/template.php",
+    "marker_line": 4,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "F13",
+    "variant": "vulnerable",
+    "file": "wp-content/plugins/f13-plugin/plugin.php",
+    "marker_line": 7,
+    "expect": "input.unsanitized_storage",
+    "must_report": true
+  },
+  {
+    "fixture": "F13",
+    "variant": "safe",
+    "file": "wp-content/plugins/f13-plugin/plugin.php",
+    "marker_line": 7,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "F14",
+    "variant": "vulnerable",
+    "file": "wp-content/themes/f14-theme/template.php",
+    "marker_line": 4,
+    "expect": "output.escape_invalidated",
+    "must_report": true
+  },
+  {
+    "fixture": "F14",
+    "variant": "safe",
+    "file": "wp-content/themes/f14-theme/template.php",
+    "marker_line": 4,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "F15",
+    "variant": "vulnerable",
+    "file": "wp-content/themes/f15-theme/template.php",
+    "marker_line": 7,
+    "expect": "output.escape_invalidated",
+    "must_report": true
+  },
+  {
+    "fixture": "F15",
+    "variant": "safe",
+    "file": "wp-content/themes/f15-theme/template.php",
+    "marker_line": 6,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "F16",
+    "variant": "vulnerable",
+    "file": "wp-content/plugins/f16-plugin/plugin.php",
+    "marker_line": 11,
+    "expect": "flow.unsanitized_unescaped",
+    "must_report": true
+  },
+  {
+    "fixture": "F16",
+    "variant": "safe",
+    "file": "wp-content/plugins/f16-plugin/plugin.php",
+    "marker_line": 11,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "F17",
+    "variant": "vulnerable",
+    "file": "wp-content/plugins/f17-plugin/plugin.php",
+    "marker_line": 9,
+    "expect": "flow.unsanitized_unescaped",
+    "must_report": true
+  },
+  {
+    "fixture": "F17",
+    "variant": "safe",
+    "file": "wp-content/plugins/f17-plugin/plugin.php",
+    "marker_line": 9,
+    "expect": "clean",
+    "must_report": false
+  },
+  {
+    "fixture": "F18",
+    "variant": "vulnerable",
+    "file": "wp-content/plugins/f18-plugin/plugin.php",
+    "marker_line": 7,
+    "expect": "flow.unsanitized_unescaped",
+    "must_report": true
+  },
+  {
+    "fixture": "F18",
+    "variant": "safe",
+    "file": "wp-content/plugins/f18-plugin/plugin.php",
+    "marker_line": 7,
+    "expect": "clean",
+    "must_report": false
+  }
+]

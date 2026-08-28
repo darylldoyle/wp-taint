@@ -1,0 +1,15 @@
+{
+  "id": "O01",
+  "variant": "vulnerable",
+  "expected_findings": [
+    {
+      "fixture": "O01",
+      "variant": "vulnerable",
+      "file": "wp-content/themes/o01-theme/template.php",
+      "marker_line": 5,
+      "expect": "output.unescaped",
+      "must_report": true
+    }
+  ],
+  "expected_clean_markers": []
+}

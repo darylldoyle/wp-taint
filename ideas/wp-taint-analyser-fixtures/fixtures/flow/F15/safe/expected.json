@@ -1,0 +1,15 @@
+{
+  "id": "F15",
+  "variant": "safe",
+  "expected_findings": [],
+  "expected_clean_markers": [
+    {
+      "fixture": "F15",
+      "variant": "safe",
+      "file": "wp-content/themes/f15-theme/template.php",
+      "marker_line": 6,
+      "expect": "clean",
+      "must_report": false
+    }
+  ]
+}

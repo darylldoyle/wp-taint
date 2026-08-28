@@ -1,0 +1,15 @@
+{
+  "id": "F08",
+  "variant": "vulnerable",
+  "expected_findings": [
+    {
+      "fixture": "F08",
+      "variant": "vulnerable",
+      "file": "wp-content/plugins/f08-plugin/plugin.php",
+      "marker_line": 12,
+      "expect": "flow.unsanitized_unescaped",
+      "must_report": true
+    }
+  ],
+  "expected_clean_markers": []
+}

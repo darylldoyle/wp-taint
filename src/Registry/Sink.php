@@ -34,7 +34,22 @@ final class Sink
      */
     public const UNSERIALIZE_ALLOWS_OBJECTS = 'unserialize_allows_objects';
 
-    public const STRATEGIES = [self::UNANCHORED, self::UNSERIALIZE_ALLOWS_OBJECTS];
+    /**
+     * Fire only where escaping and an extension point meet.
+     *
+     * A value that never went near an escaper and comes back from a filter is
+     * simply unescaped output, and the ordinary rule says so. This one is for
+     * the case where somebody *did* escape and it stopped counting:
+     *
+     * ```php
+     * $safe   = esc_html( $value );
+     * $suffix = apply_filters( 'fx_suffix', '' );
+     * echo $safe . $suffix;
+     * ```
+     */
+    public const ESCAPED_THEN_VOIDED = 'escaped_then_voided';
+
+    public const STRATEGIES = [self::UNANCHORED, self::UNSERIALIZE_ALLOWS_OBJECTS, self::ESCAPED_THEN_VOIDED];
 
     public function __construct(
         public readonly Matcher $matcher,

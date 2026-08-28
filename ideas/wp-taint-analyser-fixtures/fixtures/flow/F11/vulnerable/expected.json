@@ -1,0 +1,15 @@
+{
+  "id": "F11",
+  "variant": "vulnerable",
+  "expected_findings": [
+    {
+      "fixture": "F11",
+      "variant": "vulnerable",
+      "file": "wp-content/themes/f11-theme/template.php",
+      "marker_line": 4,
+      "expect": "flow.unsanitized_unescaped",
+      "must_report": true
+    }
+  ],
+  "expected_clean_markers": []
+}

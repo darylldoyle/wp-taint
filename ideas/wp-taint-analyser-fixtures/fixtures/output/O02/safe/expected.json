@@ -1,0 +1,15 @@
+{
+  "id": "O02",
+  "variant": "safe",
+  "expected_findings": [],
+  "expected_clean_markers": [
+    {
+      "fixture": "O02",
+      "variant": "safe",
+      "file": "wp-content/themes/o02-theme/template.php",
+      "marker_line": 5,
+      "expect": "clean",
+      "must_report": false
+    }
+  ]
+}

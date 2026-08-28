@@ -1,0 +1,15 @@
+{
+  "id": "I08",
+  "variant": "vulnerable",
+  "expected_findings": [
+    {
+      "fixture": "I08",
+      "variant": "vulnerable",
+      "file": "wp-content/plugins/i08-plugin/plugin.php",
+      "marker_line": 8,
+      "expect": "input.unsanitized_storage",
+      "must_report": true
+    }
+  ],
+  "expected_clean_markers": []
+}

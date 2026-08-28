@@ -1,0 +1,15 @@
+{
+  "id": "I02",
+  "variant": "safe",
+  "expected_findings": [],
+  "expected_clean_markers": [
+    {
+      "fixture": "I02",
+      "variant": "safe",
+      "file": "wp-content/plugins/i02-plugin/plugin.php",
+      "marker_line": 8,
+      "expect": "clean",
+      "must_report": false
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "id": "I06",
+  "variant": "safe",
+  "expected_findings": [],
+  "expected_clean_markers": [
+    {
+      "fixture": "I06",
+      "variant": "safe",
+      "file": "wp-content/plugins/i06-plugin/plugin.php",
+      "marker_line": 7,
+      "expect": "clean",
+      "must_report": false
+    }
+  ]
+}

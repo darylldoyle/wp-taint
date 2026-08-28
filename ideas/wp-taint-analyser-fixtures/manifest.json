@@ -1,0 +1,626 @@
+{
+  "suite": "WordPress Taint Analyser Fixture Suite",
+  "version": "1.0.0",
+  "generated": "2026-08-28",
+  "philosophy": {
+    "variants_per_scenario": 2,
+    "variants": [
+      "vulnerable",
+      "safe"
+    ],
+    "strictness": "A test should fail on a missing expected finding or an unexpected extra finding.",
+    "escape_invalidation": "Any user-modifiable hook/filter after an escaping operation invalidates the escaping guarantee for subsequent output.",
+    "database_boundary": "Stored data must be treated as untrusted again when read for output, even if it was sanitized on input."
+  },
+  "canonical_finding_kinds": [
+    "input.unsanitized_storage",
+    "output.unescaped",
+    "output.wrong_context_escape",
+    "output.escape_invalidated",
+    "flow.unsanitized_unescaped"
+  ],
+  "scenarios": [
+    {
+      "id": "I01",
+      "category": "input",
+      "title": "Direct POST to option",
+      "purpose": "Basic superglobal source and storage boundary.",
+      "vulnerable_issue": "Raw POST data is written to an option. wp_unslash() changes slashing, not trust.",
+      "safe_reason": "The value is unslashed and sanitized with sanitize_text_field() before storage.",
+      "capabilities": [
+        "superglobal-source",
+        "wp_unslash-propagation",
+        "storage-sink",
+        "sanitizer"
+      ],
+      "expected_kind": "input.unsanitized_storage",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "I02",
+      "category": "input",
+      "title": "Nested settings array",
+      "purpose": "Array taint must survive nesting and whole-array assignment.",
+      "vulnerable_issue": "A nested POST array is written wholesale to an option without recursively sanitizing values.",
+      "safe_reason": "map_deep() applies sanitize_text_field() recursively before storage.",
+      "capabilities": [
+        "array-taint",
+        "nested-array",
+        "map_deep",
+        "storage-sink"
+      ],
+      "expected_kind": "input.unsanitized_storage",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "I03",
+      "category": "input",
+      "title": "Numeric GET parameter",
+      "purpose": "Context-specific scalar validation/casting.",
+      "vulnerable_issue": "A request value expected to be an integer reaches post meta unchanged.",
+      "safe_reason": "absint() validates/coerces the numeric identifier before storage.",
+      "capabilities": [
+        "get-source",
+        "numeric-validation",
+        "post-meta-sink"
+      ],
+      "expected_kind": "input.unsanitized_storage",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "I04",
+      "category": "input",
+      "title": "Uploaded filename",
+      "purpose": "File metadata is user-controlled input.",
+      "vulnerable_issue": "The original upload name is persisted without filename sanitisation.",
+      "safe_reason": "sanitize_file_name() is applied before writing the filename to metadata.",
+      "capabilities": [
+        "files-source",
+        "array-offset",
+        "filename-sanitizer",
+        "post-meta-sink"
+      ],
+      "expected_kind": "input.unsanitized_storage",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "I05",
+      "category": "input",
+      "title": "REST request parameter",
+      "purpose": "Framework object methods can be taint sources.",
+      "vulnerable_issue": "WP_REST_Request::get_param() is treated as untrusted and written to user meta directly.",
+      "safe_reason": "sanitize_textarea_field() runs before the write.",
+      "capabilities": [
+        "rest-source",
+        "method-return-taint",
+        "user-meta-sink"
+      ],
+      "expected_kind": "input.unsanitized_storage",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "I06",
+      "category": "input",
+      "title": "Shortcode attribute persisted",
+      "purpose": "shortcode_atts() supplies defaults but is not a sanitizer.",
+      "vulnerable_issue": "A shortcode attribute is persisted as a CSS class without sanitisation.",
+      "safe_reason": "sanitize_html_class() constrains the class before storage.",
+      "capabilities": [
+        "shortcode-source",
+        "shortcode_atts-propagation",
+        "html-class-sanitizer",
+        "post-meta-sink"
+      ],
+      "expected_kind": "input.unsanitized_storage",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "I07",
+      "category": "input",
+      "title": "Cookie to option",
+      "purpose": "Cookies are attacker-controlled request data too.",
+      "vulnerable_issue": "A cookie value is written directly to an option.",
+      "safe_reason": "sanitize_key() constrains the expected token-like value before storage.",
+      "capabilities": [
+        "cookie-source",
+        "sanitize_key",
+        "storage-sink"
+      ],
+      "expected_kind": "input.unsanitized_storage",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "I08",
+      "category": "input",
+      "title": "Remote HTTP body to option",
+      "purpose": "Third-party responses are untrusted input, even without a browser request.",
+      "vulnerable_issue": "Remote HTML is persisted without constraining allowed markup.",
+      "safe_reason": "wp_kses_post() constrains the remote HTML before it is stored.",
+      "capabilities": [
+        "remote-http-source",
+        "wp_remote_retrieve_body",
+        "kses-sanitizer",
+        "storage-sink"
+      ],
+      "expected_kind": "input.unsanitized_storage",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "O01",
+      "category": "output",
+      "title": "Option in HTML text",
+      "purpose": "Database reads remain untrusted for output.",
+      "vulnerable_issue": "An option value is echoed inside element text without escaping.",
+      "safe_reason": "esc_html() is applied at the output boundary.",
+      "capabilities": [
+        "database-source",
+        "html-text-sink",
+        "late-escape"
+      ],
+      "expected_kind": "output.unescaped",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "O02",
+      "category": "output",
+      "title": "Post meta in attribute",
+      "purpose": "Attribute context requires attribute escaping.",
+      "vulnerable_issue": "Post meta is interpolated into a class attribute raw.",
+      "safe_reason": "esc_attr() is used at the attribute sink.",
+      "capabilities": [
+        "post-meta-source",
+        "attribute-sink",
+        "contextual-escape"
+      ],
+      "expected_kind": "output.unescaped",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "O03",
+      "category": "output",
+      "title": "User meta in URL attribute",
+      "purpose": "URL context requires URL escaping, not generic text escaping.",
+      "vulnerable_issue": "User meta is used directly as an href.",
+      "safe_reason": "esc_url() is applied at the href output boundary.",
+      "capabilities": [
+        "user-meta-source",
+        "url-sink",
+        "esc_url"
+      ],
+      "expected_kind": "output.unescaped",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "O04",
+      "category": "output",
+      "title": "add_query_arg URL output",
+      "purpose": "URL construction is not output escaping.",
+      "vulnerable_issue": "A URL built with add_query_arg() from the current request is emitted without esc_url().",
+      "safe_reason": "The final URL is escaped with esc_url() at the href sink.",
+      "capabilities": [
+        "server-source",
+        "url-builder-propagation",
+        "url-sink",
+        "cve-pattern"
+      ],
+      "expected_kind": "output.unescaped",
+      "inspiration": "CVE-2024-8730 and similar add_query_arg reflected-XSS reports",
+      "notes": null
+    },
+    {
+      "id": "O05",
+      "category": "output",
+      "title": "Allowed rich HTML",
+      "purpose": "Intentional HTML needs KSES-style output handling.",
+      "vulnerable_issue": "Stored rich text is echoed verbatim.",
+      "safe_reason": "wp_kses_post() permits post-safe markup while removing disallowed HTML.",
+      "capabilities": [
+        "database-source",
+        "html-fragment-sink",
+        "wp_kses_post"
+      ],
+      "expected_kind": "output.unescaped",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "O06",
+      "category": "output",
+      "title": "Inline JavaScript string",
+      "purpose": "Output escaping is context-specific for JavaScript.",
+      "vulnerable_issue": "Stored data is concatenated into an inline JS string literal raw.",
+      "safe_reason": "esc_js() is applied to the dynamic string at the JavaScript sink.",
+      "capabilities": [
+        "database-source",
+        "javascript-sink",
+        "esc_js"
+      ],
+      "expected_kind": "output.unescaped",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "O07",
+      "category": "output",
+      "title": "Textarea context",
+      "purpose": "Textarea output has its own escaping helper.",
+      "vulnerable_issue": "Stored data is emitted directly between textarea tags.",
+      "safe_reason": "esc_textarea() is applied at the output boundary.",
+      "capabilities": [
+        "database-source",
+        "textarea-sink",
+        "esc_textarea"
+      ],
+      "expected_kind": "output.unescaped",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "O08",
+      "category": "output",
+      "title": "XML context",
+      "purpose": "XML output should not be treated like plain HTML text.",
+      "vulnerable_issue": "A stored URL is placed into an XML element raw.",
+      "safe_reason": "esc_xml() is applied at the XML sink.",
+      "capabilities": [
+        "database-source",
+        "xml-sink",
+        "esc_xml"
+      ],
+      "expected_kind": "output.unescaped",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "O09",
+      "category": "output",
+      "title": "Wrong-context escape",
+      "purpose": "An escape is not universally valid across sink contexts.",
+      "vulnerable_issue": "esc_html() is used for an href value; the value is escaped, but with the wrong semantic/context helper.",
+      "safe_reason": "esc_url() is used for the URL attribute.",
+      "capabilities": [
+        "wrong-context-escape",
+        "url-sink",
+        "context-tracking"
+      ],
+      "expected_kind": "output.wrong_context_escape",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "O10",
+      "category": "output",
+      "title": "Escape invalidated by filter",
+      "purpose": "The suite-specific late-escaping invariant: a filter after escaping invalidates safety.",
+      "vulnerable_issue": "The value is escaped, then passed through apply_filters(), which can replace or append arbitrary data before echo.",
+      "safe_reason": "The filter runs first and esc_html() is the final transformation before output.",
+      "capabilities": [
+        "escape-state",
+        "hook-invalidation",
+        "late-escape",
+        "apply_filters"
+      ],
+      "expected_kind": "output.escape_invalidated",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "F01",
+      "category": "flow",
+      "title": "Reflected request to HTML text",
+      "purpose": "The smallest end-to-end source-to-sink flow.",
+      "vulnerable_issue": "A GET parameter reaches HTML text with neither input sanitisation nor output escaping.",
+      "safe_reason": "sanitize_text_field() is used on input and esc_html() is used at output.",
+      "capabilities": [
+        "end-to-end",
+        "get-source",
+        "html-text-sink",
+        "sanitizer",
+        "escaper"
+      ],
+      "expected_kind": "flow.unsanitized_unescaped",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "F02",
+      "category": "flow",
+      "title": "Stored settings XSS",
+      "purpose": "A complete request \u2192 database \u2192 later output path.",
+      "vulnerable_issue": "Raw POST data is stored, later read back, and echoed unescaped.",
+      "safe_reason": "Input is sanitized before storage and escaped again at the later output boundary.",
+      "capabilities": [
+        "stored-flow",
+        "post-source",
+        "database-boundary",
+        "html-sink",
+        "multi-function"
+      ],
+      "expected_kind": "flow.unsanitized_unescaped",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "F03",
+      "category": "flow",
+      "title": "Shortcode attribute to class",
+      "purpose": "Real-world shortcode XSS family.",
+      "vulnerable_issue": "A user-controlled shortcode attribute flows through shortcode_atts() and into an HTML class attribute.",
+      "safe_reason": "The class is sanitized and escaped in the attribute context.",
+      "capabilities": [
+        "shortcode-source",
+        "shortcode_atts-propagation",
+        "attribute-sink",
+        "cve-pattern"
+      ],
+      "expected_kind": "flow.unsanitized_unescaped",
+      "inspiration": "CVE-2025-12661 / CVE-2025-14109 style shortcode-attribute stored XSS",
+      "notes": null
+    },
+    {
+      "id": "F04",
+      "category": "flow",
+      "title": "Request URI through add_query_arg",
+      "purpose": "CVE-shaped reflected URL flow.",
+      "vulnerable_issue": "REQUEST_URI propagates through add_query_arg() into an href without URL escaping.",
+      "safe_reason": "The composed URL is escaped only after all query-string construction is complete.",
+      "capabilities": [
+        "server-source",
+        "function-propagation",
+        "url-sink",
+        "cve-pattern"
+      ],
+      "expected_kind": "flow.unsanitized_unescaped",
+      "inspiration": "CVE-2024-8730 and multiple similar WordPress plugin CVEs",
+      "notes": null
+    },
+    {
+      "id": "F05",
+      "category": "flow",
+      "title": "AJAX setting with nonce",
+      "purpose": "Security checks do not sanitize payloads.",
+      "vulnerable_issue": "A valid nonce is checked, but raw AJAX POST data is still stored and later echoed raw. The nonce must not clear taint.",
+      "safe_reason": "Nonce verification remains, while the value is sanitized on input and escaped on output.",
+      "capabilities": [
+        "ajax-source",
+        "nonce-non-sanitizer",
+        "stored-flow",
+        "html-sink"
+      ],
+      "expected_kind": "flow.unsanitized_unescaped",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "F06",
+      "category": "flow",
+      "title": "REST to post meta to block render",
+      "purpose": "Framework callbacks and delayed rendering.",
+      "vulnerable_issue": "A REST parameter is stored in post meta and later rendered by a dynamic block callback without escaping.",
+      "safe_reason": "The REST value is sanitized before storage and escaped in the block renderer.",
+      "capabilities": [
+        "rest-source",
+        "stored-flow",
+        "callback-flow",
+        "block-render",
+        "post-meta"
+      ],
+      "expected_kind": "flow.unsanitized_unescaped",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "F07",
+      "category": "flow",
+      "title": "Custom class propagation",
+      "purpose": "Taint should survive ordinary user-defined method calls.",
+      "vulnerable_issue": "Request data passes through getter and normalizer methods; trim/strtolower do not sanitize it before output.",
+      "safe_reason": "The source is sanitized in the boundary method and escaped at output.",
+      "capabilities": [
+        "interprocedural",
+        "method-call",
+        "string-propagator",
+        "html-sink"
+      ],
+      "expected_kind": "flow.unsanitized_unescaped",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "F08",
+      "category": "flow",
+      "title": "Array merge and nested access",
+      "purpose": "Array reconstruction must not accidentally drop taint.",
+      "vulnerable_issue": "POST data is merged into a new array, stored, retrieved, and one nested element is output raw.",
+      "safe_reason": "The merged structure is recursively sanitized and the retrieved value is escaped at output.",
+      "capabilities": [
+        "array-merge",
+        "array-taint",
+        "stored-flow",
+        "regression-shape"
+      ],
+      "expected_kind": "flow.unsanitized_unescaped",
+      "inspiration": "Psalm issue #10919 demonstrates why reconstructed/nested arrays deserve explicit taint regressions",
+      "notes": null
+    },
+    {
+      "id": "F09",
+      "category": "flow",
+      "title": "Conditional merge",
+      "purpose": "A tainted branch must taint the merged value.",
+      "vulnerable_issue": "The default is trusted, but one control-flow branch assigns raw request data before the common sink.",
+      "safe_reason": "The request branch sanitizes its value and output is escaped.",
+      "capabilities": [
+        "control-flow",
+        "phi-merge",
+        "conditional-taint"
+      ],
+      "expected_kind": "flow.unsanitized_unescaped",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "F10",
+      "category": "flow",
+      "title": "sprintf and concatenation",
+      "purpose": "Formatted strings are propagators, not sanitizers.",
+      "vulnerable_issue": "A request value flows into sprintf(), then the assembled HTML is echoed.",
+      "safe_reason": "The dynamic value is sanitized and escaped at the point it enters the HTML template.",
+      "capabilities": [
+        "sprintf-propagation",
+        "concatenation",
+        "html-sink"
+      ],
+      "expected_kind": "flow.unsanitized_unescaped",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "F11",
+      "category": "flow",
+      "title": "Plugin filter to theme sink",
+      "purpose": "Cross-component flow through WordPress filters.",
+      "vulnerable_issue": "A plugin injects request data into a filter; a theme applies the filter and echoes the result raw.",
+      "safe_reason": "The plugin sanitizes its request value and, critically, the theme escapes after apply_filters().",
+      "capabilities": [
+        "cross-file",
+        "cross-plugin-theme",
+        "filter-propagation",
+        "late-escape"
+      ],
+      "expected_kind": "flow.unsanitized_unescaped",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "F12",
+      "category": "flow",
+      "title": "Sanitized storage, unsafe theme output",
+      "purpose": "Sanitization and escaping are independent guarantees.",
+      "vulnerable_issue": "A plugin correctly sanitizes before storage, but the theme assumes stored data is safe and echoes it raw.",
+      "safe_reason": "The theme still escapes the database value at output.",
+      "capabilities": [
+        "cross-plugin-theme",
+        "sanitization-not-escaping",
+        "database-boundary"
+      ],
+      "expected_kind": "output.unescaped",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "F13",
+      "category": "flow",
+      "title": "Raw storage, safely escaped theme",
+      "purpose": "Safe output must not hide a bad input boundary.",
+      "vulnerable_issue": "The theme escapes correctly, but a plugin writes raw request data to persistent storage. The input violation should still be reported.",
+      "safe_reason": "The plugin sanitizes before storage; the theme continues to escape at output.",
+      "capabilities": [
+        "cross-plugin-theme",
+        "input-output-independence",
+        "storage-sink",
+        "negative-xss"
+      ],
+      "expected_kind": "input.unsanitized_storage",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "F14",
+      "category": "flow",
+      "title": "Escaped plugin value invalidated by another plugin",
+      "purpose": "The core custom invariant across plugin boundaries.",
+      "vulnerable_issue": "Plugin A escapes a value, then exposes it to a filter. Plugin B appends request data. The theme echoes the returned value, so the original escape is no longer a valid guarantee.",
+      "safe_reason": "Plugins return/filter data first; the theme performs the final esc_html() immediately before output.",
+      "capabilities": [
+        "cross-plugin-theme",
+        "multi-plugin",
+        "escape-invalidation",
+        "filter-return",
+        "late-escape"
+      ],
+      "expected_kind": "output.escape_invalidated",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "F15",
+      "category": "flow",
+      "title": "Filter replaces escaped value",
+      "purpose": "A filter can replace, not merely append to, an escaped value.",
+      "vulnerable_issue": "The theme escapes a default value before apply_filters(); another plugin completely replaces it with stored data, then the theme echoes it.",
+      "safe_reason": "The filtered value is escaped only after all callbacks have completed.",
+      "capabilities": [
+        "cross-plugin-theme",
+        "filter-replacement",
+        "escape-invalidation",
+        "database-source"
+      ],
+      "expected_kind": "output.escape_invalidated",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "F16",
+      "category": "flow",
+      "title": "Global state across action boundary",
+      "purpose": "Cross-file globals and action callbacks can carry taint.",
+      "vulnerable_issue": "A plugin copies POST data into a global. The theme triggers an action whose plugin callback echoes the global raw.",
+      "safe_reason": "The value is sanitized when captured and escaped inside the output callback.",
+      "capabilities": [
+        "cross-file",
+        "global-taint",
+        "action-callback",
+        "callback-sink"
+      ],
+      "expected_kind": "flow.unsanitized_unescaped",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "F17",
+      "category": "flow",
+      "title": "Remote response through filter to rich HTML",
+      "purpose": "External content, filters, and HTML-preserving escaping.",
+      "vulnerable_issue": "Remote HTML flows through a filter and is output directly. The filter means any earlier assumptions about the remote body are insufficient.",
+      "safe_reason": "Filtering happens first, then wp_kses_post() is the final output transformation.",
+      "capabilities": [
+        "remote-http-source",
+        "filter-propagation",
+        "rich-html-sink",
+        "late-kses"
+      ],
+      "expected_kind": "flow.unsanitized_unescaped",
+      "inspiration": null,
+      "notes": null
+    },
+    {
+      "id": "F18",
+      "category": "flow",
+      "title": "Inline script JSON boundary",
+      "purpose": "Structured encoding versus raw JavaScript concatenation.",
+      "vulnerable_issue": "Request data is concatenated into inline JavaScript passed to wp_add_inline_script().",
+      "safe_reason": "The input is sanitized and wp_json_encode() is used to create a JavaScript literal before the inline-script sink.",
+      "capabilities": [
+        "javascript-sink",
+        "wp_add_inline_script",
+        "json-encoding",
+        "request-source"
+      ],
+      "expected_kind": "flow.unsanitized_unescaped",
+      "inspiration": null,
+      "notes": null
+    }
+  ]
+}
