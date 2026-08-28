@@ -11,3 +11,4 @@
 .DS_Store
 *.log
 wp-taint-baseline.json
+tests/Fixtures/vulnerable-plugin/

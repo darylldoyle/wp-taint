@@ -79,7 +79,9 @@
         "catalogue:check": "php tools/generate-wpcs-catalogue.php --check",
         "corpus:lock": "php tools/fetch-corpus.php --lock",
         "corpus:baseline": "php tools/corpus-baseline.php",
-        "corpus:check": "php tools/corpus-baseline.php --check"
+        "corpus:check": "php tools/corpus-baseline.php --check",
+        "vulnerable:fetch": "php tools/fetch-vulnerable-plugin.php",
+        "vulnerable:check": "php tools/vulnerable-plugin-check.php"
     },
     "scripts-descriptions": {
         "test": "Run the full Pest suite",
@@ -88,6 +90,8 @@
         "lint": "Run PHP_CodeSniffer",
         "lint:fix": "Auto-fix PHP_CodeSniffer violations",
         "corpus:fetch": "Download the WordPress.org plugin corpus into tests/Fixtures/corpus",
+        "vulnerable:fetch": "Download the WordPress project's intentionally vulnerable plugin",
+        "vulnerable:check": "Score the engine against that plugin's published answer key",
         "check": "Lint, analyse and test",
         "fixtures:build": "Regenerate fixture expectations from the inline wp-taint-expect annotations",
         "fixtures:check": "Fail if the fixture expectations are out of date"

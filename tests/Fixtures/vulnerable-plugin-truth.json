@@ -1,0 +1,205 @@
+{
+    "_comment": [
+        "Ground truth for the Damn Vulnerable WordPress Plugin, taken from the",
+        "WordPress plugin review team's own write-up of it:",
+        "",
+        "  https://make.wordpress.org/plugins/2013/11/24/how-to-fix-the-intentionally-vulnerable-plugin/",
+        "",
+        "This is the only scored benchmark in the project that somebody else",
+        "wrote. The fixture suite is ours, authored alongside the engine; the",
+        "corpus is third-party code with no answer key. This has both, and it",
+        "was written in 2013 for a purpose with nothing to do with this tool.",
+        "",
+        "`status` is ours, not theirs. It records what this engine does today:",
+        "",
+        "  caught         we report it, and the checker fails if we stop",
+        "  missed         we should report it and do not; a known false negative",
+        "  modelled       not a finding on its own; it is the source that makes",
+        "                 the findings downstream of it real",
+        "",
+        "Nothing in this file is marked out of scope. Three issues (7, 8, 10) are",
+        "CSRF and control-flow bugs that the taint engine structurally cannot see,",
+        "and it would have been easy to file them under `not our job`. They are",
+        "not: this project already runs structural rules beside the dataflow, and",
+        "these are the same kind of check. They are marked `missed` because that",
+        "is what they are.",
+        "",
+        "A `missed` entry that starts being caught fails the checker too. That is",
+        "not pedantry: it means somebody fixed something and did not notice, and",
+        "the next person to read this file would be misled about where we stand.",
+        "",
+        "The plugin is fetched, not committed: it is GPLv2+ and this project is",
+        "MIT. `composer vulnerable:fetch` pins it to the April 2013 revision."
+    ],
+    "source": {
+        "gist": "https://gist.github.com/joncave/5348689",
+        "revision": "80fcca0f1d7e6f8c86c4a1a0d6abb0855d74fb7a",
+        "author": "Jon Cave",
+        "licence": "GPLv2+",
+        "answerKey": "https://make.wordpress.org/plugins/2013/11/24/how-to-fix-the-intentionally-vulnerable-plugin/"
+    },
+    "issues": [
+        {
+            "id": 1,
+            "class": "sqli",
+            "title": "prepare() called with the values interpolated into the format string",
+            "file": "vulnerable.php",
+            "lines": [
+                42
+            ],
+            "status": "caught",
+            "expectedRule": "wp.sqli.prepare-non-literal"
+        },
+        {
+            "id": 2,
+            "class": "sqli",
+            "title": "esc_sql() used for an unquoted numeric parameter in get_row()",
+            "file": "vulnerable.php",
+            "lines": [
+                102
+            ],
+            "status": "missed",
+            "expectedRule": "wp.sqli.unprepared-query",
+            "note": "esc_sql() escapes quotes. With no quotes around the value there is nothing for it to escape, and `1 OR 1=1` goes straight through. We modelled esc_sql() as an absolute sanitizer until this plugin proved it is not."
+        },
+        {
+            "id": 3,
+            "class": "sqli",
+            "title": "esc_sql() used for an unquoted numeric parameter in the delete handler",
+            "file": "vulnerable.php",
+            "lines": [
+                127
+            ],
+            "status": "missed",
+            "expectedRule": "wp.sqli.unprepared-query",
+            "note": "Same shape as issue 2, straight off $_POST."
+        },
+        {
+            "id": 4,
+            "class": "xss",
+            "title": "Persistent XSS: audit rows written from request data and printed unescaped",
+            "file": "vulnerable.php",
+            "lines": [
+                75,
+                76,
+                77,
+                79,
+                107,
+                108,
+                109,
+                110
+            ],
+            "status": "caught",
+            "expectedRule": "wp.xss.unescaped-output"
+        },
+        {
+            "id": 5,
+            "class": "xss",
+            "title": "Reflected XSS from $_GET['id'], in text and in an attribute",
+            "file": "vulnerable.php",
+            "lines": [
+                104,
+                115
+            ],
+            "status": "caught",
+            "expectedRule": "wp.xss.unescaped-output"
+        },
+        {
+            "id": 6,
+            "class": "xss",
+            "title": "Reflected XSS from $_SERVER['PHP_SELF'] in an attribute",
+            "file": "vulnerable.php",
+            "lines": [
+                116
+            ],
+            "status": "caught",
+            "expectedRule": "wp.xss.unescaped-output"
+        },
+        {
+            "id": 7,
+            "class": "csrf",
+            "title": "wp_nonce_field()/check_admin_referer() called with no action",
+            "file": "vulnerable.php",
+            "lines": [
+                114,
+                123
+            ],
+            "status": "missed",
+            "expectedRule": "wp.csrf.nonce-without-action",
+            "note": "Detectable, and not written. Both calls omit the action, so both fall back to the shared -1 nonce, which any other -1 form on the site will satisfy. This is a one-node AST match of exactly the kind the structural rules already do for REST and AJAX; calling it out of scope because the taint engine cannot see it was hiding behind the wrong half of the tool."
+        },
+        {
+            "id": 8,
+            "class": "csrf",
+            "title": "Nonce check skipped entirely when the nonce parameter is absent",
+            "file": "vulnerable.php",
+            "lines": [
+                137
+            ],
+            "status": "missed",
+            "expectedRule": "wp.csrf.bypassable-nonce-check",
+            "note": "Detectable, and not written. Guarding a nonce check with isset() on the same parameter means omitting the parameter skips the check: the conjunction is false, and && binds tighter than the || that follows, so the capability check is skipped with it. A recognisable shape, and structural rule work rather than dataflow."
+        },
+        {
+            "id": 9,
+            "class": "authz",
+            "title": "Delete handler has no capability check",
+            "file": "vulnerable.php",
+            "lines": [
+                122,
+                132
+            ],
+            "status": "missed",
+            "expectedRule": "wp.authz.admin-post-missing-check",
+            "note": "admin_post_ is the third registrar of the same shape as REST and AJAX: a request maps to a handler, and the handler is responsible for saying who may run it. We covered the first two and not this one."
+        },
+        {
+            "id": 10,
+            "class": "logic",
+            "title": "No exit() after the redirect, so the failed check falls through",
+            "file": "vulnerable.php",
+            "lines": [
+                140
+            ],
+            "status": "missed",
+            "expectedRule": "wp.authz.guard-without-exit",
+            "note": "The single most consequential bug in the file, and the one this engine has the most machinery to catch and does not. wp_safe_redirect() returns; nothing stops execution; the option write below runs anyway. Together with issue 8 this is the actual privilege escalation path. The CFG already knows the block falls through \u2014 no rule asks it."
+        },
+        {
+            "id": 11,
+            "class": "authz",
+            "title": "Any option may be updated, with the name taken from the request",
+            "file": "vulnerable.php",
+            "lines": [
+                147,
+                148
+            ],
+            "status": "missed",
+            "expectedRule": "wp.authz.arbitrary-option-write",
+            "note": "The option NAME is attacker-controlled, not just the value. That is privilege escalation \u2014 set `default_role` to administrator \u2014 and it is a different bug from writing untrusted data into a known option."
+        },
+        {
+            "id": 12,
+            "class": "redirect",
+            "title": "Open redirect: wp_redirect() with $_REQUEST['redirect']",
+            "file": "vulnerable.php",
+            "lines": [
+                130
+            ],
+            "status": "caught",
+            "expectedRule": "wp.redirect.open-redirect"
+        },
+        {
+            "id": 13,
+            "class": "source",
+            "title": "X-Forwarded-For trusted as the client IP",
+            "file": "vulnerable.php",
+            "lines": [
+                155,
+                156
+            ],
+            "status": "modelled",
+            "note": "Not a finding by itself. It is the source: $_SERVER['HTTP_X_FORWARDED_FOR'] is what carries the payload into issues 1 and 4, and the traces for those findings start here."
+        }
+    ]
+}
