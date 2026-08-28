@@ -40,6 +40,9 @@ final class RegistryAccumulator
     /** @var array<string, string> identity => "entitlement" or "intent" */
     private array $authorization = [];
 
+    /** @var array<string, list<int>> lowercased name => parameter indices the filtered return comes from */
+    private array $filterable = [];
+
     /** @var array<string, RuleMetadata> */
     private array $rules = [];
 
@@ -108,6 +111,14 @@ final class RegistryAccumulator
         $this->authorization[$matcher->identity()] = $proves;
     }
 
+    /**
+     * @param array<array-key, int> $params
+     */
+    public function addFilterable(string $function, array $params = []): void
+    {
+        $this->filterable[strtolower(ltrim($function, '\\'))] = array_values($params);
+    }
+
     public function addRule(RuleMetadata $rule): void
     {
         $this->rules[$rule->id] = $rule;
@@ -138,6 +149,7 @@ final class RegistryAccumulator
         ksort($this->byRef);
         ksort($this->templates);
         ksort($this->authorization);
+        ksort($this->filterable);
         ksort($this->rules);
 
         $identifiers = $this->safeDatabaseIdentifiers;
@@ -154,6 +166,7 @@ final class RegistryAccumulator
             $this->byRef,
             $this->templates,
             $this->authorization,
+            $this->filterable,
             $this->rules,
             $identifiers,
         );

@@ -334,9 +334,21 @@ note = "Returns a match count. The captured groups go out by reference; see [[by
 
 [[sinks]]
 construct = "echo"
+kind = "escape_voided"
+severity = "medium"
+rule_id = "wp.xss.escape-voided"
+
+[[sinks]]
+construct = "echo"
 kind = "html"
 severity = "high"
 rule_id = "wp.xss.unescaped-output"
+
+[[sinks]]
+construct = "print"
+kind = "escape_voided"
+severity = "medium"
+rule_id = "wp.xss.escape-voided"
 
 [[sinks]]
 construct = "print"

@@ -77,6 +77,8 @@
         "fixtures:check": "php tools/build-fixture-expectations.php --check",
         "catalogue:generate": "php tools/generate-wpcs-catalogue.php",
         "catalogue:check": "php tools/generate-wpcs-catalogue.php --check",
+        "filterable:generate": "php tools/generate-filterable-catalogue.php",
+        "filterable:check": "php tools/generate-filterable-catalogue.php --check",
         "corpus:lock": "php tools/fetch-corpus.php --lock",
         "corpus:baseline": "php tools/corpus-baseline.php",
         "corpus:check": "php tools/corpus-baseline.php --check",

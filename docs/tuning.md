@@ -936,3 +936,92 @@ wrong method body for an authorization check is the failure this rule exists to
 prevent, so it gives up instead.
 
 Corpus: 1,073 to 1,163.
+
+## Phase 10 — escaping has to survive to the sink
+
+A plain taint model reports nothing at all on this:
+
+```php
+$title = esc_html( $_GET['title'] );
+echo apply_filters( 'acme_title', $title );
+```
+
+The escaper clears the taint and nothing puts it back. Any plugin on the site
+may hook `acme_title` and return whatever it likes, and this code prints it.
+That is why the practice is called *late* escaping: it has to be the last thing
+that happens to a value, because everything afterwards is another chance to
+undo it.
+
+An escaper marks its result; a call that hands the value to somebody else trades
+that mark for `escape_voided`; the output construct reports it under its own
+rule at medium, one band below never having escaped at all, because it needs a
+second plugin to actually hook the filter.
+
+### Which calls void it is generated, not guessed
+
+The obvious version — void on `apply_filters()` — misses the commonest case by
+far, which is an ordinary-looking core function with a filter inside it:
+
+```php
+echo wp_trim_words( $escaped, 20 );   // 'wp_trim_words' runs inside
+```
+
+Guessing by name (`wp_`, `get_`) would be a heuristic. This is a fact about a
+WordPress checkout, so `tools/generate-filterable-catalogue.php` derives it:
+4,272 core functions read, 933 mention a filter, **569 return one**.
+
+Three corrections, each found by measuring rather than reasoning.
+
+**Pattern-matching two spellings was too narrow.** `return apply_filters(...)`
+and `$x = apply_filters(...); return $x;` miss the case where the filter and the
+return are several statements apart, which is most of how core is written. A
+fixed point over the body — a variable is filtered if assigned from a filter or
+from anything mentioning an already-filtered variable — took it 524 to 629.
+
+**Passing a value as an argument does not make the result derive from it.**
+`$rval = $wpdb->update( $table, $data )` returns a row count, not `$data`. Calls
+are opaque now, except a named list of string builders, because
+`_navigation_markup()` genuinely ends `return sprintf( $template, ... )` with a
+filtered `$template` and a plugin hooking it controls the markup. 629 to 569.
+
+**Which parameter matters.** `wp_update_comment( $comment )` takes a value in
+and returns a row count; `get_the_title( $id )` filters a title it fetched
+itself. Voiding on "any escaped argument" reported both, so the catalogue
+records the parameter positions the filtered return actually comes from.
+
+### Two exceptions that had to be written down
+
+**Every WordPress escaper is itself filterable.** Core ends `esc_html()` with
+`return apply_filters( 'esc_html', $safe_text, $text )`, so the generated list
+contains it, and taking that literally makes every escaper void its own work. A
+site with a hostile `esc_html` filter has a problem this rule cannot usefully
+report at ten thousand call sites.
+
+**Numeric coercion is not escaping.** `absint()` clears every kind, and marking
+its result escaped made `echo get_the_title( absint( $_GET['id'] ) )` look like
+voided escaping — the *id* carried the marker into a call whose result has
+nothing to do with it.
+
+**And escaping after the filter clears the voiding**, because that is the
+correct order. Cookie Law Info does
+`wp_kses_post( apply_filters( 'x', esc_html( $v ) ) )`, which is safe however
+the filter behaves, and the rule reported it until this was fixed.
+
+### What it found
+
+Corpus 1,163 to 1,399; the rule accounts for 236. Sampled, they hold up. Akismet
+does `echo apply_filters( 'akismet_..._markup', '<p>' . wp_kses( ... ) )`, and
+WooCommerce does this with a comment that says it out loud:
+
+```php
+// KSES is ran within get_description, but not here since there may be custom
+// HTML returned by extensions.
+echo wpautop( wptexturize( $description ) );
+```
+
+One known false positive, on the plugin pinned to zero to catch exactly this
+kind of thing. `wp_update_comment()` is listed as returning its first parameter
+filtered because core contains `if ( false === $data ) { return $data; }` after
+the filter — a return only reachable when the value is `false`. The generator is
+right about the syntax and wrong about the semantics, and knowing the difference
+needs path-sensitivity a generated list cannot have.

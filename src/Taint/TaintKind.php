@@ -82,6 +82,35 @@ enum TaintKind: string
     case UnserializeStored = 'unserialize_stored';
 
     /**
+     * This value has been through an output escaper.
+     *
+     * Not a taint. A marker, carried so that {@see self::EscapeVoided} can tell
+     * a value that was escaped and then handed on from one that was never
+     * escaped at all. Nothing reports it.
+     */
+    case Escaped = 'escaped';
+
+    /**
+     * Escaped, and then passed through a filter before it was printed.
+     *
+     * ```php
+     * $title = esc_html( $_GET['title'] );
+     * echo apply_filters( 'acme_title', $title );
+     * ```
+     *
+     * The escaping is void. Any plugin may hook `acme_title` and return
+     * whatever it likes, and this one prints the result. That is why the
+     * practice is called *late* escaping: it has to be the last thing that
+     * happens to a value, because every step afterwards is another chance to
+     * undo it.
+     *
+     * Invisible to a plain taint model, which sees the escaper clear the taint
+     * and nothing put it back. This engine reported nothing at all on the four
+     * lines above until this kind existed.
+     */
+    case EscapeVoided = 'escape_voided';
+
+    /**
      * Not a taint kind at all: nothing seeds it and nothing propagates it.
      *
      * Structural rules report broken authorization, which has no dataflow to
@@ -115,6 +144,8 @@ enum TaintKind: string
             self::Identifier => 1 << 12,
             self::SqlUnquoted => 1 << 13,
             self::UnserializeStored => 1 << 14,
+            self::Escaped => 1 << 15,
+            self::EscapeVoided => 1 << 16,
             self::Authz => 1 << 11,
         };
     }
@@ -143,7 +174,7 @@ enum TaintKind: string
      */
     public function isDerived(): bool
     {
-        return $this === self::SqlUnquoted;
+        return in_array($this, [self::SqlUnquoted, self::Escaped, self::EscapeVoided], true);
     }
 
     /**
@@ -182,6 +213,8 @@ enum TaintKind: string
             self::Identifier => 'privileged identifier',
             self::SqlUnquoted => 'SQL outside quotes',
             self::UnserializeStored => 'stored serialised payload',
+            self::Escaped => 'escaped',
+            self::EscapeVoided => 'escaping voided by a filter',
             self::Authz => 'authorization',
         };
     }

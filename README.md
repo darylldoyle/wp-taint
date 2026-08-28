@@ -49,6 +49,8 @@ wp-taint takes the SSA/CFG approach — which gives interprocedural taint cheapl
 **Injection**, via dataflow from source to sink:
 
 - Reflected and stored XSS, including across one or more function boundaries
+- Escaping undone before output — a value escaped and then passed through a
+  filter, or through one of the 629 core functions that return a filtered value
 - SQL injection, including `$wpdb->prepare()` called with a non-literal format
   string, and `esc_sql()` used where there are no quotes for it to escape
 - Local file inclusion, arbitrary file read and write

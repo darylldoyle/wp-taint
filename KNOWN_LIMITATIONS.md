@@ -49,6 +49,82 @@ property `$x`" and stopped, which is not something a reviewer can act on.
 
 **Direction:** over-approximating.
 
+### Escaping must survive to the point of output
+
+Escaping is called *late* escaping because it has to be the last thing that
+happens to a value. Anything afterwards is another chance to undo it:
+
+```php
+$title = esc_html( $_GET['title'] );
+echo apply_filters( 'acme_title', $title );   // any plugin may rewrite this
+echo wp_trim_words( $title, 20 );             // 'wp_trim_words' runs inside
+```
+
+A plain taint model sees the escaper clear the taint and nothing put it back, so
+it reports neither. An escaper now marks its result, a call that hands the value
+to a third party trades that mark for `escape_voided`, and the output construct
+reports it under its own rule at medium — one band below never having escaped at
+all, because it needs a second plugin to actually hook the filter.
+
+**Which calls void it is generated, not guessed.**
+`tools/generate-filterable-catalogue.php` parses a WordPress checkout and lists
+every function whose *return value* has been through `apply_filters()`, by
+running a small fixed point over each body: a variable is filtered if it is
+assigned from a filter or from anything mentioning an already-filtered variable.
+Of 4,272 core functions, 933 mention a filter and **629 return one**. Naming
+heuristics — anything starting `wp_` or `get_` — would have been a guess.
+
+**Escaping after the filter clears the voiding**, because that is the correct
+order: `wp_kses_post( apply_filters( 'x', esc_html( $v ) ) )` is safe however the
+filter behaves.
+
+**Two deliberate exceptions.**
+
+- **Registered escapers never void.** Core ends `esc_html()` with
+  `return apply_filters( 'esc_html', $safe_text, $text )`, so the generated list
+  contains it. Acting on that literally makes every escaper void its own work.
+  A site with a hostile `esc_html` filter has a problem this rule cannot
+  usefully report at each of ten thousand call sites.
+- **Numeric coercion does not mark a value escaped.** `absint()` clears every
+  kind, but coercing an id to an integer is not escaping content, and treating
+  it as such made `echo get_the_title( absint( $_GET['id'] ) )` look like voided
+  escaping because the *id* carried the marker into a call whose result has
+  nothing to do with it.
+
+**The list records which parameter the filtered value comes from**, because
+"any escaped argument voids the result" is wrong in a way the corpus found
+immediately:
+
+```php
+$comment['comment_author_url'] = esc_url( $_POST['url'] );
+print( wp_update_comment( $comment ) );   // returns a row count, not the URL
+```
+
+`get_the_title( $id )` filters a title it fetched itself, so an escaped `$id`
+never reaches the output. Only the parameters the filtered return actually
+derives from can void anything.
+
+**Known false positive.** `wp_update_comment()` is listed as returning its first
+parameter filtered, because core contains:
+
+```php
+$data = apply_filters( 'wp_update_comment_data', $data, $comment, $commentarr );
+
+if ( false === $data ) {
+    return $data;
+}
+```
+
+That `return` is only reachable when `$data` is `false`, so the function never
+actually hands back the filtered string. Knowing that needs path-sensitivity,
+which a generated list cannot have. It costs one finding on Akismet — the plugin
+pinned to zero specifically to catch this kind of thing, which is the system
+working even though the answer is wrong.
+
+**What is still missed.** Pluggable functions, which a plugin may redefine
+outright rather than filter. And a filter reached inside a function whose body
+the scan cannot see.
+
 ### Stored object injection is a separate, lower severity
 
 `unserialize()` on data from an option, post meta or a database row instantiates

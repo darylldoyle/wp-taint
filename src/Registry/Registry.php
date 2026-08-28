@@ -41,6 +41,8 @@ final class Registry
         private readonly array $byRef,
         private readonly array $templates,
         private readonly array $authorization,
+        /** @var array<string, list<int>> */
+        private readonly array $filterable,
         private readonly array $rules,
         private readonly array $safeDatabaseIdentifiers,
     ) {
@@ -165,6 +167,28 @@ final class Registry
             $this->authorization,
             static fn (string $proves): bool => $proves === 'entitlement',
         ));
+    }
+
+    /**
+     * Does this function return a value a plugin can rewrite?
+     *
+     * `get_the_title()` runs `the_title` inside it, so escaping done before the
+     * call does not survive it. Generated from a WordPress checkout rather than
+     * guessed at by name — see tools/generate-filterable-catalogue.php.
+     */
+    /**
+     * The parameters whose value comes back out of this function's filter.
+     *
+     * Null when the function does not return a filtered value at all. The
+     * distinction between that and an empty list matters: `get_the_title( $id )`
+     * filters a title it fetched itself, so an escaped `$id` never reaches the
+     * output and nothing is voided.
+     *
+     * @return list<int>|null
+     */
+    public function filterableParameters(string $function): ?array
+    {
+        return $this->filterable[strtolower(ltrim($function, '\\'))] ?? null;
     }
 
     public function isSafeCall(Matcher $matcher): bool
@@ -327,6 +351,7 @@ final class Registry
             $this->byRef,
             $this->templates,
             $this->authorization,
+            $this->filterable,
             $this->rules,
             $this->safeDatabaseIdentifiers,
         );
@@ -360,6 +385,7 @@ final class Registry
             $this->byRef,
             $this->templates,
             $this->authorization,
+            $this->filterable,
             $this->rules,
             $this->safeDatabaseIdentifiers,
         );

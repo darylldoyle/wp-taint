@@ -71,7 +71,7 @@ final class RegistryLoader
      */
     private const TABLE_KEYS = [
         'meta', 'sources', 'sanitizers', 'propagators', 'sinks', 'safe', 'dispatchers', 'byref',
-        'templates', 'authorization', 'rules', 'options', 'scan',
+        'templates', 'authorization', 'rules', 'options', 'scan', 'filterable',
     ];
 
     private const OPTION_KEYS = ['safe_database_identifiers'];
@@ -153,6 +153,7 @@ final class RegistryLoader
         $this->loadByRefEffects($canonical, $data['byref'] ?? [], $accumulator);
         $this->loadTemplateLoaders($canonical, $data['templates'] ?? [], $accumulator);
         $this->loadAuthorization($canonical, $data['authorization'] ?? [], $accumulator);
+        $this->loadFilterable($canonical, $data['filterable'] ?? [], $accumulator);
         $this->loadRules($canonical, $data['rules'] ?? [], $accumulator);
         $this->loadOptions($canonical, $data['options'] ?? [], $accumulator);
 
@@ -543,6 +544,30 @@ final class RegistryLoader
             $accumulator->addAuthorization(
                 $this->matcherFor($file, $context, $entry, allowConstruct: false, allowSuperglobal: false),
                 $proves,
+            );
+        }
+    }
+
+    /**
+     * Core functions that return a filtered value.
+     *
+     * Generated rather than curated — see
+     * tools/generate-filterable-catalogue.php — because "which WordPress
+     * functions can a plugin rewrite the output of" is a fact about a
+     * WordPress checkout, not a judgement call.
+     */
+    private function loadFilterable(string $file, mixed $entries, RegistryAccumulator $accumulator): void
+    {
+        foreach ($this->tableList($file, 'filterable', $entries) as $index => $entry) {
+            $context = sprintf('[[filterable]] #%d', $index + 1);
+            $this->rejectUnknownKeys($file, $context, $entry, ['function', 'params', 'note']);
+
+            $accumulator->addFilterable(
+                $this->requiredString($file, $context . ' function', $entry['function'] ?? null),
+                array_values(array_map(
+                    static fn (mixed $index): int => is_int($index) ? $index : 0,
+                    $this->arrayValue($file, $context . ' params', $entry['params'] ?? []),
+                )),
             );
         }
     }

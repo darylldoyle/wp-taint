@@ -9,7 +9,7 @@
 
 [meta]
 name = "wordpress"
-extends = ["php-core", "wordpress-generated"]
+extends = ["php-core", "wordpress-generated", "wordpress-filterable"]
 description = "WordPress core sources, sinks, sanitizers and escapers"
 
 [options]
@@ -905,6 +905,14 @@ description = "A route declares a permission_callback, but nothing reachable fro
 remediation = "Have the callback call current_user_can() for the capability the operation requires, or return a WP_Error when the caller is not permitted."
 cwe = "CWE-862"
 message = "REST permission callback reaches no authorization check."
+
+[[rules]]
+id = "wp.xss.escape-voided"
+title = "Escaped value passed through a filter before output"
+description = "The value was escaped and then handed to a hook that any plugin on the site may filter. Whatever the escaper guaranteed ended at that call: the filter returns a new value, and this code prints it. Escaping is called late escaping because it has to be the last thing that happens to a value."
+remediation = "Escape at the point of output, after every filter has run: apply_filters() first, esc_html() on the result. If the filter genuinely needs the escaped form, escape again at the echo."
+cwe = "CWE-79"
+message = "This value was escaped and then filtered, so the escaping no longer holds."
 
 [[rules]]
 id = "wp.rce.unserialize-stored"

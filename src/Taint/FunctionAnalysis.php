@@ -12,6 +12,7 @@ use Enshrined\WpTaint\Finding\TraceStep;
 use Enshrined\WpTaint\Finding\TraceVerb;
 use Enshrined\WpTaint\Registry\ArgumentSelector;
 use Enshrined\WpTaint\Registry\Matcher;
+use Enshrined\WpTaint\Registry\MatcherKind;
 use Enshrined\WpTaint\Registry\Registry;
 use Enshrined\WpTaint\Registry\Sanitizer;
 use Enshrined\WpTaint\Registry\Sink;
@@ -67,6 +68,12 @@ final class FunctionAnalysis
 
     /** The call currently being reported on, for sink strategies that need it. */
     private ?CallTarget $sinkCall = null;
+
+    /** A hook dispatch whose result should lose any escaping its arguments carried. */
+    private ?CallTarget $voidingCall = null;
+
+    /** @var list<int>|null argument positions the voiding call's result derives from */
+    private ?array $voidingArguments = null;
 
     private bool $collecting = false;
 
@@ -1601,6 +1608,8 @@ final class FunctionAnalysis
      */
     private function writeResult(Operand $result, TaintSet $taint, ?Provenance $provenance = null): bool
     {
+        $taint = $this->voidEscaping($taint);
+
         // The callee's return is not what this call evaluates to. It was still
         // analysed, which is the point: its sinks fired.
         if ($this->resultMode === CallResultMode::Discard) {
@@ -1633,6 +1642,13 @@ final class FunctionAnalysis
         // Applied before the role dispatch and folded into the result, because
         // a call can write back through an argument *and* be a sanitizer,
         // propagator or sink in its own right. Every branch below returns.
+        // Anything a third party can hook stands between the escaper and the
+        // sink, so whatever guarantee the escaper gave does not survive it.
+        // That is `apply_filters()` itself, and equally the 524 core functions
+        // that run a filter and return the result — `get_the_title()` looks
+        // like an accessor and is a filter in a coat.
+        $this->voidingCall = $matcher !== null && $this->voidsEscaping($matcher, $call) ? $call : null;
+
         $changed = $matcher === null ? false : $this->applyByRefEffect($op, $call, $matcher);
         $changed = ($matcher === null ? false : $this->joinTemplateScope($op, $call, $matcher)) || $changed;
 
@@ -1874,6 +1890,28 @@ final class FunctionAnalysis
         // out of it entirely.
         if ($sanitizer->quotedOnly && $incoming->has(TaintKind::Sql)) {
             $cleared = $cleared->union(TaintSet::of(TaintKind::SqlUnquoted));
+        }
+
+        // Remember that this value has been escaped, so that a filter standing
+        // between here and the echo can be seen to have voided it — and clear
+        // any earlier voiding, because escaping *after* the filter is the
+        // correct order and the whole point of the rule.
+        //
+        //     echo wp_kses_post( apply_filters( 'x', esc_html( $v ) ) );
+        //
+        // is safe: the filter can return anything it likes and wp_kses_post()
+        // still runs on the result. Without this the rule reported it, which is
+        // telling people the right answer is wrong.
+        // Only an output escaper marks a value escaped. absint() and intval()
+        // clear everything, but coercing an id to an integer is not escaping
+        // content — and treating it as such made `echo get_the_title( absint(
+        // $_GET['id'] ) )` look like escaping voided by a filter, because the
+        // id carried the marker into a call whose result has nothing to do
+        // with it.
+        if ($sanitizer->clears->has(TaintKind::Html) && ! $sanitizer->clearsEverything) {
+            $cleared = $cleared
+                ->without(TaintSet::of(TaintKind::EscapeVoided))
+                ->union(TaintSet::of(TaintKind::Escaped));
         }
 
         if ($cleared->isEmpty()) {
@@ -2371,6 +2409,83 @@ final class FunctionAnalysis
     // -------------------------------------------------------------------
     // Sink reporting
     // -------------------------------------------------------------------
+
+    /**
+     * Does this call hand the value to somebody else before returning it?
+     */
+    private function voidsEscaping(Matcher $matcher, CallTarget $call): bool
+    {
+        // An escaper never voids escaping, even though core ends esc_html() and
+        // esc_attr() with `return apply_filters( 'esc_html', ... )` and the
+        // generated list therefore contains them. That is literally true — a
+        // plugin can hook `esc_html` — and acting on it would make every
+        // escaper void its own work, which is the one reading that cannot be
+        // right. A site with a hostile `esc_html` filter has a problem this
+        // rule cannot usefully report at each of ten thousand call sites.
+        if ($this->registry->sanitizer($matcher) !== null) {
+            return false;
+        }
+
+        if ($this->registry->dispatcher($matcher)?->hook === true) {
+            $this->voidingArguments = null;
+
+            return true;
+        }
+
+        if ($matcher->kind !== MatcherKind::Func) {
+            return false;
+        }
+
+        $parameters = $this->registry->filterableParameters($matcher->name);
+
+        if ($parameters === null || $parameters === []) {
+            return false;
+        }
+
+        $this->voidingArguments = $parameters;
+
+        return true;
+    }
+
+    /**
+     * Trade `escaped` for `escape_voided` across a hook dispatch.
+     *
+     * `echo apply_filters( 'x', esc_html( $v ) )` prints whatever the filter
+     * returns, and any plugin on the site may be that filter. The escaper's
+     * guarantee ends at the call, which is the whole reason escaping is
+     * supposed to be the last thing that happens to a value.
+     *
+     * Applied in writeResult() rather than in one of the role branches because
+     * a dispatcher can also be a propagator or resolve to callees, and every
+     * one of those paths ends here.
+     */
+    private function voidEscaping(TaintSet $taint): TaintSet
+    {
+        if ($this->voidingCall === null) {
+            return $taint;
+        }
+
+        // Only the arguments the filtered value actually comes from.
+        // `wp_update_comment( $comment )` filters its data and returns a row
+        // count; an escaped value going in is not the thing coming out.
+        $arguments = $this->voidingArguments === null
+            ? $this->voidingCall->arguments
+            : array_values(array_filter(
+                $this->voidingCall->arguments,
+                fn (mixed $_, int $index): bool => in_array($index, $this->voidingArguments ?? [], true),
+                ARRAY_FILTER_USE_BOTH,
+            ));
+
+        $carried = $this->state->unionOf($arguments);
+
+        if (! $carried->has(TaintKind::Escaped)) {
+            return $taint;
+        }
+
+        return $taint
+            ->without(TaintSet::of(TaintKind::Escaped))
+            ->union(TaintSet::of(TaintKind::EscapeVoided));
+    }
 
     /**
      * A named condition on whether a sink fires for this particular value.
