@@ -803,10 +803,21 @@ message = "Untrusted input reaches a file write path."
 [[rules]]
 id = "wp.header.injection"
 title = "Untrusted input reaches an HTTP header"
-description = "A value derived from user-controlled input is written into a response header, allowing header injection or response splitting."
-remediation = "Strip CR and LF from the value, or use a WordPress helper that does so."
-cwe = "CWE-113"
-message = "Untrusted input reaches an HTTP header."
+# Not response splitting. PHP rejects CR and LF inside header() and refuses to
+# send the header at all, and setcookie() urlencodes its value before it gets
+# that far; setrawcookie() skips the encoding but not the control-character
+# check. Every finding of this rule used to claim CWE-113, and every one of them
+# claimed an attack the runtime has not permitted for a very long time.
+#
+# What is left is real and is about the header itself: a value the attacker
+# chooses changes what the response means. A Content-Type they pick decides
+# whether the browser parses the body as HTML; a Location they pick is where the
+# visitor goes; a cookie name they pick can shadow the session cookie for a path
+# they nominate, which is cookie tossing and needs no newline at all.
+description = "A value derived from user-controlled input decides a response header, so the attacker chooses what the header says. A Content-Type they control decides whether the browser parses the body as HTML, a Location they control decides where the visitor goes, and a cookie name or path they control can shadow an existing cookie."
+remediation = "Choose the header from a fixed set rather than building it from the request. Where the value has to vary, validate it against what that header accepts — a known content type, a URL on this host, a cookie name your code owns."
+cwe = "CWE-644"
+message = "Untrusted input decides an HTTP response header."
 
 [[rules]]
 id = "wp.ldap.injection"
