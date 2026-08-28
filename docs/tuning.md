@@ -1025,3 +1025,97 @@ filtered because core contains `if ( false === $data ) { return $data; }` after
 the filter — a return only reachable when the value is `false`. The generator is
 right about the syntax and wrong about the semantics, and knowing the difference
 needs path-sensitivity a generated list cannot have.
+
+## Phase 11 — two suites nobody here wrote
+
+Every benchmark up to now had the same hole in a different place. The fixture
+suite is ours, and 47 of its cases were written after the behaviour they test.
+The corpus is third-party code with no answer key. The CVE set has an answer key
+and no line-level ground truth, tests 14% of what was available, and its nine
+"attributed" cases split four strong to five that could be code churn.
+
+Two labelled suites arrived with their own scorers. They cover *semantics* —
+context correctness, escape invalidation, weak sanitisers posing as real ones —
+where the corpus covers volume and the CVE set covers incidents.
+
+The first run was the useful one:
+
+    precision 0.93   recall 0.59   F1 0.72
+
+Precision was the good news and stayed good news through everything below.
+Recall had three causes, and two were whole missing rules.
+
+### An escaper can be present and still be wrong
+
+Zero of five. `esc_html()` inside `<script>`, `esc_attr()` on an `href`, any
+escaper in an unquoted attribute — every one has a visible `esc_*` call and
+every one is exploitable. "Was an escaper applied" and "was it the right one"
+are different questions and the engine only asked the first.
+
+Structural rather than dataflow, because the context belongs to the literal text
+around the hole rather than to the value. The attribute scanner reads forward
+rather than matching the tail: `onclick='doThing("` is still inside `onclick`,
+and a regex anchored at the end of the string loses precisely the case the rule
+most wants.
+
+Two corrections, both from our own fixtures rather than theirs. `wp_get_referer()`
+is a *source*; reporting it as the wrong escaper misnames the problem and
+duplicates the ordinary output rule. And `sanitize_html_class()` is a legitimate
+attribute escaper. Only recognised escapers are judged now — a function this
+rule has no opinion about is left alone.
+
+### The third answer for provenance
+
+Nine of the suite's cases are this:
+
+```php
+function fx_render_bad( $value ) {   // "assumed tainted (option, meta, query var)"
+    echo $value;                     // ruleid: wp.output.unescaped
+}
+```
+
+A parameter with no caller. The engine had two answers — tainted or clean — and
+gave the second to anything it could not trace, which scored the output half at
+**0.18 recall**.
+
+That default is a reasonable answer to "can I prove this value is dangerous" and
+the wrong answer to "is this value proven safe". WordPress's own standard asks
+the second: sanitise on input, escape on output, each owed wherever the value
+came from. `TaintKind::Unknown` is the third state, seeded on parameters and
+cleared by any sanitizer, because applying one settles the question either way.
+
+Behind `--unknown-provenance` and off by default, because it changes which
+question the tool is answering rather than making it better at the old one.
+
+    output.unescaped     0.18 -> 0.82
+    output.wrong-context 0.00 -> 1.00
+    overall recall       0.59 -> 0.84
+    overall F1           0.72 -> 0.89
+    precision            0.93, unmoved throughout
+
+### What it cost
+
+Corpus 1,399 to roughly 1,500 with the flag off, and 2,566 with it on — 926 of
+those the obligation rule. Far below the 14,000 a crude estimate had suggested,
+because it fires on parameters rather than on every `echo`, and any sanitizer
+clears it.
+
+One pinned plugin moved a long way: WP Super Cache 9 to 41, all of it
+`esc_url_raw()` in form `action` attributes. Our own catalogue already says
+esc_url_raw is for storage and redirects rather than output, and WPCS rejects it
+for output too, so the findings are right and the plugin has one habit repeated
+32 times.
+
+### Still not solved
+
+Path sensitivity. `if ( ! in_array( $mode, $allowed, true ) ) { $mode = "grid"; }`
+and `if ( ! ctype_digit( $id ) ) { return; }` both leave a value the engine
+cannot see is constrained, and they are the last three false positives in the
+suite as well as the cause of the WooCommerce and Duplicator false positives
+found by corpus triage.
+
+It is not a rule that is missing. The engine keeps one `TaintState` per function
+rather than per block, which is why it converges cheaply and why a branch
+condition has nowhere to be recorded. Fixing it means per-block state, and this
+project has had five separate convergence failures in exactly that machinery.
+Worth doing, and not worth doing carelessly.

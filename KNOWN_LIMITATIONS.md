@@ -49,6 +49,51 @@ property `$x`" and stopped, which is not something a reviewer can act on.
 
 **Direction:** over-approximating.
 
+### Unknown provenance is reported only on request
+
+The engine has three answers for a value now — tainted, clean, and *unknown*.
+The third is new, and it is off unless `--unknown-provenance` is passed.
+
+A parameter of a function nothing in the scan calls, or the result of a callee
+that cannot be followed, used to count as clean. That is a documented false
+negative, taken on the grounds that an undocumented false positive is worse. It
+costs more than it looked: a third-party suite scores the output half of this
+tool at **0.18 recall** on exactly that shape, and turning the flag on takes it
+to 0.82.
+
+Off by default because it changes the question. Off, the tool answers "can I
+trace this value to something dangerous". On, it answers "is this value proven
+safe", which is what WordPress's own sanitise-on-input, escape-on-output
+standard actually asks — and which produces 926 more findings across the fifty
+corpus plugins, at `low` severity.
+
+Neither question is wrong. The flag says which one is being asked.
+
+### Escaping is judged against the context it lands in
+
+An escaper being present is not the same as it being the right one:
+
+```php
+echo '<script>var x = "' . esc_html( $v ) . '";</script>';   // ";alert(1);//
+printf( '<a href="%s">x</a>', esc_attr( $url ) );            // javascript:...
+printf( '<div data-v=%s></div>', esc_html( $v ) );           // x onmouseover=
+```
+
+This is a structural rule, not a dataflow one, because the context belongs to
+the literal text around the hole rather than to the value: `esc_attr()` is right
+in a quoted attribute, wrong in an `href`, and wrong again in an unquoted one.
+
+**What it will not judge.** A context built from a variable, a `printf` with
+positional `%1$s` specifiers, or a call it does not recognise as an escaper.
+`wp_get_referer()` is a source, and accusing it of being the wrong escaper both
+misnames the problem and duplicates the rule that already has it.
+
+**What it will say that some will disagree with.** `esc_url_raw()` in an
+attribute is reported. It is documented — by WordPress and by this catalogue —
+as being for storage and redirects rather than output, and WPCS rejects it for
+output too. WP Super Cache uses it in 32 form actions, which is why one pinned
+plugin moved from 9 findings to 41.
+
 ### Escaping must survive to the point of output
 
 Escaping is called *late* escaping because it has to be the last thing that

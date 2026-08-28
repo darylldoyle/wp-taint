@@ -1,9 +1,9 @@
 {
     "akismet": {
         "version": "5.7.2",
-        "findings": 2,
+        "findings": 5,
         "bySeverity": {
-            "medium": 2
+            "medium": 5
         },
         "warnings": 0,
         "parseFailures": 0
@@ -22,17 +22,17 @@
             "critical": 1,
             "high": 1
         },
-        "warnings": 0,
+        "warnings": 1,
         "parseFailures": 0
     },
     "cookie-law-info": {
         "version": "3.5.5",
-        "findings": 5,
+        "findings": 6,
         "bySeverity": {
             "critical": 3,
-            "high": 2
+            "high": 3
         },
-        "warnings": 0,
+        "warnings": 1,
         "parseFailures": 0
     },
     "duplicate-post": {
@@ -46,32 +46,32 @@
     },
     "loginizer": {
         "version": "2.1.0",
-        "findings": 10,
+        "findings": 18,
         "bySeverity": {
-            "high": 9,
-            "medium": 1
+            "high": 14,
+            "medium": 4
         },
-        "warnings": 0,
+        "warnings": 1,
         "parseFailures": 0
     },
     "wp-super-cache": {
         "version": "3.1.3",
-        "findings": 9,
+        "findings": 41,
         "bySeverity": {
-            "high": 9
+            "high": 41
         },
         "warnings": 0,
         "parseFailures": 0
     },
     "wpforms-lite": {
         "version": "2.0.1.1",
-        "findings": 40,
+        "findings": 50,
         "bySeverity": {
             "critical": 15,
-            "high": 14,
-            "medium": 11
+            "high": 22,
+            "medium": 13
         },
-        "warnings": 2,
+        "warnings": 3,
         "parseFailures": 0
     }
 }

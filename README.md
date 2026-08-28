@@ -50,7 +50,10 @@ wp-taint takes the SSA/CFG approach — which gives interprocedural taint cheapl
 
 - Reflected and stored XSS, including across one or more function boundaries
 - Escaping undone before output — a value escaped and then passed through a
-  filter, or through one of the 629 core functions that return a filtered value
+  filter, or through one of the 569 core functions that return a filtered value
+- The wrong escaper for the context: `esc_html()` inside `<script>`, `esc_attr()`
+  on an `href`, any escaper in an unquoted attribute
+- CSV formula injection, where no HTML escaper helps and the fix is a prefix
 - SQL injection, including `$wpdb->prepare()` called with a non-literal format
   string, and `esc_sql()` used where there are no quotes for it to escape
 - Local file inclusion, arbitrary file read and write
@@ -275,6 +278,35 @@ changing one file invalidates the whole cache; anything finer would be unsound.
 Memory is the real constraint. `bin/wp-taint` raises the limit to 2 GB, which
 covers everything in the WordPress.org top fifty except WooCommerce; for a tree
 that size set `WP_TAINT_MEMORY_LIMIT=4G`.
+
+## Scored against two suites written elsewhere
+
+Two labelled fixture suites, neither written here, each with its own scorer and
+its own vocabulary for what a finding is called.
+
+```bash
+composer suite:check
+```
+
+`wp-taint-fixtures` carries 109 annotations across 18 rule ids in Semgrep's
+`ruleid:` / `ok:` grammar, and reports precision and recall per rule. That
+framing matters: a tool that flags everything scores perfect recall and is
+useless.
+
+| | default | `--unknown-provenance` |
+| --- | --- | --- |
+| Precision | 0.93 | 0.93 |
+| Recall | 0.72 | **0.84** |
+| F1 | 0.81 | **0.89** |
+
+`ideas/wp-taint-analyser-fixtures` pairs 36 scenarios as vulnerable and safe
+variants, cross-file and cross-plugin. **Zero findings on all 36 safe variants**,
+which is the strongest single result here: independent code, written correctly by
+someone else, and the tool says nothing about any of it.
+
+They cover semantics the other benchmarks do not — context correctness, escape
+invalidation, weak sanitisers posing as real ones — where the corpus covers
+volume and the CVE set covers incidents.
 
 ## Scored against real CVEs, both sides of the fix
 
