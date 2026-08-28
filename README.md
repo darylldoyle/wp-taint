@@ -52,7 +52,10 @@ wp-taint takes the SSA/CFG approach — which gives interprocedural taint cheapl
 - SQL injection, including `$wpdb->prepare()` called with a non-literal format
   string, and `esc_sql()` used where there are no quotes for it to escape
 - Local file inclusion, arbitrary file read and write
-- Command injection, `eval()`, and PHP object injection through `unserialize()`
+- Command injection and `eval()`
+- PHP object injection through `unserialize()`, including from stored data —
+  reported separately, because that one needs an attacker who can write the
+  option or meta first
 - Open redirects and HTTP header injection
 
 Calls are followed through the value that names them: a callable in a variable,
@@ -283,7 +286,7 @@ composer cve:fetch
 composer cve:check
 ```
 
-**8 attributed · 17 reported but not attributable · 22 silent.**
+**9 attributed · 18 reported but not attributable · 20 silent.**
 
 Three outcomes rather than two, because plenty of real fixes do not remove the
 flow. CVE-2022-2593 in Better Search Replace is SQL injection through
@@ -296,8 +299,8 @@ Where it fails, by class:
 
 | | attributed | reported | silent |
 | --- | --- | --- | --- |
-| Code injection (CWE-94) | 0 | 0 | **5** |
-| Deserialization (CWE-502) | 0 | 0 | **3** |
+| Code injection (CWE-94) | 0 | 1 | **4** |
+| Deserialization (CWE-502) | 1 | 0 | 2 |
 | Open redirect (CWE-601) | 0 | 0 | **3** |
 | XSS (CWE-79) | 3 | 6 | 3 |
 | Authorization (CWE-862/863) | 2 | 5 | 5 |
@@ -305,10 +308,15 @@ Where it fails, by class:
 | SQL injection (CWE-89) | 1 | 2 | 2 |
 | SSRF (CWE-918) | 1 | 0 | 1 |
 
+Deserialization was a zero until this benchmark said so: stored data did not
+carry object-injection taint, on reasoning that holds for filesystem and URL
+sinks and not for this one. Fixing it caught CVE-2023-1196 in Advanced Custom
+Fields.
+
 The CWE-94 cases are plugins whose purpose is executing admin-supplied code, so
-those CVEs are privilege-boundary bugs wearing a code-injection label. The
-deserialization and open-redirect zeroes have no such excuse: those rules exist
-and found nothing in six plugins known to be vulnerable in exactly those ways.
+those CVEs are privilege-boundary bugs wearing a code-injection label, and the
+open-redirect three turned out not to be `wp_redirect()` flows at all. Both are
+worth knowing before reading the column as a verdict on the rules.
 
 **"Attributed" is evidence, not proof.** A finding can vanish because the fix
 refactored the line rather than because it was the bug. This is the sharpest

@@ -49,6 +49,29 @@ property `$x`" and stopped, which is not something a reviewer can act on.
 
 **Direction:** over-approximating.
 
+### Stored object injection is a separate, lower severity
+
+`unserialize()` on data from an option, post meta or a database row instantiates
+whatever was stored there, so a POP chain in the loaded code runs. Three of the
+pinned CVEs are exactly this, and the classic WordPress escalation is a
+subscriber-level meta write turning into RCE.
+
+It carries its own kind and its own rule at **high** rather than critical,
+because it needs a precondition the engine cannot check: an attacker who can
+write that store first. Reporting 91 corpus findings as critical alongside the
+12 that need no precondition at all would devalue the word for both.
+
+`unserialize( $data, [ 'allowed_classes' => false ] )` is not reported. That is
+the documented fix for the class — it is what Better Search Replace shipped for
+CVE-2023-6933 — and flagging code that already applies it would be telling
+people to do what they have done. The options array is read at the call site
+only; a value built elsewhere counts as permitting objects, because being wrong
+in the permissive direction would hide the bug.
+
+Deliberately *not* extended to `path` or `url`: an attacker who can write an
+option already has the access those sinks would give them. Object injection is
+different because it grants more than the write did.
+
 ### `esc_sql()` is only credited inside quotes
 
 `esc_sql()`, `wpdb::_real_escape()` and `like_escape()` escape quotes and
@@ -316,15 +339,32 @@ marked `imprecise`.
 cannot resolve. Those walks report themselves incomplete, so the finding is
 marked rather than suppressed.
 
-### Hooks registered through a wrapper are not seen
+### Hooks registered through a wrapper are followed, by name
 
-The AJAX and admin-post rules match a literal `add_action()` call. A plugin that
-routes its registrations through its own loader —
-`$this->loader->add_action( 'admin_post_x', $obj, 'method' )` — is invisible to
-both, and the registration is not even counted as unresolved, because nothing
-identifies it as a registration in the first place.
+Boilerplate-generated plugins do not call `add_action()` where a scanner can see
+it. They collect registrations on a loader and replay them later, and three arg
+layouts cover what the corpus contains:
 
-Five of the twenty-one corpus files mentioning `admin_post_` are of this shape.
+```php
+$this->loader->add_action( 'wp_ajax_x', $component, 'method' );  // WPPB
+$this->add_action( 'wp_ajax_x', array( $this, 'method' ) );      // wrapped array
+$this->add_action( 'wp_ajax_x', 'method' );                      // method on $this
+```
+
+A method named `add_action` or `add_filter` counts as a registration whatever
+its receiver, because every plugin names its loader differently and the method
+name is the only stable signal. This applies to the hook graph as well as the
+authorization rules, so taint now crosses a wrapped filter.
+
+Eight of the fifty corpus plugins register this way, and until this existed none
+of those registrations were seen at all — not resolved, not reported unresolved,
+simply absent, which made a clean authorization report on a boilerplate plugin
+meaningless.
+
+**What is still missed.** The component's class, when it is neither `$this` nor
+a variable assigned from a single `new` in the same file. The boilerplate always
+constructs it locally, so the common case resolves; anything else is reported
+unresolved rather than guessed.
 
 ### A nonce satisfies the AJAX rule but not the admin-post one
 

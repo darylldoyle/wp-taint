@@ -853,3 +853,86 @@ Uncaught, the rule would have missed every commented guard in the wild.
 `TaintSet::allDataflowKinds()` was a binary literal, `0b0000_0111_1111_1111`.
 Adding a kind left it one bit short, so every value seeded as "all kinds"
 silently lost the new one. Derived from the enum now.
+
+## Phase 9 — measured against real CVEs, and what that found
+
+Phase 8 scored 12 of 12 on a plugin written for teaching. 47 published CVEs in
+real plugins scored **8 attributed, 17 unattributable, 22 silent**, and the gap
+between those two results is the useful part: textbook bugs written to be found
+are not the same as bugs that got past a maintainer.
+
+Three classes scored zero, and the reasons differed.
+
+### Object injection: a real gap, and the reasoning that caused it
+
+Stored sources carried `html`, `html_attr` and `sql` and nothing else, with a
+note explaining why: an attacker who can write an option already has the access
+the `path` and `url` sinks would give them.
+
+That reasoning is correct and does not extend to `unserialize`. Object injection
+grants *more* than the write did: a subscriber-level meta write becomes RCE
+through a POP chain in whatever classes happen to be loaded. It is the classic
+WordPress escalation, and three of the pinned CVEs are exactly it.
+
+Adding the kind caught CVE-2023-1196 in Advanced Custom Fields — five findings
+before the fix, none after — and cost 79 corpus findings, all in the new class.
+
+**Then it had to be calibrated.** 91 findings at `critical`, next to the 12 that
+need no precondition at all, devalues the word for both. WordPress reads its own
+serialised meta constantly. So stored object injection has its own kind and its
+own rule at `high`, and `wp.rce.unserialize` keeps `critical` for a request
+reaching `unserialize()` directly.
+
+`unserialize( $data, [ 'allowed_classes' => false ] )` is not reported. It is
+the documented fix — what Better Search Replace shipped for CVE-2023-6933 — and
+flagging code that already applies it tells people to do what they have done.
+Two attempts were needed: `false` arrives as a temporary defined by a
+`ConstFetch`, not as a boolean literal, so the obvious test silently answered no
+for the only spelling that appears in source.
+
+Two CWE-502 cases remain silent, both deep chains: a recursive function calling
+a static method through `$this` on an element of a `get_results()` row.
+
+### Open redirect and code injection: mostly the label, not the rule
+
+All three CWE-601 cases turned out not to be `wp_redirect()` flows. Contact Form
+7's is a request URI reaching a form `action` attribute, which manifests as
+attribute injection; WPS Hide Login's fix adds a conditional early return inside
+a `wp_redirect` filter callback, which is a logic bug with no dataflow to see.
+
+The five CWE-94 cases are Code Snippets, Insert Headers and Footers, WP Super
+Cache and Loco Translate — plugins whose purpose is executing admin-supplied
+code. Those CVEs are privilege-boundary bugs wearing a code-injection label.
+
+Genuine gap found anyway: `header( 'Location: ' . $url )` is reported as header
+injection rather than as an open redirect, because only `wp_redirect()` carries
+the redirect rule.
+
+## Phase 9b — hooks nobody was registering
+
+Eight of the fifty corpus plugins register hooks through their own loader rather
+than calling `add_action()` where a scanner can see it. Those registrations were
+not unresolved. They did not exist: nothing identified them as registrations, so
+they were never counted, never reported, never walked.
+
+A clean authorization report on a boilerplate-generated plugin meant the rules
+had not run.
+
+Three arg layouts cover what the corpus contains — the WPPB
+`$loader->add_action( $hook, $component, 'method' )`, a wrapped array callback,
+and a bare method name on `$this`. A method named `add_action` counts whatever
+its receiver, because every plugin names its loader differently and the name is
+the only stable signal.
+
+The fix applies to the hook *graph* as well as the authorization rules, so taint
+now crosses a wrapped filter. That was the larger half: a registration the graph
+cannot see is a callback that never receives taint and a dispatch that never
+returns it.
+
+The component's class comes from the one `new` naming that variable in the same
+file, which is what the boilerplate always does. Two different classes assigned
+to the same name means the answer depends on control flow, and crediting the
+wrong method body for an authorization check is the failure this rule exists to
+prevent, so it gives up instead.
+
+Corpus: 1,073 to 1,163.

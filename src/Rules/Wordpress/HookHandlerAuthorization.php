@@ -108,30 +108,18 @@ abstract class HookHandlerAuthorization implements StructuralRule
         $resolver = new HookCallbackResolver($file->ast());
         $findings = [];
 
-        foreach (AstHelper::findAll($file->ast(), Node\Expr\FuncCall::class) as $call) {
-            if (! $call instanceof Node\Expr\FuncCall) {
+        foreach ($this->registrations($file) as [$call, $hook, $wrapped]) {
+            if (! $this->claims($hook)) {
                 continue;
             }
 
-            $name = AstHelper::functionName($call);
-
-            if ($name !== 'add_action') {
-                continue;
-            }
-
-            $hook = AstHelper::stringValue(AstHelper::argument($call, 0));
-
-            if ($hook === null || ! $this->claims($hook)) {
-                continue;
-            }
-
+            $class = $this->enclosingClass($file, $call);
+            $args = $call->getArgs();
             $callback = AstHelper::argument($call, 1);
 
-            if ($callback === null) {
-                continue;
-            }
-
-            $resolved = $resolver->resolve($callback, $this->enclosingClass($file, $call));
+            $resolved = $wrapped
+                ? $resolver->resolveWrapped($args, $class, self::receiverIsThis($call))
+                : ($callback === null ? null : $resolver->resolve($callback, $class));
 
             if ($resolved === null) {
                 $context->recordUnresolvedHook(
@@ -274,6 +262,54 @@ abstract class HookHandlerAuthorization implements StructuralRule
         return false;
     }
 
+    /**
+     * Every hook registration in the file, direct or through a wrapper.
+     *
+     * @return list<array{0: Node\Expr\FuncCall|Node\Expr\MethodCall, 1: string, 2: bool}>
+     */
+    private function registrations(ParsedFile $file): array
+    {
+        $found = [];
+
+        foreach (AstHelper::findAll($file->ast(), Node\Expr\FuncCall::class) as $call) {
+            if (! $call instanceof Node\Expr\FuncCall || AstHelper::functionName($call) !== 'add_action') {
+                continue;
+            }
+
+            $hook = AstHelper::stringValue(AstHelper::argument($call, 0));
+
+            if ($hook !== null) {
+                $found[] = [$call, $hook, false];
+            }
+        }
+
+        // A plugin's own loader. See HookCallbackResolver::resolveWrapped().
+        foreach (AstHelper::findAll($file->ast(), Node\Expr\MethodCall::class) as $call) {
+            if (! $call instanceof Node\Expr\MethodCall || ! $call->name instanceof Node\Identifier) {
+                continue;
+            }
+
+            if ($call->name->toString() !== 'add_action') {
+                continue;
+            }
+
+            $hook = AstHelper::stringValue(AstHelper::argument($call, 0));
+
+            if ($hook !== null) {
+                $found[] = [$call, $hook, true];
+            }
+        }
+
+        return $found;
+    }
+
+    private static function receiverIsThis(Node\Expr\FuncCall|Node\Expr\MethodCall $call): bool
+    {
+        return $call instanceof Node\Expr\MethodCall
+            && $call->var instanceof Node\Expr\Variable
+            && $call->var->name === 'this';
+    }
+
     private function enclosingClass(ParsedFile $file, Node $node): ?string
     {
         $line = $node->getStartLine();
@@ -292,7 +328,7 @@ abstract class HookHandlerAuthorization implements StructuralRule
     }
 
     private function finding(
-        Node\Expr\FuncCall $call,
+        Node\Expr\FuncCall|Node\Expr\MethodCall $call,
         string $hook,
         string $callbackDescription,
         ParsedFile $file,

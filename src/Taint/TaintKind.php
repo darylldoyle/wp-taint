@@ -65,6 +65,23 @@ enum TaintKind: string
     case SqlUnquoted = 'sql_unquoted';
 
     /**
+     * Object injection reachable only through data already in the database.
+     *
+     * The same sink as {@see self::Unserialize} and a different bar to clear.
+     * A request reaching `unserialize()` is exploitable by anyone who can send
+     * the request; stored data reaching it needs an attacker who can first
+     * write that option, that meta or that row.
+     *
+     * Both are real — three CVEs in the pinned set are stored object injection,
+     * and the escalation from a subscriber-level meta write to RCE through a
+     * POP chain is the classic WordPress version of this bug. But WordPress
+     * reads its own serialised meta constantly, and calling 91 corpus findings
+     * `critical` alongside the 12 that need no preconditions at all devalues
+     * the word for both.
+     */
+    case UnserializeStored = 'unserialize_stored';
+
+    /**
      * Not a taint kind at all: nothing seeds it and nothing propagates it.
      *
      * Structural rules report broken authorization, which has no dataflow to
@@ -97,6 +114,7 @@ enum TaintKind: string
             self::Xpath => 1 << 10,
             self::Identifier => 1 << 12,
             self::SqlUnquoted => 1 << 13,
+            self::UnserializeStored => 1 << 14,
             self::Authz => 1 << 11,
         };
     }
@@ -163,6 +181,7 @@ enum TaintKind: string
             self::Xpath => 'XPath expression',
             self::Identifier => 'privileged identifier',
             self::SqlUnquoted => 'SQL outside quotes',
+            self::UnserializeStored => 'stored serialised payload',
             self::Authz => 'authorization',
         };
     }

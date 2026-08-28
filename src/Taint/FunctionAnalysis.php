@@ -65,6 +65,9 @@ final class FunctionAnalysis
 
     private readonly LiteralAnchor $anchors;
 
+    /** The call currently being reported on, for sink strategies that need it. */
+    private ?CallTarget $sinkCall = null;
+
     private bool $collecting = false;
 
     /**
@@ -2372,19 +2375,82 @@ final class FunctionAnalysis
     /**
      * A named condition on whether a sink fires for this particular value.
      *
-     * Only `unanchored` today: an identifier with any fixed fragment in it is a
-     * different, much smaller problem than one the attacker chooses outright.
+     * `unanchored`: an identifier with any fixed fragment in it is a different,
+     * much smaller problem than one the attacker chooses outright.
+     *
+     * `unserialize_allows_objects`: a call that already forbids classes cannot
+     * run a POP chain, and reporting it would tell people to do the thing they
+     * have done.
      */
     private function sinkApplies(Sink $sink, Operand $operand): bool
     {
         return match ($sink->appliesBy) {
             Sink::UNANCHORED => ! $this->anchors->has($operand),
+            Sink::UNSERIALIZE_ALLOWS_OBJECTS => $this->sinkCall === null || ! $this->forbidsClasses($this->sinkCall),
             default => true,
         };
     }
 
+    /**
+     * `false`, however php-cfg chose to spell it.
+     *
+     * A bare `false` arrives as a temporary defined by a `ConstFetch`, not as a
+     * boolean literal, so testing for `Operand\Literal` alone silently answers
+     * no for the one spelling that actually appears in source.
+     */
+    private static function isFalse(Operand $operand): bool
+    {
+        if ($operand instanceof Operand\Literal) {
+            return $operand->value === false;
+        }
+
+        $definition = OperandHelper::definingOp($operand);
+
+        if (! $definition instanceof Op\Expr\ConstFetch) {
+            return false;
+        }
+
+        $name = OperandHelper::literalString($definition->name);
+
+        return $name !== null && strtolower($name) === 'false';
+    }
+
+    /**
+     * Does this `unserialize()` call pass `allowed_classes => false`?
+     *
+     * Read from the options array at the call site. A value built elsewhere is
+     * not followed: being wrong in the permissive direction would hide an
+     * object injection, so anything unreadable counts as permitting objects.
+     */
+    private function forbidsClasses(CallTarget $call): bool
+    {
+        $options = $call->argument(1);
+        $definition = $options === null ? null : OperandHelper::definingOp($options);
+
+
+        if (! $definition instanceof Op\Expr\Array_) {
+            return false;
+        }
+
+        foreach ($definition->keys as $index => $key) {
+            if (! $key instanceof Operand || OperandHelper::literalString($key) !== 'allowed_classes') {
+                continue;
+            }
+
+            $value = $definition->values[$index] ?? null;
+
+            return $value instanceof Operand && self::isFalse($value);
+        }
+
+        return false;
+    }
+
     private function reportCallSink(Sink $sink, Op $op, CallTarget $call, Matcher $matcher): void
     {
+        // Carried on the instance because reportSink() is shared with construct
+        // sinks, which have no call to hand.
+        $this->sinkCall = $call;
+
         foreach ($sink->arguments->resolve($call->argumentCount()) as $index) {
             $argument = $call->argument($index);
 
@@ -2394,6 +2460,8 @@ final class FunctionAnalysis
 
             $this->reportSink($sink, $op, $argument, $matcher->identity());
         }
+
+        $this->sinkCall = null;
     }
 
     private function reportSink(Sink $sink, Op $op, Operand $operand, string $identity): void

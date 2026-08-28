@@ -15,9 +15,10 @@
     },
     "contact-form-7": {
         "version": "6.1.7",
-        "findings": 1,
+        "findings": 2,
         "bySeverity": {
-            "critical": 1
+            "critical": 1,
+            "high": 1
         },
         "warnings": 0,
         "parseFailures": 0
@@ -41,9 +42,9 @@
     },
     "loginizer": {
         "version": "2.1.0",
-        "findings": 9,
+        "findings": 10,
         "bySeverity": {
-            "high": 8,
+            "high": 9,
             "medium": 1
         },
         "warnings": 0,
@@ -60,10 +61,10 @@
     },
     "wpforms-lite": {
         "version": "2.0.1.1",
-        "findings": 33,
+        "findings": 34,
         "bySeverity": {
             "critical": 15,
-            "high": 13,
+            "high": 14,
             "medium": 5
         },
         "warnings": 0,

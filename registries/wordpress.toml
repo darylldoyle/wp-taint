@@ -94,77 +94,77 @@ kinds = ["html", "html_attr", "url", "header"]
 
 [[sources]]
 function = "get_post_meta"
-kinds = ["html", "html_attr", "sql"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored"]
 stored = true
-note = "Second-order taint. Stored XSS lives here. Deliberately NOT path or url: an attacker who can write arbitrary options or post meta already has the access those sinks would give them, and treating stored data as filesystem or SSRF input drowned the corpus in noise."
+note = "Second-order taint. Stored XSS lives here, and so does object injection: unserialize() on stored data is the classic WordPress escalation from a subscriber-level meta write to RCE through a POP chain, and three of the CVEs in tests/Fixtures/cve-lock.json are exactly that. Deliberately NOT path or url: an attacker who can write arbitrary options or post meta already has the access those sinks would give them, and treating stored data as filesystem or SSRF input drowned the corpus in noise. That reasoning does not extend to unserialize, because object injection grants more than the write did."
 
 [[sources]]
 function = "get_user_meta"
-kinds = ["html", "html_attr", "sql"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored"]
 stored = true
 
 [[sources]]
 function = "get_term_meta"
-kinds = ["html", "html_attr", "sql"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored"]
 stored = true
 
 [[sources]]
 function = "get_comment_meta"
-kinds = ["html", "html_attr", "sql"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored"]
 stored = true
 
 [[sources]]
 function = "get_metadata"
-kinds = ["html", "html_attr", "sql"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored"]
 stored = true
 
 [[sources]]
 function = "get_option"
-kinds = ["html", "html_attr", "sql"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored"]
 stored = true
 
 [[sources]]
 function = "get_site_option"
-kinds = ["html", "html_attr", "sql"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored"]
 stored = true
 
 [[sources]]
 function = "get_transient"
-kinds = ["html", "html_attr", "sql"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored"]
 stored = true
 
 [[sources]]
 function = "get_site_transient"
-kinds = ["html", "html_attr", "sql"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored"]
 stored = true
 
 [[sources]]
 function = "get_theme_mod"
-kinds = ["html", "html_attr", "sql"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored"]
 stored = true
 
 [[sources]]
 class = "wpdb"
 method = "get_results"
-kinds = ["html", "html_attr", "sql"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored"]
 stored = true
 
 [[sources]]
 class = "wpdb"
 method = "get_var"
-kinds = ["html", "html_attr", "sql"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored"]
 stored = true
 
 [[sources]]
 class = "wpdb"
 method = "get_row"
-kinds = ["html", "html_attr", "sql"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored"]
 stored = true
 
 [[sources]]
 class = "wpdb"
 method = "get_col"
-kinds = ["html", "html_attr", "sql"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored"]
 stored = true
 
 # =============================================================================
@@ -493,6 +493,14 @@ function = "maybe_unserialize"
 kind = "unserialize"
 severity = "critical"
 rule_id = "wp.rce.unserialize"
+applies_by = "unserialize_allows_objects"
+
+[[sinks]]
+function = "maybe_unserialize"
+kind = "unserialize_stored"
+severity = "high"
+rule_id = "wp.rce.unserialize-stored"
+applies_by = "unserialize_allows_objects"
 
 [[sinks]]
 function = "wp_remote_get"
@@ -897,6 +905,14 @@ description = "A route declares a permission_callback, but nothing reachable fro
 remediation = "Have the callback call current_user_can() for the capability the operation requires, or return a WP_Error when the caller is not permitted."
 cwe = "CWE-862"
 message = "REST permission callback reaches no authorization check."
+
+[[rules]]
+id = "wp.rce.unserialize-stored"
+title = "Stored data reaches unserialize()"
+description = "A value read from an option, post meta or a database row is unserialised, so a serialised object stored there is instantiated and a POP chain in the loaded code can run. This needs an attacker who can write that store first, which is what separates it from unserialising a request directly."
+remediation = "Pass allowed_classes => false, which makes unserialize() return arrays and scalars only. If objects are genuinely needed, restrict allowed_classes to the exact list, and check who is able to write the option or meta this reads."
+cwe = "CWE-502"
+message = "Stored data is unserialised, so anyone who can write that store can instantiate objects."
 
 [[rules]]
 id = "wp.authz.arbitrary-option-write"

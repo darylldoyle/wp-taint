@@ -69,6 +69,19 @@ final class HookGraphBuilder
                 // it resolves to the global function at runtime, and matching
                 // only FuncCall silently missed every registration in
                 // namespaced code — 747 of Elementor's 757.
+                // A plugin's own loader counts too. Eight of the fifty corpus
+                // plugins register through `$this->loader->add_action( ... )`,
+                // and a registration this builder cannot see is a hook callback
+                // that never receives taint and a dispatch that never returns
+                // it.
+                if ($op instanceof Op\Expr\MethodCall) {
+                    if ($this->isWrappedRegistrar($op)) {
+                        $this->record($graph, $op, $context, $types, wrapped: true);
+                    }
+
+                    continue;
+                }
+
                 if (! $op instanceof Op\Expr\FuncCall && ! $op instanceof Op\Expr\NsFuncCall) {
                     continue;
                 }
@@ -84,9 +97,10 @@ final class HookGraphBuilder
 
     private function record(
         HookGraph $graph,
-        Op\Expr\FuncCall|Op\Expr\NsFuncCall $op,
+        Op\Expr\FuncCall|Op\Expr\NsFuncCall|Op\Expr\MethodCall $op,
         FunctionContext $context,
         ClassTypeMap $types,
+        bool $wrapped = false,
     ): void {
         $arguments = [];
 
@@ -107,13 +121,11 @@ final class HookGraphBuilder
         $priority = $this->intArgument($arguments[2] ?? null, 10);
         $accepted = $this->intArgument($arguments[3] ?? null, 1);
 
-        $callbacks = $this->callables->resolve(
-            $arguments[1],
-            [],
-            $context,
-            $types,
-            $this->receivers,
-        );
+        // `$loader->add_action( $hook, $component, 'method' )` splits the
+        // callback across two arguments; every other form keeps it in one.
+        $callbacks = $wrapped && isset($arguments[2]) && $this->values->strings($arguments[2]) !== []
+            ? $this->callables->resolveParts($arguments[1], $arguments[2], $context, $types, $this->receivers)
+            : $this->callables->resolve($arguments[1], [], $context, $types, $this->receivers);
 
         if ($callbacks === []) {
             return;
@@ -133,6 +145,20 @@ final class HookGraphBuilder
                 ));
             }
         }
+    }
+
+    /**
+     * A method named `add_action` or `add_filter`, whatever its receiver.
+     *
+     * Every plugin names its loader differently, so the method name is the only
+     * stable signal. A method called `add_action` that is not registering a
+     * hook would be perverse.
+     */
+    private function isWrappedRegistrar(Op\Expr\MethodCall $op): bool
+    {
+        $name = OperandHelper::literalString($op->name);
+
+        return $name !== null && in_array(strtolower($name), self::REGISTRARS, true);
     }
 
     /**

@@ -447,8 +447,16 @@ rule_id = "wp.rce.eval"
 [[sinks]]
 function = "unserialize"
 kind = "unserialize"
+applies_by = "unserialize_allows_objects"
 severity = "critical"
 rule_id = "wp.rce.unserialize"
+
+[[sinks]]
+function = "unserialize"
+kind = "unserialize_stored"
+applies_by = "unserialize_allows_objects"
+severity = "high"
+rule_id = "wp.rce.unserialize-stored"
 
 [[sinks]]
 function = "file_get_contents"

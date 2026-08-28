@@ -25,6 +25,110 @@ final class HookCallbackResolver
     }
 
     /**
+     * A registration made through the plugin's own wrapper.
+     *
+     * Boilerplate-generated plugins do not call `add_action()` where you can
+     * see it. They collect registrations on a loader and replay them later, and
+     * three arg layouts cover everything the corpus actually contains:
+     *
+     * ```php
+     * $this->loader->add_action( 'wp_ajax_x', $component, 'method' );  // WPPB
+     * $this->add_action( 'wp_ajax_x', array( $this, 'method' ) );      // wrapped array
+     * $this->add_action( 'wp_ajax_x', 'method' );                      // method on $this
+     * ```
+     *
+     * Eight of the fifty corpus plugins register hooks this way, and until now
+     * none of those registrations existed as far as this engine was concerned —
+     * not resolved, not reported unresolved, simply absent. A clean
+     * authorization report on a boilerplate plugin meant the rules never ran.
+     *
+     * Matching on the method name alone, whatever the receiver, is a heuristic:
+     * every plugin names its loader something different, and a method called
+     * `add_action` that is not a hook registration would be perverse.
+     *
+     * @param array<array-key, Node\Arg> $args
+     *
+     * @return array{stmts: list<Node\Stmt>, description: string, key: string|null}|null
+     */
+    public function resolveWrapped(array $args, ?string $enclosingClass, bool $receiverIsThis): ?array
+    {
+        $args = array_values($args);
+        $first = ($args[1] ?? null)?->value;
+
+        if ($first === null) {
+            return null;
+        }
+
+        // `$loader->add_action( $hook, $component, 'method' )`: the callback is
+        // split across two arguments.
+        $second = ($args[2] ?? null)?->value;
+
+        if ($second instanceof Node\Scalar\String_ && ! $first instanceof Node\Scalar\String_) {
+            $class = $this->receiverClass($first, $enclosingClass);
+
+            return $class === null ? null : $this->method($class, $second->value);
+        }
+
+        // `$this->add_action( $hook, 'method' )`: a bare method name on the
+        // enclosing class, which is only meaningful when the receiver is $this.
+        if (
+            $first instanceof Node\Scalar\String_
+            && $receiverIsThis
+            && ! str_contains($first->value, '::')
+            && $enclosingClass !== null
+        ) {
+            return $this->method($enclosingClass, $first->value);
+        }
+
+        return $this->resolve($first, $enclosingClass);
+    }
+
+    /**
+     * The class of a receiver passed as a callback component.
+     *
+     * `$this` is the enclosing class. Otherwise: the boilerplate builds the
+     * component immediately before registering it —
+     *
+     * ```php
+     * $plugin_admin = new Plugin_Name_Admin( $this->get_plugin_name() );
+     * $this->loader->add_action( 'wp_ajax_x', $plugin_admin, 'handler' );
+     * ```
+     *
+     * — so the one `new` in the same file naming that variable answers it. Two
+     * different classes assigned to the same name means the answer depends on
+     * control flow, and a wrong class here would credit the wrong method body
+     * for an authorization check, so it gives up instead.
+     */
+    private function receiverClass(Node\Expr $receiver, ?string $enclosingClass): ?string
+    {
+        if (! $receiver instanceof Node\Expr\Variable || ! is_string($receiver->name)) {
+            return null;
+        }
+
+        if ($receiver->name === 'this') {
+            return $enclosingClass;
+        }
+
+        $found = [];
+
+        foreach ((new NodeFinder())->findInstanceOf($this->ast, Node\Expr\Assign::class) as $assign) {
+            if (! $assign instanceof Node\Expr\Assign) {
+                continue;
+            }
+
+            if (! $assign->var instanceof Node\Expr\Variable || $assign->var->name !== $receiver->name) {
+                continue;
+            }
+
+            if ($assign->expr instanceof Node\Expr\New_ && $assign->expr->class instanceof Node\Name) {
+                $found[$assign->expr->class->toString()] = true;
+            }
+        }
+
+        return count($found) === 1 ? (string) array_key_first($found) : null;
+    }
+
+    /**
      * @return array{stmts: list<Node\Stmt>, description: string, key: string|null}|null
      */
     public function resolve(Node\Expr $callback, ?string $enclosingClass): ?array

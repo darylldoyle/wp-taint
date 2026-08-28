@@ -94,6 +94,32 @@ final class CallableResolver
     }
 
     /**
+     * A callback whose receiver and method name arrive as separate arguments.
+     *
+     * `$loader->add_action( $hook, $component, 'method' )` is the same callable
+     * as `array( $component, 'method' )`, spelled across two arguments because
+     * the plugin's loader signature says so. Reusing the pair resolution keeps
+     * the two spellings behaving identically.
+     *
+     * @return list<CallTarget>
+     */
+    public function resolveParts(
+        Operand $receiver,
+        Operand $method,
+        FunctionContext $context,
+        ClassTypeMap $types,
+        ReceiverResolver $receivers,
+    ): array {
+        $methods = $this->values->strings($method);
+
+        if ($methods === []) {
+            return [];
+        }
+
+        return self::unique($this->fromPair($receiver, $methods, [], $context, $types, $receivers));
+    }
+
+    /**
      * `'strlen'` and `'Acme\Renderer::render'`.
      *
      * @param list<Operand> $arguments

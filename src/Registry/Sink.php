@@ -23,7 +23,18 @@ final class Sink
      */
     public const UNANCHORED = 'unanchored';
 
-    public const STRATEGIES = [self::UNANCHORED];
+    /**
+     * Fire only when the call can actually instantiate an object.
+     *
+     * `unserialize( $data, [ 'allowed_classes' => false ] )` returns arrays and
+     * scalars and nothing else, so no POP chain can run. It is the documented
+     * fix for this whole class — it is what Better Search Replace shipped for
+     * CVE-2023-6933 — and reporting code that already applies it would be
+     * telling people to do the thing they have done.
+     */
+    public const UNSERIALIZE_ALLOWS_OBJECTS = 'unserialize_allows_objects';
+
+    public const STRATEGIES = [self::UNANCHORED, self::UNSERIALIZE_ALLOWS_OBJECTS];
 
     public function __construct(
         public readonly Matcher $matcher,
