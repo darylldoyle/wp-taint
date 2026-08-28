@@ -24,6 +24,9 @@ use Enshrined\WpTaint\Finding\TraceStep;
  */
 final class PropertyTaintMap
 {
+    /** @var array<string, bool> */
+    private array $anchored = [];
+
     /** @var array<string, TaintSet> */
     private array $taint = [];
 
@@ -99,6 +102,32 @@ final class PropertyTaintMap
     public function originOf(?string $class, string $property): array
     {
         return $this->origins[self::key($class, $property)] ?? [];
+    }
+
+    /**
+     * Was every value ever written to this property anchored by a literal?
+     *
+     * A property nothing was recorded for answers true: not knowing is not the
+     * same as knowing it is unanchored, and claiming otherwise turns every
+     * property this engine cannot see into a finding.
+     *
+     * @see LiteralAnchor
+     */
+    public function isAnchored(?string $class, string $property): bool
+    {
+        return $this->anchored[self::key($class, $property)] ?? true;
+    }
+
+    /**
+     * Record whether a write to this property carried a literal fragment.
+     *
+     * AND-ed across every write, because one assignment of the raw request is
+     * enough to make the property useless as an anchor.
+     */
+    public function recordAnchor(?string $class, string $property, bool $anchored): void
+    {
+        $key = self::key($class, $property);
+        $this->anchored[$key] = ($this->anchored[$key] ?? true) && $anchored;
     }
 
     /**

@@ -1,0 +1,10 @@
+{
+    "expectation": "vulnerable",
+    "findings": [
+        {
+            "ruleId": "wp.authz.admin-post-missing-check",
+            "kind": "authz",
+            "line": 9
+        }
+    ]
+}

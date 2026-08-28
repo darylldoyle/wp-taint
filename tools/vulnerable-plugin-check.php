@@ -106,13 +106,15 @@ foreach ($truth['issues'] as $issue) {
 
     $failures[] = $expected
         ? sprintf(
-            "  #%d (%s) is recorded as caught and was not reported.\n      %s\n      A regression: something stopped seeing it.",
+            "  #%d (%s) is recorded as caught and was not reported.\n      %s\n"
+                . "      A regression: something stopped seeing it.",
             $issue['id'],
             $issue['class'],
             $issue['title'],
         )
         : sprintf(
-            "  #%d (%s) is recorded as missed and WAS reported at %s.\n      %s\n      Good news. Update its status to \"caught\" in the truth file.",
+            "  #%d (%s) is recorded as missed and WAS reported at %s.\n      %s\n"
+                . "      Good news. Update its status to \"caught\" in the truth file.",
             $issue['id'],
             $issue['class'],
             implode(', ', $hits),

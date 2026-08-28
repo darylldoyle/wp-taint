@@ -118,9 +118,11 @@ final class RegistryDumpCommand extends Command
             $this->note($output, $propagator->note);
         }
 
-        $this->section($output, sprintf('SINKS (%d)', count($registry->sinks())));
+        $sinks = $registry->sinks() === [] ? [] : array_merge(...array_values($registry->sinks()));
 
-        foreach ($registry->sinks() as $sink) {
+        $this->section($output, sprintf('SINKS (%d)', count($sinks)));
+
+        foreach ($sinks as $sink) {
             $output->writeln(sprintf(
                 '  %-44s %-12s %-8s args %s  %s%s',
                 $sink->matcher->describe(),
@@ -128,7 +130,7 @@ final class RegistryDumpCommand extends Command
                 $sink->severity->value,
                 $sink->arguments->describe(),
                 $sink->ruleId,
-                $sink->storedWrite ? '  [stored write]' : '',
+                $this->sinkFlag($sink),
             ));
 
             $this->note($output, $sink->note);
@@ -223,8 +225,9 @@ final class RegistryDumpCommand extends Command
                 'args' => $s->arguments->describe(),
                 'ruleId' => $s->ruleId,
                 'storedWrite' => $s->storedWrite,
+                'appliesBy' => $s->appliesBy,
                 'note' => $s->note,
-            ], $registry->sinks()),
+            ], $registry->sinks() === [] ? [] : array_merge(...array_values($registry->sinks()))),
             'safe' => array_map(static fn (SafeCall $s): array => [
                 'match' => $s->matcher->describe(),
                 'note' => $s->note,
@@ -238,5 +241,14 @@ final class RegistryDumpCommand extends Command
             ], $registry->rules()),
             'safeDatabaseIdentifiers' => $registry->safeDatabaseIdentifiers(),
         ];
+    }
+
+    private function sinkFlag(Sink $sink): string
+    {
+        if ($sink->storedWrite) {
+            return '  [stored write]';
+        }
+
+        return $sink->appliesBy === null ? '' : '  [' . $sink->appliesBy . ']';
     }
 }

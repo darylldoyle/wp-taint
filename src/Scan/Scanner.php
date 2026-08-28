@@ -16,8 +16,12 @@ use Enshrined\WpTaint\Hooks\HookGraphBuilder;
 use Enshrined\WpTaint\Registry\Registry;
 use Enshrined\WpTaint\Rules\RuleContext;
 use Enshrined\WpTaint\Rules\StructuralRule;
+use Enshrined\WpTaint\Rules\Wordpress\BypassableNonceCheck;
+use Enshrined\WpTaint\Rules\Wordpress\GuardWithoutExit;
+use Enshrined\WpTaint\Rules\Wordpress\MissingAdminPostCapabilityCheck;
 use Enshrined\WpTaint\Rules\Wordpress\MissingAjaxCapabilityCheck;
 use Enshrined\WpTaint\Rules\Wordpress\MissingRestPermissionCallback;
+use Enshrined\WpTaint\Rules\Wordpress\NonceWithoutAction;
 use Enshrined\WpTaint\Support\PathHelper;
 use Enshrined\WpTaint\Taint\AnalysisOptions;
 use Enshrined\WpTaint\Taint\AnalysisWarning;
@@ -83,6 +87,10 @@ final class Scanner
         $this->structuralRules = [
             new MissingRestPermissionCallback(),
             new MissingAjaxCapabilityCheck(),
+            new MissingAdminPostCapabilityCheck(),
+            new NonceWithoutAction(),
+            new BypassableNonceCheck(),
+            new GuardWithoutExit(),
         ];
     }
 

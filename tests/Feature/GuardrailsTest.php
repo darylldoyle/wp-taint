@@ -35,7 +35,7 @@ it('guardrail 2: wpdb insert, update, delete and replace are never sinks', funct
     $registry = testRegistry();
 
     foreach (['insert', 'update', 'delete', 'replace'] as $method) {
-        expect($registry->sink(Matcher::method('wpdb', $method)))->toBeNull();
+        expect($registry->sinksFor(Matcher::method('wpdb', $method)))->toBeEmpty();
         expect($registry->isSafeCall(Matcher::method('wpdb', $method)))->toBeTrue();
     }
 

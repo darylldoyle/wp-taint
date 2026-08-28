@@ -9,25 +9,26 @@ description = "PHP language and standard library sources, sinks and sanitizers"
 [options]
 safe_database_identifiers = []
 
+
 # =============================================================================
 # SOURCES
 # =============================================================================
 
 [[sources]]
 superglobal = "_GET"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier"]
 
 [[sources]]
 superglobal = "_POST"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier"]
 
 [[sources]]
 superglobal = "_REQUEST"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier"]
 
 [[sources]]
 superglobal = "_COOKIE"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier"]
 
 [[sources]]
 superglobal = "_FILES"

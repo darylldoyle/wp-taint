@@ -72,6 +72,7 @@ final class LiteralAnalyzer
         return $this->check($operand, $seen, 0);
     }
 
+
     /**
      * @param SplObjectStorage<Operand, true> $seen
      */
@@ -171,8 +172,10 @@ final class LiteralAnalyzer
 
         $matcher = Matcher::function($function);
 
-        // absint(), intval(), count(), md5(), esc_sql(), sanitize_key()…
-        // nothing that comes out of these can be SQL syntax.
+        // absint(), intval(), count(), md5(), sanitize_key()… nothing that
+        // comes out of these can be SQL syntax. esc_sql() is here too, and is
+        // only true of it inside quotes — see TaintKind::SqlUnquoted, which is
+        // what carries that distinction.
         if ($this->clearsSql($matcher)) {
             return true;
         }

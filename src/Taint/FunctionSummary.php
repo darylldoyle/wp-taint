@@ -32,6 +32,15 @@ final class FunctionSummary
         public readonly bool $imprecise = false,
         public readonly array $paramToParam = [],
         public readonly array $sourcesToParam = [],
+        /**
+         * Every return of this function carries a literal fragment.
+         *
+         * The interprocedural half of {@see LiteralAnchor}: a helper that
+         * returns `'acme_' . $id` constrains what its callers can name, and
+         * without this the caller cannot tell that from one that returns the
+         * request verbatim.
+         */
+        public readonly bool $returnAnchored = false,
     ) {
     }
 
@@ -110,6 +119,10 @@ final class FunctionSummary
     public function equals(self $other): bool
     {
         if ($this->imprecise !== $other->imprecise || ! $this->introduces()->equals($other->introduces())) {
+            return false;
+        }
+
+        if ($this->returnAnchored !== $other->returnAnchored) {
             return false;
         }
 

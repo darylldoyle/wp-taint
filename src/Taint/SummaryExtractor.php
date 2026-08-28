@@ -77,6 +77,9 @@ final class SummaryExtractor
             // out-parameter came from inside the body — a helper that fills its
             // argument straight from `$_GET`.
             $baseline->byRefTaint,
+            // The baseline run, because whether a return carries a literal is a
+            // property of the body and not of which parameter was seeded.
+            $baseline->returnAnchored,
         );
     }
 

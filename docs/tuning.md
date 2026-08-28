@@ -700,3 +700,156 @@ done
 SARIF output opened in Trail of Bits' SARIF Explorer is a far better triage
 surface than a spreadsheet: it renders the source-to-sink flow and lets you
 classify each result as Bug or False Positive with one keystroke.
+
+## Phase 8 — scored against somebody else's answer key
+
+Everything above measures this engine against tests we wrote. The fixture suite
+is ours and 37 of its cases were added after the behaviour they check; the
+corpus is third-party code with no ground truth at all. Both have a hole in the
+same place.
+
+The WordPress plugin review team published an intentionally vulnerable plugin in
+2013 to teach plugin authors what their code does wrong, and a companion post
+enumerating every flaw in it. That is a scored test written by someone else, for
+a purpose unrelated to this tool, with an answer key we did not get to write.
+
+**We started at 5 of 12 and finished at 12 of 12.** What the seven misses cost
+to fix is the interesting part.
+
+### esc_sql() is not a substitute for prepare(), and we said it was
+
+`registries/wordpress.toml` declared `esc_sql` as clearing `sql` outright, and
+`wp.sqli.wpdb-query`'s remediation text read "esc_sql() is acceptable but
+prepare() is preferred". `LiteralAnalyzer` carried the same belief in a comment:
+"absint(), intval(), count(), md5(), esc_sql(), sanitize_key()… nothing that
+comes out of these can be SQL syntax."
+
+It is true inside quotes and false outside them:
+
+```php
+$wpdb->get_row( "SELECT * FROM t WHERE name = '" . esc_sql( $n ) . "'" );  // fine
+$wpdb->get_row( "SELECT * FROM t WHERE ID = " . esc_sql( $id ) );          // 1 OR 1=1
+```
+
+This plugin exists to teach exactly that, and we shipped the advice it was
+written to correct.
+
+**The first fix was wrong and the corpus said so immediately.** Asking "is this
+component provably safe in a bare position" took the corpus from 1,046 findings
+to **1,394**, because a table name from a helper is not provably anything:
+
+```php
+$wpdb->query( "ALTER TABLE {$configTable} ADD COLUMN autoload ..." );  // 65 in Wordfence alone
+```
+
+The right question is not what the value looks like but where it has been. So
+`esc_sql()` no longer clears `sql`; it trades it for {@see TaintKind::SqlUnquoted},
+and the sink reports that kind only outside quotes. A table name that never
+carried SQL taint never picks the kind up and is silent by construction rather
+than by heuristic. That also deleted the `unquoted_sql_safe` option and the
+strict `LiteralAnalyzer` mode the first attempt had needed.
+
+The summary had to carry it too: the escaper lives in the callee, so the caller
+learns about it only from `paramToSink`, recorded under `sql` — what the caller
+passes in — rather than `sql_unquoted`, which is what the callee turns it into.
+
+### A nonce is not an authorization check
+
+`admin_post_` is the third registrar of the shape the REST and AJAX rules
+already covered, and the plugin's delete handler sits on it with no capability
+check. A naive rule reports it clean, because `check_admin_referer()` *is*
+present and was in the `[[authorization]]` list.
+
+A nonce proves the request was deliberate. It says nothing about entitlement: a
+subscriber can hold a perfectly valid nonce for a form they should never submit.
+`[[authorization]]` entries now carry `proves = "entitlement" | "intent"`. The
+AJAX rule still accepts either — demanding a capability there moves findings
+across every plugin in the corpus — and the admin_post_ rule requires
+entitlement, which is the only reason it catches what it was written for.
+
+Across the corpus the new rule reports **nothing**: all 16 resolvable
+`admin_post_` registrations genuinely check. Verified rather than assumed, by
+instrumenting the walk. Registrations made through a wrapper —
+`$this->loader->add_action( 'admin_post_x', ... )` — are not seen at all, a
+pre-existing blind spot shared with the AJAX rule.
+
+### One function could only ever be one sink
+
+`update_option()` is a stored-taint sink on its value and a
+privilege-escalation sink on its name. `$this->sinks[$matcher->key()] = $sink`
+kept whichever the loader saw last and dropped the other silently — in a
+registry otherwise built to hard-error on an unknown key. Sinks are now a list
+per matcher.
+
+### The option-name rule took three attempts, and the corpus rejected two
+
+The vulnerability is the attacker choosing *which* option is written:
+`default_role` is an option and `administrator` is a legal value for it.
+
+1. **Report any request-derived name.** 63 findings. The
+   `ajax-nopriv-missing-check` fixture failed, because
+   `add_option( 'acme_subscriber_' . $_POST['email'], 1 )` is anchored — junk in
+   a namespace the plugin owns, not escalation.
+2. **Require a literal prefix.** Astra Sites still reported nine, all
+   `$source . '_usage_optin'`. A literal *suffix* pens the attacker in just as
+   well; so does one in the middle.
+3. **Require a literal anywhere — and look for it across call boundaries.**
+   The remaining false positives were all values whose anchor was real but
+   several frames away:
+
+   ```php
+   // PluginsHelper.php — $job_id is request data, so the taint is correct
+   $option_name = 'woocommerce_onboarding_..._async_' . $job_id;
+   $logger      = new AsyncPluginsInstallLogger( $option_name );
+   // → constructor → property → update_option( $this->option_name, $data )
+   ```
+
+   The taint was right. A local, syntactic anchor check judging an
+   interprocedural value was not. `FunctionSummary::returnAnchored` and
+   `PropertyTaintMap::isAnchored()` put the check on the same machinery the
+   taint travels on.
+
+A parameter means opposite things in the two directions, which is worth stating
+because it is not obvious. Reading a value, an unknown parameter means "the
+caller anchored this" and counts as constrained. Summarising a *return*,
+`function f( $id ) { return $id; }` guarantees callers nothing, and calling that
+anchored would launder the request through any one-line pass-through — hence
+`hasWithinBody()` beside `has()`.
+
+**Known false negatives**, both deliberate: an unresolvable callee is assumed to
+anchor, and anchoring is not propagated from a caller into a parameter, so
+`new Bad( $_POST['name'] )` stored on a property and written is not reported.
+
+**Still outstanding.** WooCommerce's REST settings controllers survive:
+
+```php
+if ( ! in_array( $setting_id, $valid_setting_ids, true ) ) {
+    continue;
+}
+...
+update_option( $setting_id, $value );
+```
+
+There is no literal to anchor on; safety comes from an allowlist gate, which is
+a *sanitizer* in this engine's vocabulary and is not modelled for `identifier`
+taint. It needs the guard's branch, so it would be the engine's first
+path-sensitive analysis.
+
+### A trailing comment hid the guard rule
+
+`wp_redirect()` sends a header and returns; it does not stop the script, so a
+failed check falls through into the work it guards. That is the most
+consequential bug in the plugin and the reason its arbitrary option write is
+reachable at all.
+
+php-parser emits a `Stmt\Nop` for a comment trailing the last statement of a
+block, so `wp_safe_redirect( $url ); // bail` ended in a Nop and the rule saw the
+comment rather than the redirect. Writing the fixture is what surfaced it —
+using the suite's own `wp-taint-expect` annotation, which is a trailing comment.
+Uncaught, the rule would have missed every commented guard in the wild.
+
+### And a mask that had to be kept in step by hand
+
+`TaintSet::allDataflowKinds()` was a binary literal, `0b0000_0111_1111_1111`.
+Adding a kind left it one bit short, so every value seeded as "all kinds"
+silently lost the new one. Derived from the enum now.

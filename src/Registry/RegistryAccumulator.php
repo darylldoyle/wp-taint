@@ -21,7 +21,7 @@ final class RegistryAccumulator
     /** @var array<string, Propagator> */
     private array $propagators = [];
 
-    /** @var array<string, Sink> */
+    /** @var array<string, list<Sink>> */
     private array $sinks = [];
 
     /** @var array<string, SafeCall> */
@@ -37,6 +37,7 @@ final class RegistryAccumulator
     private array $templates = [];
 
     /** @var array<string, true> */
+    /** @var array<string, string> identity => "entitlement" or "intent" */
     private array $authorization = [];
 
     /** @var array<string, RuleMetadata> */
@@ -68,9 +69,18 @@ final class RegistryAccumulator
         unset($this->sanitizers[$key]);
     }
 
+    /**
+     * One function can be several sinks.
+     *
+     * `update_option( $name, $value )` is a stored-taint sink on the value and
+     * a privilege-escalation sink on the name — different kinds, different
+     * severities, different rules. Keying by matcher alone kept only whichever
+     * entry the loader saw last and dropped the other without a word, which is
+     * the one failure mode this registry is otherwise built to prevent.
+     */
     public function addSink(Sink $sink): void
     {
-        $this->sinks[$sink->matcher->key()] = $sink;
+        $this->sinks[$sink->matcher->key()][] = $sink;
     }
 
     public function addSafeCall(SafeCall $safeCall): void
@@ -93,9 +103,9 @@ final class RegistryAccumulator
         $this->byRef[$effect->matcher->key()] = $effect;
     }
 
-    public function addAuthorization(Matcher $matcher): void
+    public function addAuthorization(Matcher $matcher, string $proves): void
     {
-        $this->authorization[$matcher->identity()] = true;
+        $this->authorization[$matcher->identity()] = $proves;
     }
 
     public function addRule(RuleMetadata $rule): void
@@ -143,7 +153,7 @@ final class RegistryAccumulator
             $this->dispatchers,
             $this->byRef,
             $this->templates,
-            array_keys($this->authorization),
+            $this->authorization,
             $this->rules,
             $identifiers,
         );
@@ -191,12 +201,14 @@ final class RegistryAccumulator
     {
         $missing = [];
 
-        foreach ($this->sinks as $sink) {
-            if (isset($this->rules[$sink->ruleId])) {
-                continue;
-            }
+        foreach ($this->sinks as $sinks) {
+            foreach ($sinks as $sink) {
+                if (isset($this->rules[$sink->ruleId])) {
+                    continue;
+                }
 
-            $missing[$sink->ruleId] = true;
+                $missing[$sink->ruleId] = true;
+            }
         }
 
         if ($missing === []) {

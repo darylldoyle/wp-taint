@@ -49,6 +49,23 @@ property `$x`" and stopped, which is not something a reviewer can act on.
 
 **Direction:** over-approximating.
 
+### `esc_sql()` is only credited inside quotes
+
+`esc_sql()`, `wpdb::_real_escape()` and `like_escape()` escape quotes and
+backslashes. Inside quotes that is a real defence; outside them there is nothing
+to escape and `1 OR 1=1` reaches the database whole. So they do not clear `sql`;
+they trade it for `sql_unquoted`, which the sink reports only when the value
+lands in an unquoted position.
+
+Quote state is read from the literal fragments of the query string, counting
+unescaped `'` and `"`. Backticks quote identifiers rather than values and offer
+a value no protection, so they deliberately do not count as being in quotes.
+
+**What is missed.** A query whose quoting is itself computed, and any case where
+the string is not built where the sink is — the value has to reach a sink whose
+query is a concatenation or an interpolation for the position to be readable at
+all.
+
 ### Stored sources carry HTML and SQL taint only, not path or url
 
 `get_option()`, `get_post_meta()` and the rest are modelled as introducing
@@ -298,6 +315,50 @@ marked `imprecise`.
 **What is still missed.** A check reached only through a dynamic call the engine
 cannot resolve. Those walks report themselves incomplete, so the finding is
 marked rather than suppressed.
+
+### Hooks registered through a wrapper are not seen
+
+The AJAX and admin-post rules match a literal `add_action()` call. A plugin that
+routes its registrations through its own loader —
+`$this->loader->add_action( 'admin_post_x', $obj, 'method' )` — is invisible to
+both, and the registration is not even counted as unresolved, because nothing
+identifies it as a registration in the first place.
+
+Five of the twenty-one corpus files mentioning `admin_post_` are of this shape.
+
+### A nonce satisfies the AJAX rule but not the admin-post one
+
+A nonce proves the request was deliberate; it says nothing about entitlement,
+and a subscriber can hold a valid nonce for a form they should never submit. So
+`[[authorization]]` entries carry `proves = "entitlement" | "intent"`.
+
+The admin-post rule requires entitlement, which is the correct bar. The AJAX
+rule accepts either, which is not — it is the pragmatic floor, because AJAX
+handlers overwhelmingly guard with `check_ajax_referer()` alone and demanding a
+capability as well would bury the real findings under every plugin in the
+corpus.
+
+### An option name assembled out of sight is assumed to be anchored
+
+`update_option()` is reported when the option *name* comes from the request,
+because naming the option is the whole attack: `default_role` is an option and
+`administrator` is a legal value for it. Any fixed fragment in the name — head,
+tail or middle — pens the attacker into a namespace the plugin already owns, and
+is not reported.
+
+That fragment is often several frames away, so the check follows function
+summaries and property writes to find it. Two gaps remain, both deliberate:
+
+- **An unresolvable callee is assumed to anchor.** A helper that returns the
+  request verbatim through a call the engine cannot follow is not reported.
+- **Anchoring is not propagated from a caller into a parameter.**
+  `new Thing( $_POST['name'] )` stored on a property and later written is
+  missed, because the constructor cannot see what its caller passed.
+
+Also unmodelled: an allowlist gate. WooCommerce validates with
+`in_array( $setting_id, $valid_setting_ids, true )` and `continue`, which makes
+the write safe with no literal anywhere in the name. Recognising that needs the
+guard's branch, and would be this engine's first path-sensitive analysis.
 
 ### `register_rest_route()` options are folded, not traced
 

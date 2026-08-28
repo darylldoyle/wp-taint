@@ -15,8 +15,6 @@ use InvalidArgumentException;
  */
 final class TaintSet
 {
-    private const ALL_DATAFLOW_MASK = 0b0000_0111_1111_1111;
-
     private function __construct(private readonly int $mask)
     {
     }
@@ -28,10 +26,15 @@ final class TaintSet
 
     /**
      * Every kind the dataflow engine propagates. Excludes {@see TaintKind::Authz}.
+     *
+     * Derived from the enum rather than written out as a literal mask. It was a
+     * literal, and adding a kind left it silently one bit short — every value
+     * seeded as "all kinds" quietly lost the new one. A constant that has to be
+     * kept in step with an enum by hand will eventually not be.
      */
     public static function allDataflowKinds(): self
     {
-        return new self(self::ALL_DATAFLOW_MASK);
+        return self::of(...TaintKind::dataflowKinds());
     }
 
     public static function of(TaintKind ...$kinds): self

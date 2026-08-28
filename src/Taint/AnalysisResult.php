@@ -27,6 +27,19 @@ final class AnalysisResult
          * depends on it.
          */
         public readonly ?TaintState $state = null,
+        /**
+         * Every `return` in this function yielded a string with a literal
+         * fragment in it.
+         *
+         * Carried so {@see LiteralAnchor} can see through a call. The anchor
+         * that makes an option name safe is very often three frames away —
+         * WooCommerce builds
+         * `'woocommerce_onboarding_..._async_' . $job_id` in one method, passes
+         * it to a constructor, and writes it from a property in a third — and a
+         * check that stops at the call boundary calls every one of those a
+         * finding.
+         */
+        public readonly bool $returnAnchored = false,
     ) {
     }
 }

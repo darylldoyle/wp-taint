@@ -77,6 +77,103 @@ final class QueryShapeInspector
     }
 
     /**
+     * The first component interpolated *outside* any quotes, which no escaper
+     * can make safe.
+     *
+     * ```php
+     * $wpdb->get_row( "SELECT * FROM t WHERE ID = " . esc_sql( $id ) );
+     * ```
+     *
+     * `esc_sql()` escapes quotes and backslashes. With no quotes around the
+     * value there is nothing for it to escape, and `1 OR 1=1` reaches the
+     * database intact. The same is true of `sanitize_text_field()` and every
+     * other string sanitizer: they defend a quoted context and do nothing for
+     * a bare one.
+     *
+     * The caller decides which components are at risk, and passes the only
+     * answer that keeps this narrow: a value carrying
+     * {@see TaintKind::SqlUnquoted}, meaning it was escaped for quotes it did
+     * not get. A table name built by a helper method never carried SQL taint,
+     * never picked the kind up, and is not reported — which matters, because
+     * `"SELECT ... FROM {$table}"` appears hundreds of times in the corpus.
+     *
+     * This project shipped the opposite advice. `wp.sqli.wpdb-query` told
+     * people "esc_sql() is acceptable but prepare() is preferred", which is
+     * true inside quotes and dangerous outside them, and it took the WordPress
+     * plugin team's own intentionally vulnerable plugin to point it out.
+     */
+    /**
+     * @param callable(Operand): bool $atRisk
+     */
+    public function unquotedComponent(Operand $query, callable $atRisk): ?Operand
+    {
+        $components = $this->components($query);
+
+        if ($components === null) {
+            return null;
+        }
+
+        $inQuotes = false;
+
+        foreach ($components as $component) {
+            if ($component instanceof Operand\Literal && is_string($component->value)) {
+                $inQuotes = self::quoteStateAfter($component->value, $inQuotes);
+
+                continue;
+            }
+
+            if ($inQuotes || ! $atRisk($component)) {
+                continue;
+            }
+
+            return $component;
+        }
+
+        return null;
+    }
+
+    /**
+     * Whether a run of SQL text leaves us inside a string literal.
+     *
+     * Only single and double quotes, and only unescaped ones. Backticks quote
+     * identifiers rather than values and offer no protection to a value, so
+     * they deliberately do not count as being "in quotes".
+     */
+    private static function quoteStateAfter(string $text, bool $inQuotes): bool
+    {
+        $quote = null;
+        $length = strlen($text);
+
+        for ($index = 0; $index < $length; $index++) {
+            $character = $text[$index];
+
+            if ($character === '\\') {
+                $index++;
+
+                continue;
+            }
+
+            if ($character !== "'" && $character !== '"') {
+                continue;
+            }
+
+            if ($quote === null && ! $inQuotes) {
+                $quote = $character;
+                $inQuotes = true;
+
+                continue;
+            }
+
+            if ($character === $quote || $quote === null) {
+                $quote = null;
+                $inQuotes = false;
+            }
+        }
+
+        return $inQuotes;
+    }
+
+    /**
      * The parts of a concatenated or interpolated string.
      *
      * Null when the operand is not a built string at all, which is how a bare

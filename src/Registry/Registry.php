@@ -21,12 +21,12 @@ final class Registry
      * @param array<string, Source>       $sources
      * @param array<string, Sanitizer>    $sanitizers
      * @param array<string, Propagator>   $propagators
-     * @param array<string, Sink>         $sinks
+     * @param array<string, list<Sink>>   $sinks
      * @param array<string, SafeCall>     $safeCalls
      * @param array<string, Dispatcher>   $dispatchers
      * @param array<string, ByRefEffect>  $byRef         calls that write back through an argument
      * @param array<string, TemplateLoader> $templates   calls that load a theme template by name
-     * @param list<string>                $authorization matcher identities that check a capability or a nonce
+     * @param array<string, string>       $authorization matcher identity => what it proves, "entitlement" or "intent"
      * @param array<string, RuleMetadata> $rules
      * @param list<string>                $safeDatabaseIdentifiers
      */
@@ -61,9 +61,23 @@ final class Registry
         return $this->propagators[$matcher->key()] ?? null;
     }
 
-    public function sink(Matcher $matcher): ?Sink
+    /**
+     * Every sink role this call plays.
+     *
+     * A list, because one function can be a sink more than once: the option
+     * name and the option value are separate arguments, separate kinds and
+     * separate rules.
+     *
+     * @return list<Sink>
+     */
+    public function sinksFor(Matcher $matcher): array
     {
-        return $this->sinks[$matcher->key()] ?? null;
+        return $this->sinks[$matcher->key()] ?? [];
+    }
+
+    public function isSink(Matcher $matcher): bool
+    {
+        return isset($this->sinks[$matcher->key()]);
     }
 
     /**
@@ -115,7 +129,7 @@ final class Registry
     }
 
     /**
-     * Calls that constitute an authorization check.
+     * Calls that constitute an authorization check of any kind.
      *
      * Returned as matcher identities so the call graph can be walked without
      * reconstructing a Matcher per edge. Data rather than a constant, so a
@@ -125,7 +139,32 @@ final class Registry
      */
     public function authorizationChecks(): array
     {
-        return $this->authorization;
+        return array_keys($this->authorization);
+    }
+
+    /**
+     * Calls that establish the caller may do the thing, as opposed to meaning
+     * to do it.
+     *
+     * A nonce proves intent: this request came from a form we rendered, so it
+     * is not cross-site. It says nothing about entitlement, and a subscriber
+     * can obtain a perfectly valid nonce for a form they should never be able
+     * to submit. `check_admin_referer()` in a row-deletion handler stops the
+     * attack from being CSRF and leaves it a privilege escalation.
+     *
+     * The distinction exists because the AJAX rule accepts either — changing
+     * that would move findings across every plugin in the corpus — while the
+     * admin_post_ rule requires entitlement, which is the correct bar and the
+     * only reason it catches what it was written for.
+     *
+     * @return list<string>
+     */
+    public function entitlementChecks(): array
+    {
+        return array_keys(array_filter(
+            $this->authorization,
+            static fn (string $proves): bool => $proves === 'entitlement',
+        ));
     }
 
     public function isSafeCall(Matcher $matcher): bool
@@ -197,9 +236,11 @@ final class Registry
      */
     public function severityForRule(string $ruleId, Severity $default): Severity
     {
-        foreach ($this->sinks as $sink) {
-            if ($sink->ruleId === $ruleId) {
-                return $sink->severity;
+        foreach ($this->sinks as $sinks) {
+            foreach ($sinks as $sink) {
+                if ($sink->ruleId === $ruleId) {
+                    return $sink->severity;
+                }
             }
         }
 
@@ -231,7 +272,7 @@ final class Registry
     }
 
     /**
-     * @return array<string, Sink>
+     * @return array<string, list<Sink>>
      */
     public function sinks(): array
     {
@@ -293,10 +334,20 @@ final class Registry
 
     /**
      * Drop stored-write sinks unless `--stored-taint-writes` was passed.
+     *
+     * Filters within each matcher's list rather than dropping the matcher, so
+     * that turning stored writes off on update_option() leaves its other role —
+     * the option name as a privileged identifier — switched on.
      */
     public function withoutStoredWriteSinks(): self
     {
-        $sinks = array_filter($this->sinks, static fn (Sink $sink): bool => ! $sink->storedWrite);
+        $sinks = array_filter(array_map(
+            static fn (array $forMatcher): array => array_values(array_filter(
+                $forMatcher,
+                static fn (Sink $sink): bool => ! $sink->storedWrite,
+            )),
+            $this->sinks,
+        ), static fn (array $forMatcher): bool => $forMatcher !== []);
 
         return new self(
             $this->names,

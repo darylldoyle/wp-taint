@@ -49,7 +49,8 @@ wp-taint takes the SSA/CFG approach — which gives interprocedural taint cheapl
 **Injection**, via dataflow from source to sink:
 
 - Reflected and stored XSS, including across one or more function boundaries
-- SQL injection, including `$wpdb->prepare()` called with a non-literal format string
+- SQL injection, including `$wpdb->prepare()` called with a non-literal format
+  string, and `esc_sql()` used where there are no quotes for it to escape
 - Local file inclusion, arbitrary file read and write
 - Command injection, `eval()`, and PHP object injection through `unserialize()`
 - Open redirects and HTTP header injection
@@ -75,9 +76,17 @@ structurally cannot find:
 - `permission_callback => '__return_true'` on a route that writes
 - `permission_callback` that resolves but reaches no authorization check
 - `wp_ajax_*` handlers with no capability check and no nonce check
+- `admin_post_*` handlers with no capability check — a nonce is not one
+- A guard that redirects without `exit`, so the code it guards runs anyway
+- A nonce created or verified with no action, so it is the shared `-1` token
+- A nonce check behind `isset()` on the same parameter, which omitting it skips
+- `update_option()` whose option *name* comes from the request, which is
+  privilege escalation rather than stored data
 
-The last two walk the call graph rather than matching names, so a check
-delegated to a helper counts and a helper merely *named* like a check does not.
+These walk the call graph rather than matching names, so a check delegated to a
+helper counts and a helper merely *named* like a check does not. A nonce is
+recorded as proving intent rather than entitlement, which is why it satisfies
+the AJAX rule and not the admin-post one.
 
 ## Taint is never a boolean
 
@@ -261,6 +270,33 @@ changing one file invalidates the whole cache; anything finer would be unsound.
 Memory is the real constraint. `bin/wp-taint` raises the limit to 2 GB, which
 covers everything in the WordPress.org top fifty except WooCommerce; for a tree
 that size set `WP_TAINT_MEMORY_LIMIT=4G`.
+
+## Scored against an answer key we did not write
+
+The fixture suite is ours, and 37 of its cases were written after the behaviour
+they test. The corpus is third-party code with no ground truth. Both flatter
+this tool in the same place.
+
+The WordPress plugin review team published an
+[intentionally vulnerable plugin](https://make.wordpress.org/plugins/2013/04/09/intentionally-vulnerable-plugin/)
+in 2013 to teach plugin authors what their code does wrong, and a
+[companion post](https://make.wordpress.org/plugins/2013/11/24/how-to-fix-the-intentionally-vulnerable-plugin/)
+enumerating every flaw in it. Somebody else's test, somebody else's answer key,
+written for a purpose unrelated to this tool.
+
+**It finds all 12.** Three of them — the CSRF and control-flow bugs — the taint
+engine cannot see at all, and are caught by structural rules; filing them under
+"not a dataflow problem" would have been the easy way out.
+
+```bash
+composer vulnerable:fetch
+composer vulnerable:check
+```
+
+The score is committed in `tests/Fixtures/vulnerable-plugin-truth.json` and
+checked in CI. It fails in both directions: a caught issue going quiet is a
+regression, and a missed one starting to fire means somebody fixed something
+without noticing and the file is now lying about where the tool stands.
 
 ## How it compares
 

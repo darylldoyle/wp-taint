@@ -53,12 +53,17 @@ final class FunctionAnalysis
 
     private TaintSet $returnTaint;
 
+    /** Null until the first return is seen; then AND-ed across every return. */
+    private ?bool $returnAnchored = null;
+
     private bool $imprecise = false;
 
     /** @var list<AnalysisWarning> */
     private array $warnings = [];
 
     private readonly QueryShapeInspector $queryShapes;
+
+    private readonly LiteralAnchor $anchors;
 
     private bool $collecting = false;
 
@@ -147,7 +152,9 @@ final class FunctionAnalysis
             $literals,
             new OriginClassifier($registry, $resolver, $properties, $receivers),
         );
+        $this->anchors = new LiteralAnchor($summaries, $resolver, $properties, $receivers, $context, $this->types);
         $this->returnTaint = TaintSet::empty();
+        $this->returnAnchored = null;
         $this->blocks = BlockOrder::of($this->context->func->cfg);
         $this->traces = new TraceBuilder(
             $this->state,
@@ -199,6 +206,7 @@ final class FunctionAnalysis
             $this->byRefTaint(),
             $this->warnings,
             $this->state,
+            $this->returnAnchored ?? false,
         );
     }
 
@@ -982,6 +990,13 @@ final class FunctionAnalysis
                     : $this->staticOwnerClass($target);
 
                 $this->properties->track($owner, $property);
+
+                // Whether the written value carried a literal fragment, so a
+                // read elsewhere can tell `$this->option_name` holding
+                // `'acme_' . $id` from one holding the request verbatim.
+                // Recorded on every write, clean ones included: an anchor is a
+                // property of the value, not of its taint.
+                $this->properties->recordAnchor($owner, $property, $this->anchors->has($op->expr));
             }
         }
 
@@ -1472,6 +1487,14 @@ final class FunctionAnalysis
             return false;
         }
 
+        // AND across returns: one path that returns the request verbatim is
+        // enough to make the function useless as an anchor. Not part of the
+        // fixed point — it is a property of the syntax, so it cannot oscillate.
+        $anchored = $this->anchors->hasWithinBody($op->expr);
+        $this->returnAnchored = $this->returnAnchored === null
+            ? $anchored
+            : ($this->returnAnchored && $anchored);
+
         $taint = $this->state->taintOf($op->expr);
         $merged = $this->returnTaint->union($taint);
         $changed = ! $merged->equals($this->returnTaint);
@@ -1519,13 +1542,9 @@ final class FunctionAnalysis
 
     private function checkConstructSink(Op $op, string $construct, Operand $operand): void
     {
-        $sink = $this->registry->sink(Matcher::construct($construct));
-
-        if ($sink === null) {
-            return;
+        foreach ($this->registry->sinksFor(Matcher::construct($construct)) as $sink) {
+            $this->reportSink($sink, $op, $operand, $construct);
         }
-
-        $this->reportSink($sink, $op, $operand, $construct);
     }
 
     // -------------------------------------------------------------------
@@ -1615,9 +1634,9 @@ final class FunctionAnalysis
         $changed = ($matcher === null ? false : $this->joinTemplateScope($op, $call, $matcher)) || $changed;
 
         if ($matcher !== null) {
-            $sink = $this->registry->sink($matcher);
+            $sinks = $this->registry->sinksFor($matcher);
 
-            if ($sink !== null) {
+            foreach ($sinks as $sink) {
                 $this->reportCallSink($sink, $op, $call, $matcher);
             }
 
@@ -1656,7 +1675,7 @@ final class FunctionAnalysis
                 return $this->writeResult($op->result, TaintSet::empty()) || $changed;
             }
 
-            if ($sink !== null) {
+            if ($sinks !== []) {
                 // A sink with no other role consumes the value; whatever it
                 // returns is not derived from the tainted argument in a way we
                 // model.
@@ -1844,6 +1863,15 @@ final class FunctionAnalysis
         $cleared = $sanitizer->clearsBy === null
             ? $sanitizer->apply($incoming)
             : $incoming->without($this->strategyClears($sanitizer, $call));
+
+        // A quote-escaper does not remove the danger, it moves it: the value is
+        // safe between quotes and no safer than before without them. Trading
+        // `sql` for `sql_unquoted` is what lets the sink tell those apart, and
+        // what keeps a table name from a helper — which never carried `sql` —
+        // out of it entirely.
+        if ($sanitizer->quotedOnly && $incoming->has(TaintKind::Sql)) {
+            $cleared = $cleared->union(TaintSet::of(TaintKind::SqlUnquoted));
+        }
 
         if ($cleared->isEmpty()) {
             return $this->writeResult($op->result, $cleared);
@@ -2341,6 +2369,20 @@ final class FunctionAnalysis
     // Sink reporting
     // -------------------------------------------------------------------
 
+    /**
+     * A named condition on whether a sink fires for this particular value.
+     *
+     * Only `unanchored` today: an identifier with any fixed fragment in it is a
+     * different, much smaller problem than one the attacker chooses outright.
+     */
+    private function sinkApplies(Sink $sink, Operand $operand): bool
+    {
+        return match ($sink->appliesBy) {
+            Sink::UNANCHORED => ! $this->anchors->has($operand),
+            default => true,
+        };
+    }
+
     private function reportCallSink(Sink $sink, Op $op, CallTarget $call, Matcher $matcher): void
     {
         foreach ($sink->arguments->resolve($call->argumentCount()) as $index) {
@@ -2361,6 +2403,10 @@ final class FunctionAnalysis
         if (! $taint->has($sink->kind)) {
             $this->checkQueryShape($sink, $op, $operand, $identity);
 
+            return;
+        }
+
+        if (! $this->sinkApplies($sink, $operand)) {
             return;
         }
 
@@ -2391,28 +2437,79 @@ final class FunctionAnalysis
      */
     private function checkQueryShape(Sink $sink, Op $op, Operand $operand, string $identity): void
     {
-        if (! $this->collecting || ! $this->collectFindings || $sink->kind !== TaintKind::Sql) {
+        if (! $this->collecting || $sink->kind !== TaintKind::Sql) {
+            return;
+        }
+
+        // Checked before the collecting guard, because a summary pass has to
+        // record it: the escaper that creates the risk lives in the callee, so
+        // the caller can only learn about it from the summary. Recorded under
+        // `sql` rather than `sql_unquoted`, because `sql` is what the caller
+        // passes in — the callee is what turns one into the other.
+        $unquoted = $this->queryShapes->unquotedComponent(
+            $operand,
+            fn (Operand $component): bool => $this->state
+                ->effectiveTaintOf($component)
+                ->has(TaintKind::SqlUnquoted),
+        );
+
+        if ($unquoted !== null) {
+            $this->recordSinkReference(
+                new Sink(
+                    $sink->matcher,
+                    $sink->arguments,
+                    TaintKind::Sql,
+                    Severity::Critical,
+                    self::UNPREPARED_QUERY_RULE,
+                ),
+                $op,
+                $identity,
+            );
+        }
+
+        if (! $this->collectFindings) {
             return;
         }
 
         $unaccounted = $this->queryShapes->unaccountedComponent($operand, $this->context, $this->types);
 
-        if ($unaccounted === null) {
+        if ($unaccounted !== null) {
+            $this->emit(
+                self::UNPREPARED_QUERY_RULE,
+                TaintKind::Sql,
+                Severity::High,
+                $op,
+                $identity,
+                $unaccounted,
+                sprintf(
+                    'A variable is interpolated into the query passed to %s(). Taint analysis could not account for '
+                        . 'where %s comes from, but the shape is unsafe regardless.',
+                    $identity,
+                    OperandHelper::describe($unaccounted),
+                ),
+            );
+
+            return;
+        }
+
+        if ($unquoted === null) {
             return;
         }
 
         $this->emit(
             self::UNPREPARED_QUERY_RULE,
             TaintKind::Sql,
-            Severity::High,
+            Severity::Critical,
             $op,
             $identity,
-            $unaccounted,
+            $unquoted,
             sprintf(
-                'A variable is interpolated into the query passed to %s(). Taint analysis could not account for '
-                    . 'where %s comes from, but the shape is unsafe regardless.',
+                '%s was escaped with esc_sql() or an equivalent and then interpolated into the query passed to '
+                    . '%s() with no quotes around it. Those functions escape quotes; with none present there is '
+                    . 'nothing for them to escape, and `1 OR 1=1` reaches the database intact. Use prepare() with '
+                    . 'a %%d or %%s placeholder.',
+                OperandHelper::describe($unquoted),
                 $identity,
-                OperandHelper::describe($unaccounted),
             ),
         );
     }

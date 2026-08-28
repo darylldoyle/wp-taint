@@ -227,3 +227,34 @@ jobs:
       # thinks to look in.
       - name: Check the corpus against its baseline
         run: composer corpus:check
+
+  vulnerable-plugin:
+    name: Vulnerable plugin score
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: json
+          coverage: none
+          ini-values: memory_limit=2G
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v3
+
+      # The WordPress plugin review team's own intentionally vulnerable plugin,
+      # pinned to its April 2013 revision, plus the answer key they published
+      # with it. The only benchmark here that somebody else wrote — the fixture
+      # suite is ours and the corpus has no ground truth.
+      - name: Fetch the vulnerable plugin
+        run: composer vulnerable:fetch
+
+      # Fails in both directions. A caught issue going quiet is a regression; a
+      # missed one starting to fire means somebody fixed something and did not
+      # notice, and the recorded score is now wrong about where we stand.
+      - name: Score against the published answer key
+        run: composer vulnerable:check

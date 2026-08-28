@@ -57,6 +57,21 @@ final class Sanitizer
         public readonly ?string $clearsBy = null,
         public readonly int $patternArgument = 0,
         public readonly int $replacementArgument = 1,
+        /**
+         * This entry defends a quoted SQL context and only a quoted one.
+         *
+         * `esc_sql()`, `wpdb::_real_escape()` and `like_escape()` escape quotes
+         * and backslashes. Bare, with no quotes around the value, there is
+         * nothing to escape and `1 OR 1=1` passes through. So they clear `sql`
+         * and leave {@see TaintKind::SqlUnquoted} behind, which the sink reports
+         * only when the value lands outside quotes.
+         *
+         * The rest of the sanitize_* family that clears `sql` is genuinely safe
+         * bare, because it restricts the character set: sanitize_key() and
+         * sanitize_title() cannot emit a space or an operator, so there is no
+         * payload to write.
+         */
+        public readonly bool $quotedOnly = false,
     ) {
     }
 

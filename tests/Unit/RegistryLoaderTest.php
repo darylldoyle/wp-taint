@@ -29,7 +29,7 @@ it('loads the bundled registries and resolves inheritance', function (): void {
     expect($registry->names)->toBe(['php-core', 'wordpress-generated', 'wordpress']);
     expect($registry->source(Matcher::superglobal('_GET')))->not->toBeNull();
     expect($registry->sanitizer(Matcher::function('esc_html')))->not->toBeNull();
-    expect($registry->sink(Matcher::construct('echo')))->not->toBeNull();
+    expect($registry->sinksFor(Matcher::construct('echo')))->not->toBeEmpty();
 });
 
 it('applies later definitions over earlier ones', function (): void {

@@ -1,0 +1,15 @@
+{
+    "expectation": "vulnerable",
+    "findings": [
+        {
+            "ruleId": "wp.csrf.nonce-without-action",
+            "kind": "authz",
+            "line": 10
+        },
+        {
+            "ruleId": "wp.csrf.nonce-without-action",
+            "kind": "authz",
+            "line": 16
+        }
+    ]
+}

@@ -31,14 +31,14 @@ final class RegistryLoader
     private const SANITIZER_KEYS = [
         'function', 'class', 'method', 'static_method', 'arg', 'args', 'all_args', 'clears',
         'requires_literal_arg', 'literal_violation_rule_id', 'note', 'imprecise',
-        'clears_by', 'pattern_arg', 'replacement_arg',
+        'clears_by', 'pattern_arg', 'replacement_arg', 'quoted_only',
     ];
 
     private const PROPAGATOR_KEYS = ['function', 'class', 'method', 'static_method', 'arg', 'args', 'all_args', 'note'];
 
     private const SINK_KEYS = [
         'construct', 'function', 'class', 'method', 'static_method', 'arg', 'args', 'all_args',
-        'kind', 'severity', 'rule_id', 'note', 'stored_write',
+        'kind', 'severity', 'rule_id', 'note', 'stored_write', 'applies_by',
     ];
 
     private const SAFE_KEYS = ['function', 'class', 'method', 'static_method', 'note'];
@@ -57,7 +57,7 @@ final class RegistryLoader
         'slug_arg', 'slug', 'name_arg', 'args_arg', 'path_arg', 'note',
     ];
 
-    private const AUTHORIZATION_KEYS = ['function', 'class', 'method', 'static_method', 'note'];
+    private const AUTHORIZATION_KEYS = ['function', 'class', 'method', 'static_method', 'proves', 'note'];
 
     private const RULE_KEYS = ['id', 'title', 'description', 'remediation', 'cwe', 'message'];
 
@@ -263,6 +263,7 @@ final class RegistryLoader
                 $clearsBy,
                 $this->intValue($file, $context . ' pattern_arg', $entry['pattern_arg'] ?? 0),
                 $this->intValue($file, $context . ' replacement_arg', $entry['replacement_arg'] ?? 1),
+                $this->boolValue($file, $context . ' quoted_only', $entry['quoted_only'] ?? false),
             ));
         }
     }
@@ -343,6 +344,7 @@ final class RegistryLoader
                 $this->requiredString($file, $context . ' rule_id', $entry['rule_id'] ?? null),
                 $this->optionalString($file, $context . ' note', $entry['note'] ?? null),
                 $this->boolValue($file, $context . ' stored_write', $entry['stored_write'] ?? false),
+                $this->namedStrategy($file, $context . ' applies_by', $entry['applies_by'] ?? null, Sink::STRATEGIES),
             ));
         }
     }
@@ -519,8 +521,20 @@ final class RegistryLoader
             $context = sprintf('[[authorization]] #%d', $index + 1);
             $this->rejectUnknownKeys($file, $context, $entry, self::AUTHORIZATION_KEYS);
 
+            $proves = $this->optionalString($file, $context . ' proves', $entry['proves'] ?? null) ?? 'entitlement';
+
+            if (! in_array($proves, ['entitlement', 'intent'], true)) {
+                throw new RegistryException(sprintf(
+                    '%s: %s proves must be "entitlement" or "intent", got "%s".',
+                    $file,
+                    $context,
+                    $proves,
+                ));
+            }
+
             $accumulator->addAuthorization(
                 $this->matcherFor($file, $context, $entry, allowConstruct: false, allowSuperglobal: false),
+                $proves,
             );
         }
     }
@@ -547,13 +561,13 @@ final class RegistryLoader
         $options = $this->arrayValue($file, '[options]', $options);
         $this->rejectUnknownKeys($file, '[options]', $options, self::OPTION_KEYS);
 
-        if (! isset($options['safe_database_identifiers'])) {
-            return;
+        if (isset($options['safe_database_identifiers'])) {
+            $accumulator->setSafeDatabaseIdentifiers($this->stringList(
+                $file,
+                '[options] safe_database_identifiers',
+                $options['safe_database_identifiers'],
+            ));
         }
-
-        $accumulator->setSafeDatabaseIdentifiers(
-            $this->stringList($file, '[options] safe_database_identifiers', $options['safe_database_identifiers']),
-        );
     }
 
     /**

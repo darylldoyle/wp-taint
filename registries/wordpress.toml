@@ -31,32 +31,32 @@ safe_database_identifiers = [
 [[sources]]
 class = "WP_REST_Request"
 method = "get_param"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "identifier"]
 
 [[sources]]
 class = "WP_REST_Request"
 method = "get_params"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "identifier"]
 
 [[sources]]
 class = "WP_REST_Request"
 method = "get_json_params"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "identifier"]
 
 [[sources]]
 class = "WP_REST_Request"
 method = "get_query_params"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "identifier"]
 
 [[sources]]
 class = "WP_REST_Request"
 method = "get_body_params"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "identifier"]
 
 [[sources]]
 class = "WP_REST_Request"
 method = "get_body"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "identifier"]
 
 [[sources]]
 class = "WP_REST_Request"
@@ -344,14 +344,24 @@ function = "absint"
 clears = "*"
 note = "Casts to a non-negative integer, which cannot carry a payload in any context."
 
+# like_escape() lives in the generated catalogue clearing "sql". It escapes for
+# a LIKE pattern inside quotes, so it carries the same caveat as esc_sql().
+[[sanitizers]]
+function = "like_escape"
+clears = ["sql"]
+quoted_only = true
+
 [[sanitizers]]
 function = "esc_sql"
 clears = ["sql"]
+quoted_only = true
+note = "Escapes quotes and backslashes, which defends a quoted context and nothing else. Bare, `1 OR 1=1` passes through untouched."
 
 [[sanitizers]]
 class = "wpdb"
 method = "_real_escape"
 clears = ["sql"]
+quoted_only = true
 
 [[sanitizers]]
 function = "wp_validate_redirect"
@@ -502,6 +512,41 @@ kind = "url"
 severity = "medium"
 rule_id = "wp.ssrf.remote-request"
 
+# The option NAME taken from the request. Not a stored-taint write and not an
+# injection: naming the option is the whole attack, because default_role is an
+# option and administrator is a legal value for it. Always on.
+[[sinks]]
+function = "update_option"
+args = [0]
+kind = "identifier"
+severity = "critical"
+rule_id = "wp.authz.arbitrary-option-write"
+applies_by = "unanchored"
+
+[[sinks]]
+function = "add_option"
+args = [0]
+kind = "identifier"
+severity = "critical"
+rule_id = "wp.authz.arbitrary-option-write"
+applies_by = "unanchored"
+
+[[sinks]]
+function = "update_site_option"
+args = [0]
+kind = "identifier"
+severity = "critical"
+rule_id = "wp.authz.arbitrary-option-write"
+applies_by = "unanchored"
+
+[[sinks]]
+function = "delete_option"
+args = [0]
+kind = "identifier"
+severity = "high"
+rule_id = "wp.authz.arbitrary-option-write"
+applies_by = "unanchored"
+
 # Stored-taint writes. Off unless --stored-taint-writes is passed.
 [[sinks]]
 function = "update_option"
@@ -617,6 +662,10 @@ returns = "own"
 # checks anything.
 # ---------------------------------------------------------------------------
 
+# `proves` says what the call establishes. "entitlement" (the default) means the
+# caller may do the thing. "intent" means only that the request was deliberate:
+# a nonce is anti-CSRF, and a subscriber can hold a valid nonce for a form they
+# should never be able to submit.
 [[authorization]]
 function = "current_user_can"
 
@@ -640,12 +689,15 @@ function = "auth_redirect"
 
 [[authorization]]
 function = "check_ajax_referer"
+proves = "intent"
 
 [[authorization]]
 function = "check_admin_referer"
+proves = "intent"
 
 [[authorization]]
 function = "wp_verify_nonce"
+proves = "intent"
 
 [[authorization]]
 function = "wp_check_password"
@@ -845,6 +897,46 @@ description = "A route declares a permission_callback, but nothing reachable fro
 remediation = "Have the callback call current_user_can() for the capability the operation requires, or return a WP_Error when the caller is not permitted."
 cwe = "CWE-862"
 message = "REST permission callback reaches no authorization check."
+
+[[rules]]
+id = "wp.authz.arbitrary-option-write"
+title = "Option name taken from the request"
+description = "The name of the option being written comes from user-controlled input, so the caller chooses which option to set rather than merely what to set it to. WordPress stores privilege configuration in options: default_role, users_can_register, siteurl and the active theme are all writable this way."
+remediation = "Never let the request choose the option. Keep an allowlist of the options this code owns and reject anything not on it; iterating $_POST and calling update_option( $name, $value ) hands the site over."
+cwe = "CWE-915"
+message = "The option being written is named by untrusted input, which is privilege escalation rather than stored data."
+
+[[rules]]
+id = "wp.csrf.nonce-without-action"
+title = "Nonce created or verified without an action"
+description = "Every nonce function defaults its action to -1. A -1 nonce verifies successfully, so the check appears to pass, but the token is shared with every other bare nonce on the site including core's. The nonce is no longer tied to this operation, which is what made it CSRF protection."
+remediation = "Pass a specific action string, and pass the same one at both ends: wp_nonce_field( 'delete-item_' . $id ) paired with check_admin_referer( 'delete-item_' . $id )."
+cwe = "CWE-352"
+message = "This nonce uses the shared default action, so it does not tie the request to this operation."
+
+[[rules]]
+id = "wp.csrf.bypassable-nonce-check"
+title = "Nonce check skipped when the nonce is absent"
+description = "Guarding a nonce verification with isset() on the same parameter lets the request decide whether to be checked. Sending no nonce makes isset() false, so the conjunction is false and nothing is verified."
+remediation = "Call check_admin_referer() or check_ajax_referer(), which die on a missing or invalid nonce, rather than testing wp_verify_nonce() behind an isset()."
+cwe = "CWE-352"
+message = "Omitting the nonce parameter skips this nonce check entirely."
+
+[[rules]]
+id = "wp.authz.guard-without-exit"
+title = "Redirect in a failed check does not stop execution"
+description = "wp_redirect() and wp_safe_redirect() send a Location header and return. They do not halt the script, so the statements after the guard run regardless of whether the check passed."
+remediation = "Follow every redirect with exit. In a function, `wp_safe_redirect( $url ); exit;` — a bare return only leaves the function and lets the caller carry on."
+cwe = "CWE-698"
+message = "This redirect does not stop execution, so the code the check guards runs anyway."
+
+[[rules]]
+id = "wp.authz.admin-post-missing-check"
+title = "admin-post.php handler with no authorization check"
+description = "admin-post.php dispatches ?action=foo to the admin_post_foo hook. Any logged-in user can reach it, and anyone at all can reach the nopriv variant. Being under wp-admin is routing, not authorization: nothing below the callback checks a capability or a nonce."
+remediation = "Call current_user_can() with the capability the action actually needs, and check_admin_referer() with the action name. Do both: the nonce proves intent, the capability proves entitlement."
+cwe = "CWE-862"
+message = "An admin-post.php handler runs with no capability or nonce check."
 
 [[rules]]
 id = "wp.authz.ajax-missing-check"

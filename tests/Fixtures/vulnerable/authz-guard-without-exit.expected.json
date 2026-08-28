@@ -1,0 +1,10 @@
+{
+    "expectation": "vulnerable",
+    "findings": [
+        {
+            "ruleId": "wp.authz.guard-without-exit",
+            "kind": "authz",
+            "line": 11
+        }
+    ]
+}
