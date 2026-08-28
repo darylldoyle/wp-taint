@@ -84,6 +84,22 @@ abstract class HookHandlerAuthorization implements StructuralRule
 
     abstract protected function severityFor(string $hook): Severity;
 
+    /**
+     * What to do about it, which is not the same answer for both variants.
+     *
+     * The rule's catalogue entry says "add current_user_can()", and on a
+     * `_nopriv_` hook that is advice which breaks the endpoint: the handler is
+     * registered there precisely so logged-out visitors can reach it, and no
+     * capability check can pass for them. Eighteen of the corpus's forty-nine
+     * AJAX findings are on nopriv hooks and every one of them was told to do
+     * the one thing that cannot work.
+     *
+     * A nonce still applies — `wp_create_nonce()` issues one to anonymous
+     * visitors, keyed to their session — and so does deciding, deliberately,
+     * that the endpoint is public and reads nothing it should not.
+     */
+    abstract protected function adviceFor(string $hook): string;
+
     public function id(): string
     {
         return $this->ruleId();
@@ -349,9 +365,10 @@ abstract class HookHandlerAuthorization implements StructuralRule
             null,
             $snippet,
             sprintf(
-                '%s Nothing reachable from the callback (%s) checks a capability or a nonce.%s',
+                '%s Nothing reachable from the callback (%s) checks a capability or a nonce. %s%s',
                 $reach,
                 $callbackDescription,
+                $this->adviceFor($hook),
                 $imprecise
                     ? ' The call graph below it could not be walked completely, so this is a best effort.'
                     : '',

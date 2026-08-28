@@ -63,4 +63,14 @@ final class MissingAdminPostCapabilityCheck extends HookHandlerAuthorization
     {
         return str_starts_with($hook, 'admin_post_nopriv_') ? Severity::High : Severity::Medium;
     }
+
+    protected function adviceFor(string $hook): string
+    {
+        return str_starts_with($hook, 'admin_post_nopriv_')
+            ? 'A capability check cannot help here — the hook exists so that logged-out visitors can reach '
+                . 'the callback. Verify a nonce with check_admin_referer(), and if the endpoint is meant to be '
+                . 'public, confirm it reads nothing an anonymous caller should not choose.'
+            : 'Call current_user_can() with the capability the action needs, and check_admin_referer() with the '
+                . 'action name.';
+    }
 }
