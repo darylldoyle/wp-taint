@@ -2218,17 +2218,36 @@ final class FunctionAnalysis
         if ($ruleId !== null && $this->collecting) {
             $kind = $sanitizer->clears->kinds()[0] ?? TaintKind::Sql;
 
+            // Severity follows the evidence, the way the query-shape rule
+            // already does it. A proven flow from a source is exploitable; a
+            // format string the engine merely could not account for is a "look
+            // at this". 187 of the corpus's 205 findings on this rule were the
+            // second kind and every one was reported critical, which is 187 of
+            // the 352 criticals a first run put in front of someone.
+            $proven = $this->state->taintOf($formatArgument)->has(TaintKind::Sql);
+
             $this->emit(
                 $ruleId,
                 $kind,
-                $this->registry->severityForRule($ruleId, Severity::Critical),
+                $this->registry->severityForRule(
+                    $ruleId,
+                    $proven ? Severity::Critical : Severity::High,
+                ),
                 $op,
                 $matcher->identity(),
                 $formatArgument,
-                sprintf(
-                    '%s cannot protect a format string that is itself built from a variable.',
-                    $matcher->describe(),
-                ),
+                $proven
+                    ? sprintf(
+                        '%s cannot protect a format string that is itself built from a variable, and untrusted '
+                            . 'input reaches this one.',
+                        $matcher->describe(),
+                    )
+                    : sprintf(
+                        '%s cannot protect a format string that is itself built from a variable. Taint analysis '
+                            . 'could not account for where %s comes from, but the shape is unsafe regardless.',
+                        $matcher->describe(),
+                        OperandHelper::describe($formatArgument),
+                    ),
             );
         }
 
