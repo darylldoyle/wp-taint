@@ -42,8 +42,6 @@ final class ScanConfiguration
         public readonly ?string $dumpTaintGraph,
         public readonly bool $structuralRules,
         public readonly int $jobs,
-        public readonly bool $useCache,
-        public readonly ?string $cacheDirectory,
         public readonly array $includePaths = [],
     ) {
     }
@@ -75,8 +73,6 @@ final class ScanConfiguration
         ?string $dumpTaintGraph,
         bool $structuralRules,
         int $jobs,
-        bool $useCache,
-        ?string $cacheDirectory,
     ): self {
         if ($paths === []) {
             throw new InvalidArgumentException('At least one path to scan is required.');
@@ -124,8 +120,6 @@ final class ScanConfiguration
             $dumpTaintGraph,
             $structuralRules,
             $jobs,
-            $useCache,
-            $cacheDirectory,
             array_values(array_map(
                 static fn (string $path): string => rtrim($path, '/'),
                 array_values($includePaths),

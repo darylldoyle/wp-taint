@@ -61,9 +61,17 @@ final class RegistryLoader
 
     private const RULE_KEYS = ['id', 'title', 'description', 'remediation', 'cwe', 'message'];
 
+    /**
+     * `scan` is not a catalogue section and is ignored here.
+     *
+     * One `wp-taint.toml` serves both purposes: it extends the catalogue, and
+     * it carries the project's `[scan]` paths for {@see ProjectScanConfig}.
+     * Splitting them into two files would be tidier and would mean every
+     * project keeps two files, so this loader simply knows the key exists.
+     */
     private const TABLE_KEYS = [
         'meta', 'sources', 'sanitizers', 'propagators', 'sinks', 'safe', 'dispatchers', 'byref',
-        'templates', 'authorization', 'rules', 'options',
+        'templates', 'authorization', 'rules', 'options', 'scan',
     ];
 
     private const OPTION_KEYS = ['safe_database_identifiers'];

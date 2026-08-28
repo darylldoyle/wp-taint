@@ -10,6 +10,7 @@ use Enshrined\WpTaint\Baseline\InlineSuppressions;
 use Enshrined\WpTaint\Cli\Application;
 use Enshrined\WpTaint\Cli\ExitCode;
 use Enshrined\WpTaint\Cli\InputReader;
+use Enshrined\WpTaint\Cli\ProjectScanConfig;
 use Enshrined\WpTaint\Cli\ScanConfiguration;
 use Enshrined\WpTaint\Report\Ansi;
 use Enshrined\WpTaint\Report\ConsoleReporter;
@@ -21,6 +22,7 @@ use Enshrined\WpTaint\Scan\FileFinder;
 use Enshrined\WpTaint\Scan\ScanResult;
 use Enshrined\WpTaint\Scan\ScanRunner;
 use Enshrined\WpTaint\Support\PathHelper;
+use InvalidArgumentException;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
@@ -36,7 +38,11 @@ final class ScanCommand extends Command
     protected function configure(): void
     {
         $this
-            ->addArgument('paths', InputArgument::IS_ARRAY | InputArgument::REQUIRED, 'Files or directories to scan')
+            ->addArgument(
+                'paths',
+                InputArgument::IS_ARRAY,
+                'Files or directories to scan (default: [scan] paths in wp-taint.toml)',
+            )
             ->addOption(
                 'registry',
                 null,
@@ -126,8 +132,6 @@ final class ScanCommand extends Command
             )
             ->addOption('trace-full', null, InputOption::VALUE_NONE, 'Never collapse the middle of a long trace')
             ->addOption('jobs', 'j', InputOption::VALUE_REQUIRED, 'Number of worker processes', '1')
-            ->addOption('no-cache', null, InputOption::VALUE_NONE, 'Ignore and do not write the analysis cache')
-            ->addOption('cache-dir', null, InputOption::VALUE_REQUIRED, 'Where to keep the analysis cache')
             ->setHelp(<<<'HELP'
               <info>wp-taint scan ./src</info>
 
@@ -196,31 +200,57 @@ final class ScanCommand extends Command
         return $this->exitCode($configuration, $result);
     }
 
+    private static function workingDirectory(): string
+    {
+        $cwd = getcwd();
+
+        return $cwd === false ? '.' : $cwd;
+    }
+
+    /**
+     * Merge the project's `[scan]` section with the command line.
+     *
+     * The command line always wins, and paths given as arguments *replace* the
+     * configured ones rather than adding to them: naming a directory means to
+     * scan that directory and nothing else.
+     */
     private function buildConfiguration(InputReader $reader): ScanConfiguration
     {
+        $arguments = $reader->stringArgumentList('paths');
+        $configPath = $reader->nullableString('config')
+            ?? ProjectScanConfig::discover($arguments[0] ?? self::workingDirectory());
+        $project = $configPath === null ? ProjectScanConfig::empty() : ProjectScanConfig::load($configPath);
+        $paths = $arguments !== [] ? $arguments : $project->paths;
+
+        if ($paths === []) {
+            throw new InvalidArgumentException(
+                $configPath === null
+                    ? 'No paths given. Pass one or more directories, or add a [scan] section to wp-taint.toml.'
+                    : sprintf('No paths given, and %s has no [scan] paths.', $configPath),
+            );
+        }
+
         return ScanConfiguration::build(
-            $reader->stringArgumentList('paths'),
+            $paths,
             $reader->string('registry', 'wordpress'),
-            $reader->nullableString('config'),
-            $reader->stringList('exclude'),
-            $reader->string('format', 'console'),
+            $configPath,
+            [...$reader->stringList('exclude'), ...$project->excludes],
+            $reader->string('format', $project->format ?? 'console'),
             $reader->nullableString('output'),
-            $reader->nullableString('baseline'),
+            $reader->nullableString('baseline') ?? $project->baseline,
             $reader->optionalValue('generate-baseline', 'wp-taint-baseline.json'),
-            $reader->string('min-severity', 'low'),
-            $reader->string('fail-on', 'high'),
+            $reader->string('min-severity', $project->minimumSeverity ?? 'low'),
+            $reader->string('fail-on', $project->failOn ?? 'high'),
             ! $reader->bool('no-interprocedural'),
             ! $reader->bool('no-stored-taint'),
-            $reader->bool('stored-taint-writes'),
+            $reader->bool('stored-taint-writes') || ($project->storedTaintWrites ?? false),
             $reader->dynamicCallPolicy(),
             ! $reader->bool('no-follow-includes'),
-            $reader->stringList('include-path'),
+            [...$reader->stringList('include-path'), ...$project->reference],
             $reader->bool('parse-report'),
             $reader->nullableString('dump-taint-graph'),
             ! $reader->bool('no-structural-rules'),
-            $reader->int('jobs', 1),
-            ! $reader->bool('no-cache'),
-            $reader->nullableString('cache-dir'),
+            $reader->int('jobs', $project->jobs ?? 1),
         );
     }
 

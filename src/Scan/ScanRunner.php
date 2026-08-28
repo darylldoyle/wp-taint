@@ -7,16 +7,33 @@ namespace Enshrined\WpTaint\Scan;
 use Enshrined\WpTaint\Cli\ScanConfiguration;
 
 /**
- * Wraps {@see Scanner} with the result cache.
+ * Builds a {@see Scanner} from the resolved configuration and runs it.
  *
- * The cache is keyed on everything that can change the answer: the tool
- * version, the resolved catalogue, the analysis options, and the content of
- * every file in the scan. Anything else would risk serving a stale clean
- * result, which in a security scanner is the same as lying.
+ * ## There was a result cache here
  *
- * Because the analysis is whole-program — interprocedural taint crosses files —
- * the only sound cache unit is the whole scan. Caching a single file's findings
- * would be wrong the moment a function it calls changed in another file.
+ * It stored whole scan results keyed on the tool version, the resolved
+ * catalogue and the content of every file. Whole-scan rather than per-file,
+ * because interprocedural taint crosses files and caching one file's findings
+ * would be wrong the moment a function it calls changed elsewhere.
+ *
+ * It was removed, for one reason and one aggravation.
+ *
+ * **The key covered catalogue names, not catalogue contents.** It hashed
+ * `array_keys($registry->sanitizers())`, so editing a custom registry — turning
+ * `clears = ["sql"]` into `clears = ["html"]`, changing a sink's severity —
+ * left the key identical and served the previous answer. Anyone tuning their
+ * own catalogue would have concluded their edits did nothing. In a security
+ * scanner a stale clean result is the same as lying, and a cache that can do
+ * that is worth less than the time it saves.
+ *
+ * The aggravation: during development the key includes the tool version, which
+ * does not move between commits, so a fixed engine kept returning the broken
+ * answer until someone thought to pass `--no-cache`. That cost real time twice
+ * in one afternoon.
+ *
+ * What it bought was a re-scan of unchanged code — 15.6s to 0.18s on Duplicator.
+ * Worth having, and worth having correctly: the way back is to hash the
+ * resolved catalogue itself rather than its keys.
  */
 final class ScanRunner
 {
@@ -29,7 +46,7 @@ final class ScanRunner
      */
     public function run(array $files): ScanResult
     {
-        $scanner = new Scanner(
+        return (new Scanner(
             $this->configuration->registry,
             $this->configuration->analysis,
             $this->configuration->root,
@@ -37,61 +54,6 @@ final class ScanRunner
             $this->configuration->dumpTaintGraph,
             $this->configuration->jobs,
             $this->configuration->includePaths,
-        );
-
-        // A graph dump is a side effect the cache cannot replay, so it always
-        // forces a real run.
-        if (! $this->configuration->useCache || $this->configuration->dumpTaintGraph !== null) {
-            return $scanner->scan($files);
-        }
-
-        $cache = new ResultCache($this->cacheDirectory());
-        $key = $cache->key($files, $this->fingerprint());
-
-        $cached = $cache->get($key);
-
-        if ($cached !== null) {
-            return $cached;
-        }
-
-        $result = $scanner->scan($files);
-        $cache->put($key, $result);
-
-        return $result;
-    }
-
-    private function cacheDirectory(): string
-    {
-        if ($this->configuration->cacheDirectory !== null) {
-            return $this->configuration->cacheDirectory;
-        }
-
-        return sys_get_temp_dir() . '/wp-taint-cache';
-    }
-
-    /**
-     * Everything except the file contents that can change the result.
-     */
-    private function fingerprint(): string
-    {
-        $analysis = $this->configuration->analysis;
-        $registry = $this->configuration->registry;
-
-        return hash('sha256', serialize([
-            'version' => \Enshrined\WpTaint\Cli\Application::VERSION,
-            'registries' => $registry->names,
-            'sources' => array_keys($registry->sources()),
-            'sanitizers' => array_keys($registry->sanitizers()),
-            'propagators' => array_keys($registry->propagators()),
-            'sinks' => array_keys($registry->sinks()),
-            'safe' => array_keys($registry->safeCalls()),
-            'identifiers' => $registry->safeDatabaseIdentifiers(),
-            'interprocedural' => $analysis->interprocedural,
-            'dynamicCalls' => $analysis->dynamicCalls->value,
-            'followIncludes' => $analysis->followIncludes,
-            'includePaths' => $this->configuration->includePaths,
-            'structuralRules' => $this->configuration->structuralRules,
-            'root' => $this->configuration->root,
-        ]));
+        ))->scan($files);
     }
 }

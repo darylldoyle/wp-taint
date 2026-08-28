@@ -271,6 +271,49 @@ Memory is the real constraint. `bin/wp-taint` raises the limit to 2 GB, which
 covers everything in the WordPress.org top fifty except WooCommerce; for a tree
 that size set `WP_TAINT_MEMORY_LIMIT=4G`.
 
+## Scored against real CVEs, both sides of the fix
+
+47 published CVEs across 24 WordPress.org plugins, each pinned to the last
+vulnerable release *and* the release that fixed it. Scanning both is what makes
+it sharp: a finding that disappears when the bug is fixed is attributable in a
+way that a finding in a known-vulnerable plugin is not.
+
+```bash
+composer cve:fetch
+composer cve:check
+```
+
+**8 attributed · 17 reported but not attributable · 22 silent.**
+
+Three outcomes rather than two, because plenty of real fixes do not remove the
+flow. CVE-2022-2593 in Better Search Replace is SQL injection through
+unvalidated table names; we report `'DESCRIBE ' . $table` in both releases, and
+the fix is `array_map( 'trim', ... )`. Scoring that a miss understates the
+engine as badly as scoring it a hit would flatter it — so it is counted apart
+and never added to the headline.
+
+Where it fails, by class:
+
+| | attributed | reported | silent |
+| --- | --- | --- | --- |
+| Code injection (CWE-94) | 0 | 0 | **5** |
+| Deserialization (CWE-502) | 0 | 0 | **3** |
+| Open redirect (CWE-601) | 0 | 0 | **3** |
+| XSS (CWE-79) | 3 | 6 | 3 |
+| Authorization (CWE-862/863) | 2 | 5 | 5 |
+| Path traversal (CWE-22) | 1 | 4 | 0 |
+| SQL injection (CWE-89) | 1 | 2 | 2 |
+| SSRF (CWE-918) | 1 | 0 | 1 |
+
+The CWE-94 cases are plugins whose purpose is executing admin-supplied code, so
+those CVEs are privilege-boundary bugs wearing a code-injection label. The
+deserialization and open-redirect zeroes have no such excuse: those rules exist
+and found nothing in six plugins known to be vulnerable in exactly those ways.
+
+**"Attributed" is evidence, not proof.** A finding can vanish because the fix
+refactored the line rather than because it was the bug. This is the sharpest
+measurement here and it is still not a confirmed hit.
+
 ## Scored against an answer key we did not write
 
 The fixture suite is ours, and 37 of its cases were written after the behaviour

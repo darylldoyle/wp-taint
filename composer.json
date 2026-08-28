@@ -81,7 +81,10 @@
         "corpus:baseline": "php tools/corpus-baseline.php",
         "corpus:check": "php tools/corpus-baseline.php --check",
         "vulnerable:fetch": "php tools/fetch-vulnerable-plugin.php",
-        "vulnerable:check": "php tools/vulnerable-plugin-check.php"
+        "vulnerable:check": "php tools/vulnerable-plugin-check.php",
+        "cve:fetch": "php tools/fetch-cve-corpus.php",
+        "cve:baseline": "php tools/cve-check.php",
+        "cve:check": "php tools/cve-check.php --check"
     },
     "scripts-descriptions": {
         "test": "Run the full Pest suite",
@@ -92,6 +95,8 @@
         "corpus:fetch": "Download the WordPress.org plugin corpus into tests/Fixtures/corpus",
         "vulnerable:fetch": "Download the WordPress project's intentionally vulnerable plugin",
         "vulnerable:check": "Score the engine against that plugin's published answer key",
+        "cve:fetch": "Download the plugin versions either side of each pinned CVE",
+        "cve:check": "Score the engine against published CVEs, both sides of the fix",
         "check": "Lint, analyse and test",
         "fixtures:build": "Regenerate fixture expectations from the inline wp-taint-expect annotations",
         "fixtures:check": "Fail if the fixture expectations are out of date"

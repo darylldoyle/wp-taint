@@ -12,3 +12,4 @@
 *.log
 wp-taint-baseline.json
 tests/Fixtures/vulnerable-plugin/
+tests/Fixtures/cve/

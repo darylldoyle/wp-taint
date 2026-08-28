@@ -18,10 +18,7 @@ use Symfony\Component\Process\Process;
  */
 function runCli(array $arguments): array
 {
-    // --no-cache only exists on `scan`; every command takes --no-ansi.
-    $flags = ($arguments[0] ?? '') === 'scan' ? ['--no-ansi', '--no-cache'] : ['--no-ansi'];
-
-    $process = new Process(['php', 'bin/wp-taint', ...$arguments, ...$flags], projectRoot());
+    $process = new Process(['php', 'bin/wp-taint', ...$arguments, '--no-ansi'], projectRoot());
     $process->run();
 
     return [

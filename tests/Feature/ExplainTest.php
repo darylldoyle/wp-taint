@@ -146,7 +146,7 @@ it('lets the reader choose which way to be wrong about a dynamic call', function
         $process = new Process(
             [
                 'php', 'bin/wp-taint', 'scan', $directory,
-                '--format=json', '--fail-on=never', '--no-ansi', '--no-cache',
+                '--format=json', '--fail-on=never', '--no-ansi',
                 ...$extra,
             ],
             projectRoot(),
