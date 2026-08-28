@@ -1995,7 +1995,27 @@ final class FunctionAnalysis
         // $_GET['id'] ) )` look like escaping voided by a filter, because the
         // id carried the marker into a call whose result has nothing to do
         // with it.
-        if ($sanitizer->clears->has(TaintKind::Html) && ! $sanitizer->clearsEverything) {
+        //
+        // Escaping a literal marks nothing. `esc_html__( 'Enter a name for this
+        // tax rate.', 'woocommerce' )` is a fixed English sentence before the
+        // call and the same sentence after it, so a filter downstream has no
+        // escaping to void. WooCommerce's admin templates escape literals and
+        // hand them to `wc_help_tip()`, and were the largest single reporter of
+        // this rule.
+        //
+        // The attack the rule describes needs a value an attacker can reach.
+        // Without one the claim collapses into "an unescaped apply_filters()
+        // was echoed", which is a different rule with a different answer.
+        //
+        // The test is the argument's shape, not its taint: a function parameter
+        // carries no taint either, and `function render( $value ) { echo
+        // apply_filters( 'x', esc_html( $value ) ); }` is the exact case this
+        // rule exists for.
+        if (
+            $sanitizer->clears->has(TaintKind::Html)
+            && ! $sanitizer->clearsEverything
+            && ! $this->escapesOnlyLiterals($call, $sanitizer)
+        ) {
             $cleared = $cleared
                 ->without(TaintSet::of(TaintKind::EscapeVoided))
                 ->union(TaintSet::of(TaintKind::Escaped));
@@ -2021,6 +2041,31 @@ final class FunctionAnalysis
                 imprecise: $sanitizer->imprecise,
             ),
         );
+    }
+
+    /**
+     * Is every value this escaper was handed a compile-time constant?
+     *
+     * A literal has no attacker anywhere in its history, so escaping it proves
+     * nothing and a later filter voids nothing. Anything else — a parameter, a
+     * property, another call's return — could carry a payload, and does not
+     * have to be visibly tainted for the rule to apply.
+     */
+    private function escapesOnlyLiterals(CallTarget $call, Sanitizer $sanitizer): bool
+    {
+        $indices = $sanitizer->arguments->resolve($call->argumentCount());
+
+        if ($indices === []) {
+            return false;
+        }
+
+        foreach ($indices as $index) {
+            if (! $call->argument($index) instanceof Operand\Literal) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
