@@ -53,14 +53,44 @@ function testRegistry(string $name = 'wordpress', bool $storedTaint = true, bool
 function scanFixture(string $relative, ?AnalysisOptions $options = null, ?Registry $registry = null): ScanResult
 {
     $path = fixturePath($relative);
+    $requested = fixtureOptions($path);
 
     $scanner = new Scanner(
-        $registry ?? testRegistry(),
-        $options ?? new AnalysisOptions(),
+        $registry ?? testRegistry('wordpress', true, in_array('stored-taint-writes', $requested, true)),
+        $options ?? new AnalysisOptions(
+            unknownProvenance: in_array('unknown-provenance', $requested, true),
+        ),
         dirname($path),
     );
 
     return $scanner->scan([$path]);
+}
+
+/**
+ * Flags a fixture asks for, declared in the file itself.
+ *
+ *     // wp-taint-options stored-taint-writes
+ *
+ * Rules behind a flag had no way to be tested: the harness ran with defaults,
+ * so a fixture for `wp.stored.untrusted-write` reported nothing and its
+ * annotation could never be satisfied. Declaring the flag next to the code it
+ * applies to keeps the fixture self-describing, which is the same reason the
+ * expectations come from annotations rather than from engine output.
+ *
+ * @return list<string>
+ */
+function fixtureOptions(string $path): array
+{
+    $contents = @file_get_contents($path);
+
+    if (
+        $contents === false
+        || preg_match('/\/\/\s*wp-taint-options\s+([a-z,\- ]+)/', $contents, $matches) !== 1
+    ) {
+        return [];
+    }
+
+    return array_values(array_filter(array_map('trim', explode(',', $matches[1]))));
 }
 
 /**

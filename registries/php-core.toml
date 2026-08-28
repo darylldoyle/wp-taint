@@ -16,23 +16,23 @@ safe_database_identifiers = []
 
 [[sources]]
 superglobal = "_GET"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "csv"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "csv", "storage"]
 
 [[sources]]
 superglobal = "_POST"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "csv"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "csv", "storage"]
 
 [[sources]]
 superglobal = "_REQUEST"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "csv"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "csv", "storage"]
 
 [[sources]]
 superglobal = "_COOKIE"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "csv"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "csv", "storage"]
 
 [[sources]]
 superglobal = "_FILES"
-kinds = ["html", "html_attr", "sql", "path", "header"]
+kinds = ["html", "html_attr", "sql", "path", "header", "storage"]
 note = "Filenames and MIME types come straight from the client."
 
 # $_SERVER is only partially attacker-controlled. Tainting the whole
@@ -40,7 +40,7 @@ note = "Filenames and MIME types come straight from the client."
 # below are treated as untrusted.
 [[sources]]
 superglobal = "_SERVER"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "storage"]
 keys = ["REQUEST_URI", "QUERY_STRING", "PHP_SELF", "PATH_INFO", "argv"]
 key_prefixes = ["HTTP_"]
 note = "HTTP_* keys are request headers verbatim. Other keys are set by the web server."
@@ -49,18 +49,18 @@ note = "HTTP_* keys are request headers verbatim. Other keys are set by the web 
 function = "file_get_contents"
 arg = 0
 arg_literal_contains = "php://input"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "storage"]
 note = "The raw request body. Only a source for the php:// wrapper; every other argument makes this a path sink."
 
 [[sources]]
 function = "fopen"
 arg = 0
 arg_literal_contains = "php://input"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "storage"]
 
 [[sources]]
 function = "getenv"
-kinds = ["shell", "path"]
+kinds = ["shell", "path", "storage"]
 note = "Environment-derived, not request-derived, but still outside the code's control."
 
 # =============================================================================

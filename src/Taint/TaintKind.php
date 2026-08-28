@@ -152,6 +152,31 @@ enum TaintKind: string
     case Unknown = 'unknown';
 
     /**
+     * Untrusted input on its way into storage.
+     *
+     * WordPress asks for two things and they are not the same: sanitise on
+     * input, escape on output. The write side was borrowing `html` for its
+     * question, which made the two indistinguishable and got the answer wrong
+     * in both directions.
+     *
+     * ```php
+     * update_option( 'endpoint', esc_url_raw( $_POST['endpoint'] ) );
+     * ```
+     *
+     * `esc_url_raw()` is exactly the right sanitizer for storing a URL and
+     * exactly the wrong one for printing it, so it clears the storage
+     * obligation and not the output one. Sharing a kind meant reporting that
+     * line — a third-party suite labels it safe, and it was the last false
+     * positive standing there.
+     *
+     * Cleared by any sanitizer, and by no propagator: `trim()`,
+     * `stripslashes()` and `wp_unslash()` look like cleaning and preserve every
+     * payload, which is the single most common misreading in WordPress code
+     * review.
+     */
+    case Storage = 'storage';
+
+    /**
      * Not a taint kind at all: nothing seeds it and nothing propagates it.
      *
      * Structural rules report broken authorization, which has no dataflow to
@@ -189,6 +214,7 @@ enum TaintKind: string
             self::EscapeVoided => 1 << 16,
             self::Csv => 1 << 17,
             self::Unknown => 1 << 18,
+            self::Storage => 1 << 19,
             self::Authz => 1 << 11,
         };
     }
@@ -260,6 +286,7 @@ enum TaintKind: string
             self::EscapeVoided => 'escaping voided by a filter',
             self::Csv => 'spreadsheet formula',
             self::Unknown => 'unknown provenance',
+            self::Storage => 'unsanitised for storage',
             self::Authz => 'authorization',
         };
     }

@@ -31,58 +31,58 @@ safe_database_identifiers = [
 [[sources]]
 class = "WP_REST_Request"
 method = "get_param"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "identifier"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "identifier", "storage"]
 
 [[sources]]
 class = "WP_REST_Request"
 method = "get_params"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "identifier"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "identifier", "storage"]
 
 [[sources]]
 class = "WP_REST_Request"
 method = "get_json_params"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "identifier"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "identifier", "storage"]
 
 [[sources]]
 class = "WP_REST_Request"
 method = "get_query_params"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "identifier"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "identifier", "storage"]
 
 [[sources]]
 class = "WP_REST_Request"
 method = "get_body_params"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "identifier"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "identifier", "storage"]
 
 [[sources]]
 class = "WP_REST_Request"
 method = "get_body"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "identifier"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "identifier", "storage"]
 
 [[sources]]
 class = "WP_REST_Request"
 method = "get_file_params"
-kinds = ["html", "html_attr", "sql", "path", "header"]
+kinds = ["html", "html_attr", "sql", "path", "header", "storage"]
 
 [[sources]]
 class = "WP_REST_Request"
 method = "get_header"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "storage"]
 
 [[sources]]
 function = "get_query_var"
-kinds = ["html", "html_attr", "sql", "url", "path"]
+kinds = ["html", "html_attr", "sql", "url", "path", "storage"]
 
 [[sources]]
 function = "wp_get_referer"
-kinds = ["html", "html_attr", "url", "header"]
+kinds = ["html", "html_attr", "url", "header", "storage"]
 
 [[sources]]
 function = "wp_get_raw_referer"
-kinds = ["html", "html_attr", "url", "header"]
+kinds = ["html", "html_attr", "url", "header", "storage"]
 
 [[sources]]
 function = "wp_get_original_referer"
-kinds = ["html", "html_attr", "url", "header"]
+kinds = ["html", "html_attr", "url", "header", "storage"]
 
 # =============================================================================
 # SOURCES — second order (stored)
@@ -94,77 +94,77 @@ kinds = ["html", "html_attr", "url", "header"]
 
 [[sources]]
 function = "get_post_meta"
-kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv", "storage"]
 stored = true
 note = "Second-order taint. Stored XSS lives here, and so does object injection: unserialize() on stored data is the classic WordPress escalation from a subscriber-level meta write to RCE through a POP chain, and three of the CVEs in tests/Fixtures/cve-lock.json are exactly that. Deliberately NOT path or url: an attacker who can write arbitrary options or post meta already has the access those sinks would give them, and treating stored data as filesystem or SSRF input drowned the corpus in noise. That reasoning does not extend to unserialize, because object injection grants more than the write did."
 
 [[sources]]
 function = "get_user_meta"
-kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv", "storage"]
 stored = true
 
 [[sources]]
 function = "get_term_meta"
-kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv", "storage"]
 stored = true
 
 [[sources]]
 function = "get_comment_meta"
-kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv", "storage"]
 stored = true
 
 [[sources]]
 function = "get_metadata"
-kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv", "storage"]
 stored = true
 
 [[sources]]
 function = "get_option"
-kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv", "storage"]
 stored = true
 
 [[sources]]
 function = "get_site_option"
-kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv", "storage"]
 stored = true
 
 [[sources]]
 function = "get_transient"
-kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv", "storage"]
 stored = true
 
 [[sources]]
 function = "get_site_transient"
-kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv", "storage"]
 stored = true
 
 [[sources]]
 function = "get_theme_mod"
-kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv", "storage"]
 stored = true
 
 [[sources]]
 class = "wpdb"
 method = "get_results"
-kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv", "storage"]
 stored = true
 
 [[sources]]
 class = "wpdb"
 method = "get_var"
-kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv", "storage"]
 stored = true
 
 [[sources]]
 class = "wpdb"
 method = "get_row"
-kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv", "storage"]
 stored = true
 
 [[sources]]
 class = "wpdb"
 method = "get_col"
-kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv", "storage"]
 stored = true
 
 # =============================================================================
@@ -559,7 +559,7 @@ applies_by = "unanchored"
 [[sinks]]
 function = "update_option"
 args = [1]
-kind = "html"
+kind = "storage"
 severity = "low"
 rule_id = "wp.stored.untrusted-write"
 stored_write = true
@@ -567,7 +567,7 @@ stored_write = true
 [[sinks]]
 function = "add_option"
 args = [1]
-kind = "html"
+kind = "storage"
 severity = "low"
 rule_id = "wp.stored.untrusted-write"
 stored_write = true
@@ -575,7 +575,7 @@ stored_write = true
 [[sinks]]
 function = "update_post_meta"
 args = [2]
-kind = "html"
+kind = "storage"
 severity = "low"
 rule_id = "wp.stored.untrusted-write"
 stored_write = true
@@ -583,7 +583,7 @@ stored_write = true
 [[sinks]]
 function = "add_post_meta"
 args = [2]
-kind = "html"
+kind = "storage"
 severity = "low"
 rule_id = "wp.stored.untrusted-write"
 stored_write = true
@@ -591,7 +591,7 @@ stored_write = true
 [[sinks]]
 function = "update_user_meta"
 args = [2]
-kind = "html"
+kind = "storage"
 severity = "low"
 rule_id = "wp.stored.untrusted-write"
 stored_write = true
@@ -817,7 +817,7 @@ note = "Already resolved by locate_template(); the path is the argument."
 # current URL — a real and common bug — would go missing.
 [[sources]]
 function = "add_query_arg"
-kinds = ["html", "html_attr", "url"]
+kinds = ["html", "html_attr", "url", "storage"]
 applies_by = "add_query_arg_base"
 
 [[propagators]]

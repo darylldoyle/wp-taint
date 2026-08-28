@@ -1964,9 +1964,11 @@ final class FunctionAnalysis
             ? $sanitizer->apply($incoming)
             : $incoming->without($this->strategyClears($sanitizer, $call));
 
-        // Applying any sanitizer settles where the value came from, whatever
-        // else it did or did not clear: somebody looked at it.
-        $cleared = $cleared->without(TaintSet::of(TaintKind::Unknown));
+        // Applying any sanitizer settles two questions whatever else it did or
+        // did not clear: where the value came from, and whether anyone cleaned
+        // it before storing it. Propagators settle neither, which is what keeps
+        // `trim()` and `wp_unslash()` from passing for sanitisers.
+        $cleared = $cleared->without(TaintSet::of(TaintKind::Unknown, TaintKind::Storage));
 
         // A quote-escaper does not remove the danger, it moves it: the value is
         // safe between quotes and no safer than before without them. Trading
