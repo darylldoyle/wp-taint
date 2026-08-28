@@ -1119,3 +1119,75 @@ rather than per block, which is why it converges cheaply and why a branch
 condition has nowhere to be recorded. Fixing it means per-block state, and this
 project has had five separate convergence failures in exactly that machinery.
 Worth doing, and not worth doing carelessly.
+
+## Phase 12 — path sensitivity, which was never the blocker it looked like
+
+Three false positive classes had the same diagnosis: a guard the engine could
+not see. WooCommerce validating an option name with `in_array`, Duplicator's
+vendored copy of core's `wp_specialchars()`, and two cases in a third-party
+suite labelled safe.
+
+The diagnosis before this phase was that fixing it needed per-block state, and
+that the engine's single `TaintState` per function — the thing that makes its
+fixed point cheap — stood in the way. Five convergence failures have come out of
+that machinery, so it was left alone.
+
+**That was wrong, and dumping one CFG showed it:**
+
+```
+Block#2 (guard taken)              Block#3 (fall-through)
+  Expr_Assertion<not(type(int))>     Expr_Assertion<not(not(type(int))>
+    expr:   Var#3<$id>                 expr:   Var#3<$id>
+    result: Var#7<$id>                 result: Var#8<$id>
+```
+
+php-cfg gives each branch its own operand. The paths were always separable; the
+engine was passing taint straight through the assertion that said so. A comment
+in the transfer explained why — `isset()` and `empty()` produce an assertion
+whose result is an operand *already written* by the op that produced the value,
+and narrowing there gives one operand two writers. True, and true only of that
+shape. Narrowing when the operands differ has one writer and cannot oscillate.
+
+### The checks php-cfg does not assert on
+
+`ctype_digit`, `in_array`, `preg_match` produce no assertion, so those needed
+their own answer. The first attempt walked `Block::parents` and stopped at any
+join, assuming a guard clause leaves a linear chain. It never fired once: the
+fall-through block of a guard has two predecessors in php-cfg's output.
+
+Dominance is the question that was actually being asked — is the validating edge
+on *every* path to this sink — and it is a standard fixed point over the block
+graph. Computed once per function, consulted at reporting time, and able only to
+suppress a finding, so no part of propagation changes.
+
+### The polarity that was backwards
+
+`ctype_digit()` proves safety when it succeeds. `preg_match( '/[&<>"\']/' )`
+proves it when it *fails*. The first implementation asked "did the predicate
+hold" and treated that as "is the value safe", which is right for one and
+inverted for the other.
+
+That second form is not an edge case. It is core's own fast path:
+
+```php
+if ( ! preg_match( '/[&<>"\']/', $string ) ) {
+    return $string;
+}
+```
+
+Every plugin that vendors a copy of `wp_specialchars()` inherited a false
+positive from us. It also needed the *return* narrowed rather than a sink
+suppressed, because the value leaves that way.
+
+### What it bought
+
+    third-party suite   precision 0.93 -> 0.98, false positives 3 -> 1
+    Duplicator          103 -> 91 findings
+    corpus              1,622 -> 1,610
+
+### What it did not buy
+
+WooCommerce's controller still reports. The guard is in one loop and the sink in
+another, over an array populated under the guard, and the guard genuinely does
+not dominate the sink. Proving that safe is container reasoning — every write
+into this array happened under a guard — and is a different piece of work.

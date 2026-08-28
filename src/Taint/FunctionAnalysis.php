@@ -66,6 +66,11 @@ final class FunctionAnalysis
 
     private readonly LiteralAnchor $anchors;
 
+    private readonly GuardAnalyzer $guards;
+
+    /** The block being walked, so a sink can ask what guarded the path to it. */
+    private ?Block $currentBlock = null;
+
     /** The call currently being reported on, for sink strategies that need it. */
     private ?CallTarget $sinkCall = null;
 
@@ -161,9 +166,11 @@ final class FunctionAnalysis
             new OriginClassifier($registry, $resolver, $properties, $receivers),
         );
         $this->anchors = new LiteralAnchor($summaries, $resolver, $properties, $receivers, $context, $this->types);
+        $this->guards = new GuardAnalyzer();
         $this->returnTaint = TaintSet::empty();
         $this->returnAnchored = null;
         $this->blocks = BlockOrder::of($this->context->func->cfg);
+        $this->guards->forFunction($this->blocks);
         $this->traces = new TraceBuilder(
             $this->state,
             $this->context->file->sourceMap,
@@ -658,6 +665,8 @@ final class FunctionAnalysis
         $this->templateOffset = 0;
 
         foreach ($this->blocks as $block) {
+            $this->currentBlock = $block;
+
             foreach ($block->phi as $phi) {
                 $changed = $this->applyPhi($phi) || $changed;
             }
@@ -939,16 +948,7 @@ final class FunctionAnalysis
                 $op->var,
                 'Keys of an attacker-controlled collection are attacker-controlled too.',
             ),
-            // `isset($x)` and `!empty($x)` narrow a value's *type*; they do not
-            // change its taint. php-cfg gives the assertion an operand that is
-            // already written by the op producing the value, so zeroing it here
-            // both launders taint and makes the fixed point oscillate forever
-            // between the two writers.
-            $op instanceof Op\Expr\Assertion => $this->transferPassThrough(
-                $op,
-                $op->expr,
-                'An isset() or empty() guard narrows the type but does not escape the value.',
-            ),
+            $op instanceof Op\Expr\Assertion => $this->transferAssertion($op),
             $op instanceof Op\Expr\Print_ => $this->transferPrint($op),
             $op instanceof Op\Expr\Eval_ => $this->transferConstructSink($op, 'eval', $op->expr),
             $op instanceof Op\Expr\Include_ => $this->transferInclude($op),
@@ -1523,6 +1523,40 @@ final class FunctionAnalysis
         return $this->state->addContainerTaint($op->result, $container, $provenance) || $changed;
     }
 
+    /**
+     * A branch condition that proved something about the value.
+     *
+     * `if ( ! is_int( $id ) ) { return; }` leaves `$id` an int on the way out,
+     * and an int carries no payload. php-cfg gives that branch its own operand,
+     * so the two paths are already separable without per-block state — see
+     * {@see AssertionNarrowing} for why this is safe and where it is not.
+     *
+     * Everything else passes through. `isset($x)` and `!empty($x)` narrow a
+     * type without escaping anything, and their assertion reuses the operand
+     * the value was written to, which is the shape that oscillates.
+     */
+    private function transferAssertion(Op\Expr\Assertion $op): bool
+    {
+        if (! AssertionNarrowing::narrows($op)) {
+            return $this->transferPassThrough(
+                $op,
+                $op->expr,
+                'An isset() or empty() guard narrows the type but does not escape the value.',
+            );
+        }
+
+        return $this->writeResult(
+            $op->result,
+            TaintSet::empty(),
+            new Provenance(
+                TraceVerb::Sanitize,
+                $op,
+                'A guard proved this is a number on this path, and a number carries no payload.',
+                [$op->expr],
+            ),
+        );
+    }
+
     private function transferPassThrough(Op\Expr $op, Operand $input, string $description): bool
     {
         return $this->transferUnion($op, [$input], $description);
@@ -1542,7 +1576,17 @@ final class FunctionAnalysis
             ? $anchored
             : ($this->returnAnchored && $anchored);
 
-        $taint = $this->state->taintOf($op->expr);
+        // A guard can prove the value safe on the path that returns it, not
+        // only on the path to a sink. Core's `wp_specialchars()` opens with
+        //
+        //     if ( ! preg_match( '/[&<>"\']/', $string ) ) { return $string; }
+        //
+        // and every plugin vendoring a copy of it handed us a false positive,
+        // because the early return carried the argument's taint out untouched.
+        $taint = $this->guards->isGuarded($op->expr, $this->currentBlock)
+            ? TaintSet::empty()
+            : $this->state->taintOf($op->expr);
+
         $merged = $this->returnTaint->union($taint);
         $changed = ! $merged->equals($this->returnTaint);
         $this->returnTaint = $merged;
@@ -2638,6 +2682,14 @@ final class FunctionAnalysis
         }
 
         if (! $this->sinkApplies($sink, $operand)) {
+            return;
+        }
+
+        // Did every path here validate the value? A guard clause is how careful
+        // WordPress code constrains a request value, and it lives in the shape
+        // of the control flow rather than in the value, so it is asked here
+        // rather than propagated. See {@see GuardAnalyzer}.
+        if ($this->guards->isGuarded($operand, $this->currentBlock)) {
             return;
         }
 

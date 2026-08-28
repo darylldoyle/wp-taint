@@ -49,6 +49,62 @@ property `$x`" and stopped, which is not something a reviewer can act on.
 
 **Direction:** over-approximating.
 
+### A guard clause is followed; a guard on a container is not
+
+```php
+if ( ! ctype_digit( $id ) ) {
+    return;
+}
+update_option( 'acme_id', $id );          // digits only by now
+```
+
+The engine keeps one taint state per function rather than one per block, which
+is what makes its fixed point cheap, and that looked like it put this out of
+reach. It did not. php-cfg already writes the answer into SSA: `is_int()` and
+its relatives produce an `Assertion` op, and each branch gets its **own operand**
+for the same variable, so the two paths were always distinguishable.
+{@see AssertionNarrowing} reads it, and narrows only on a positive assertion to
+a numeric or boolean type — `is_string()` proves nothing, since the dangerous
+values are strings.
+
+For the checks php-cfg does not assert on — `ctype_*`, `in_array( …, true )`,
+`array_key_exists`, `preg_match` — {@see GuardAnalyzer} computes **dominators**
+over the block graph and asks whether the validating edge lies on every path to
+the sink. It runs at reporting time and can only suppress a finding, never
+create one, so no part of the fixed point changes and nothing can oscillate.
+
+Both polarities are handled, and they are opposites: `ctype_digit()` proves
+safety when it **succeeds**, `preg_match( '/[&<>"\']/' )` when it **fails**.
+Conflating the two had the edge backwards. The second form matters more than it
+looks — it is WordPress core's own `wp_specialchars()` fast path, so every
+plugin vendoring a copy of it was reported until this existed.
+
+A guard also narrows a value on the path that **returns** it, not only on the
+path to a sink, which is the shape that fast path uses.
+
+**What it will not claim.**
+
+- **Loose `in_array()` is not a guard.** Type juggling smuggles values past it.
+- **An allowlist it cannot read is not a guard.** `in_array( $id, array_keys(
+  $definitions ), true )` constrains the value, and to what is not visible here.
+- **A guard in one loop does not cover a sink in another.**
+
+  ```php
+  foreach ( $posted as $id => $v ) {
+      if ( ! in_array( $id, $valid, true ) ) { continue; }
+      $validated[ $id ] = $v;
+  }
+  foreach ( $validated as $id => $value ) {
+      update_option( $id, $value );        // not dominated by the guard
+  }
+  ```
+
+  Correctly not dominated: it is a different loop over a different array.
+  Proving it safe means establishing that every write into `$validated` happened
+  under a guard, which is a property of the array's contents rather than of
+  control flow. That is container reasoning, not path sensitivity, and it is not
+  done. WooCommerce's REST settings controller is the live example.
+
 ### Unknown provenance is reported only on request
 
 The engine has three answers for a value now — tainted, clean, and *unknown*.
