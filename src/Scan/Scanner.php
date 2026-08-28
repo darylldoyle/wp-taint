@@ -22,6 +22,7 @@ use Enshrined\WpTaint\Rules\Wordpress\MissingAdminPostCapabilityCheck;
 use Enshrined\WpTaint\Rules\Wordpress\MissingAjaxCapabilityCheck;
 use Enshrined\WpTaint\Rules\Wordpress\MissingRestPermissionCallback;
 use Enshrined\WpTaint\Rules\Wordpress\NonceWithoutAction;
+use Enshrined\WpTaint\Rules\Wordpress\WrongContextEscape;
 use Enshrined\WpTaint\Support\PathHelper;
 use Enshrined\WpTaint\Taint\AnalysisOptions;
 use Enshrined\WpTaint\Taint\AnalysisWarning;
@@ -91,6 +92,7 @@ final class Scanner
             new NonceWithoutAction(),
             new BypassableNonceCheck(),
             new GuardWithoutExit(),
+            new WrongContextEscape(),
         ];
     }
 

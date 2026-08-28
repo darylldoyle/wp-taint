@@ -116,6 +116,12 @@ final class ScanCommand extends Command
                 InputOption::VALUE_NONE,
                 'Do not join scopes across include and require',
             )
+            ->addOption(
+                'unknown-provenance',
+                null,
+                InputOption::VALUE_NONE,
+                'Also report output whose origin cannot be traced, as an obligation rather than a flow',
+            )
             ->addOption('no-structural-rules', null, InputOption::VALUE_NONE, 'Run taint analysis only')
             ->addOption(
                 'exclude',
@@ -246,6 +252,7 @@ final class ScanCommand extends Command
             $reader->bool('stored-taint-writes') || ($project->storedTaintWrites ?? false),
             $reader->dynamicCallPolicy(),
             ! $reader->bool('no-follow-includes'),
+            $reader->bool('unknown-provenance'),
             [...$reader->stringList('include-path'), ...$project->reference],
             $reader->bool('parse-report'),
             $reader->nullableString('dump-taint-graph'),

@@ -16,19 +16,19 @@ safe_database_identifiers = []
 
 [[sources]]
 superglobal = "_GET"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "csv"]
 
 [[sources]]
 superglobal = "_POST"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "csv"]
 
 [[sources]]
 superglobal = "_REQUEST"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "csv"]
 
 [[sources]]
 superglobal = "_COOKIE"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "csv"]
 
 [[sources]]
 superglobal = "_FILES"
@@ -334,6 +334,12 @@ note = "Returns a match count. The captured groups go out by reference; see [[by
 
 [[sinks]]
 construct = "echo"
+kind = "unknown"
+severity = "low"
+rule_id = "wp.output.unescaped-unknown"
+
+[[sinks]]
+construct = "echo"
 kind = "escape_voided"
 severity = "medium"
 rule_id = "wp.xss.escape-voided"
@@ -344,6 +350,12 @@ construct = "echo"
 kind = "html"
 severity = "high"
 rule_id = "wp.xss.unescaped-output"
+
+[[sinks]]
+construct = "print"
+kind = "unknown"
+severity = "low"
+rule_id = "wp.output.unescaped-unknown"
 
 [[sinks]]
 construct = "print"
@@ -457,6 +469,21 @@ args = [1]
 kind = "eval"
 severity = "critical"
 rule_id = "wp.rce.eval"
+
+# An exported cell is executed by the spreadsheet that opens it.
+[[sinks]]
+function = "fputcsv"
+args = [1]
+kind = "unknown"
+severity = "low"
+rule_id = "wp.output.csv-injection"
+
+[[sinks]]
+function = "fputcsv"
+args = [1]
+kind = "csv"
+severity = "medium"
+rule_id = "wp.output.csv-injection"
 
 [[sinks]]
 function = "unserialize"

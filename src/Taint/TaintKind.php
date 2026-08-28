@@ -111,6 +111,47 @@ enum TaintKind: string
     case EscapeVoided = 'escape_voided';
 
     /**
+     * A spreadsheet formula waiting to be opened.
+     *
+     * A CSV cell beginning `=`, `+`, `-` or `@` is executed as a formula when
+     * the file is opened in Excel or Sheets, which turns an exported user
+     * field into code running on the reviewer's machine (CWE-1236).
+     *
+     * Its own kind because no HTML escaper touches it: `esc_html()` leaves
+     * `=cmd|...` exactly as it found it, and would be the wrong tool even if it
+     * did. The neutraliser is a prefix — a quote, a space, a tab — and nothing
+     * in the escaping catalogue does that.
+     */
+    case Csv = 'csv';
+
+    /**
+     * Where this value came from, nobody here can say.
+     *
+     * A parameter of a function no caller in the scan reaches; the result of a
+     * callee the engine cannot follow. The engine's standing answer for those
+     * has been *clean* — a documented false negative, on the grounds that an
+     * undocumented false positive is worse.
+     *
+     * That answer costs more than it looked. Two third-party suites score the
+     * output half of this tool at 0.18 recall on exactly it:
+     *
+     * ```php
+     * function fx_render_bad( $value ) {   // "assumed tainted (option, meta, query var)"
+     *     echo $value;                     // ruleid: wp.output.unescaped
+     * ```
+     *
+     * WordPress's own standard is sanitise on input and escape on output — two
+     * obligations, each owed wherever the value came from. Treating unknown as
+     * clean answers a question nobody asked: not "is this value dangerous" but
+     * "can I prove it is". This kind is the third state, so the difference
+     * between *proven clean* and *not known* stops being invisible.
+     *
+     * Any sanitizer or escaper clears it, because applying one settles the
+     * question either way.
+     */
+    case Unknown = 'unknown';
+
+    /**
      * Not a taint kind at all: nothing seeds it and nothing propagates it.
      *
      * Structural rules report broken authorization, which has no dataflow to
@@ -146,6 +187,8 @@ enum TaintKind: string
             self::UnserializeStored => 1 << 14,
             self::Escaped => 1 << 15,
             self::EscapeVoided => 1 << 16,
+            self::Csv => 1 << 17,
+            self::Unknown => 1 << 18,
             self::Authz => 1 << 11,
         };
     }
@@ -174,7 +217,7 @@ enum TaintKind: string
      */
     public function isDerived(): bool
     {
-        return in_array($this, [self::SqlUnquoted, self::Escaped, self::EscapeVoided], true);
+        return in_array($this, [self::SqlUnquoted, self::Escaped, self::EscapeVoided, self::Unknown], true);
     }
 
     /**
@@ -215,6 +258,8 @@ enum TaintKind: string
             self::UnserializeStored => 'stored serialised payload',
             self::Escaped => 'escaped',
             self::EscapeVoided => 'escaping voided by a filter',
+            self::Csv => 'spreadsheet formula',
+            self::Unknown => 'unknown provenance',
             self::Authz => 'authorization',
         };
     }

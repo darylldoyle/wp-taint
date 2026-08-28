@@ -1,0 +1,12 @@
+{
+    "wp-taint-fixtures": {
+        "truePositives": 46,
+        "falseNegatives": 18,
+        "falsePositives": 3,
+        "trueNegatives": 41
+    },
+    "analyser-fixtures": {
+        "missing": 10,
+        "unexpected": 7
+    }
+}

@@ -258,3 +258,28 @@ jobs:
       # notice, and the recorded score is now wrong about where we stand.
       - name: Score against the published answer key
         run: composer vulnerable:check
+
+  third-party-suites:
+    name: Third-party fixture suites
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: json
+          coverage: none
+          ini-values: memory_limit=2G
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v3
+
+      # Two labelled suites nobody here wrote, each with its own scorer and its
+      # own idea of what the findings should be called. They cover semantics —
+      # context correctness, escape invalidation, weak sanitisers — where the
+      # corpus covers volume and the CVE set covers incidents.
+      - name: Score against both suites
+        run: composer suite:check

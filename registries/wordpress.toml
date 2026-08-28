@@ -94,77 +94,77 @@ kinds = ["html", "html_attr", "url", "header"]
 
 [[sources]]
 function = "get_post_meta"
-kinds = ["html", "html_attr", "sql", "unserialize_stored"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
 stored = true
 note = "Second-order taint. Stored XSS lives here, and so does object injection: unserialize() on stored data is the classic WordPress escalation from a subscriber-level meta write to RCE through a POP chain, and three of the CVEs in tests/Fixtures/cve-lock.json are exactly that. Deliberately NOT path or url: an attacker who can write arbitrary options or post meta already has the access those sinks would give them, and treating stored data as filesystem or SSRF input drowned the corpus in noise. That reasoning does not extend to unserialize, because object injection grants more than the write did."
 
 [[sources]]
 function = "get_user_meta"
-kinds = ["html", "html_attr", "sql", "unserialize_stored"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
 stored = true
 
 [[sources]]
 function = "get_term_meta"
-kinds = ["html", "html_attr", "sql", "unserialize_stored"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
 stored = true
 
 [[sources]]
 function = "get_comment_meta"
-kinds = ["html", "html_attr", "sql", "unserialize_stored"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
 stored = true
 
 [[sources]]
 function = "get_metadata"
-kinds = ["html", "html_attr", "sql", "unserialize_stored"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
 stored = true
 
 [[sources]]
 function = "get_option"
-kinds = ["html", "html_attr", "sql", "unserialize_stored"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
 stored = true
 
 [[sources]]
 function = "get_site_option"
-kinds = ["html", "html_attr", "sql", "unserialize_stored"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
 stored = true
 
 [[sources]]
 function = "get_transient"
-kinds = ["html", "html_attr", "sql", "unserialize_stored"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
 stored = true
 
 [[sources]]
 function = "get_site_transient"
-kinds = ["html", "html_attr", "sql", "unserialize_stored"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
 stored = true
 
 [[sources]]
 function = "get_theme_mod"
-kinds = ["html", "html_attr", "sql", "unserialize_stored"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
 stored = true
 
 [[sources]]
 class = "wpdb"
 method = "get_results"
-kinds = ["html", "html_attr", "sql", "unserialize_stored"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
 stored = true
 
 [[sources]]
 class = "wpdb"
 method = "get_var"
-kinds = ["html", "html_attr", "sql", "unserialize_stored"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
 stored = true
 
 [[sources]]
 class = "wpdb"
 method = "get_row"
-kinds = ["html", "html_attr", "sql", "unserialize_stored"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
 stored = true
 
 [[sources]]
 class = "wpdb"
 method = "get_col"
-kinds = ["html", "html_attr", "sql", "unserialize_stored"]
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv"]
 stored = true
 
 # =============================================================================
@@ -913,6 +913,30 @@ function = "do_shortcode"
 
 [[filterable]]
 function = "do_shortcode_tag"
+
+[[rules]]
+id = "wp.output.unescaped-unknown"
+title = "Output with nothing vouching for it"
+description = "A value whose origin the scan cannot see reaches output with no escaper applied. It may be perfectly safe; nothing here says so. WordPress's standard is to escape on output wherever the value came from, and this reports the obligation rather than a traced flow."
+remediation = "Escape at the point of output, for the context it lands in. If the value is genuinely constant, the escaper costs nothing and makes it provable."
+cwe = "CWE-79"
+message = "This value reaches output unescaped, and nothing in the scan says where it came from."
+
+[[rules]]
+id = "wp.output.csv-injection"
+title = "Exported value can be a spreadsheet formula"
+description = "A user-supplied value is written into CSV without neutralising a leading =, +, - or @. Excel and Sheets execute those cells as formulas when the file is opened, so an exported field becomes code running on whoever reviews the export (CWE-1236)."
+remediation = "Prefix a value beginning with =, +, - or @ with an apostrophe, tab or space before writing the cell. HTML escapers do nothing here: esc_html() leaves a formula exactly as it found it."
+cwe = "CWE-1236"
+message = "This value is written into CSV without neutralising a leading formula character."
+
+[[rules]]
+id = "wp.xss.wrong-context-escape"
+title = "The wrong escaper for where the value lands"
+description = "An escaper is applied, and it is not the one this context needs. esc_html() inside a <script> block leaves a string breakout; esc_attr() on an href leaves a javascript: URI; any escaper in an unquoted attribute can be escaped out of with a space. A check that only asks whether an escaper was called reports nothing on any of these."
+remediation = "Match the escaper to the context: wp_json_encode() or esc_js() inside script, esc_url() for href and src, esc_attr() inside a quoted attribute, and quote the attribute."
+cwe = "CWE-79"
+message = "This escaper does not protect the context the value is printed into."
 
 [[rules]]
 id = "wp.xss.escape-voided"

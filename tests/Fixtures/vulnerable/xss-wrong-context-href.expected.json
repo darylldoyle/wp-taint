@@ -1,0 +1,10 @@
+{
+    "expectation": "vulnerable",
+    "findings": [
+        {
+            "ruleId": "wp.xss.wrong-context-escape",
+            "kind": "authz",
+            "line": 11
+        }
+    ]
+}

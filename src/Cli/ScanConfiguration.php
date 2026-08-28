@@ -67,6 +67,7 @@ final class ScanConfiguration
         bool $storedTaintWrites,
         DynamicCallPolicy $dynamicCalls,
         bool $followIncludes,
+        bool $unknownProvenance,
         /** @var list<string> */
         array $includePaths,
         bool $parseReport,
@@ -108,6 +109,7 @@ final class ScanConfiguration
                 interprocedural: $interprocedural,
                 dynamicCalls: $dynamicCalls,
                 followIncludes: $followIncludes,
+                unknownProvenance: $unknownProvenance,
             ),
             $excludes,
             $format,

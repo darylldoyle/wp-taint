@@ -556,6 +556,8 @@ final class FunctionAnalysis
         }
 
         if ($this->seedParameterIndex === null) {
+            $this->seedUnknownParameters();
+
             return;
         }
 
@@ -579,6 +581,43 @@ final class FunctionAnalysis
                 ),
             ),
         );
+    }
+
+    /**
+     * Mark every parameter as being of unknown provenance.
+     *
+     * Only on the findings pass, and only with {@see TaintKind::Unknown}, which
+     * no ordinary rule reports. A caller that passes something tainted supplies
+     * the real kinds through the summary; this says nothing about those, only
+     * that the value did not originate here and nothing has vouched for it.
+     */
+    private function seedUnknownParameters(): void
+    {
+        if (! $this->options->unknownProvenance) {
+            return;
+        }
+
+        foreach (array_values($this->context->func->params) as $index => $param) {
+            if (! $param instanceof Op\Expr\Param) {
+                continue;
+            }
+
+            $this->state->add(
+                $param->result,
+                TaintSet::of(TaintKind::Unknown),
+                new Provenance(
+                    TraceVerb::Source,
+                    $param,
+                    sprintf(
+                        'Parameter %d (%s) of %s. Nothing in the scan says where this comes from, and nothing '
+                            . 'has sanitised or escaped it.',
+                        $index,
+                        $this->context->parameterName($index),
+                        $this->context->displayName,
+                    ),
+                ),
+            );
+        }
     }
 
     /**
@@ -1880,6 +1919,10 @@ final class FunctionAnalysis
         $cleared = $sanitizer->clearsBy === null
             ? $sanitizer->apply($incoming)
             : $incoming->without($this->strategyClears($sanitizer, $call));
+
+        // Applying any sanitizer settles where the value came from, whatever
+        // else it did or did not clear: somebody looked at it.
+        $cleared = $cleared->without(TaintSet::of(TaintKind::Unknown));
 
         // A quote-escaper does not remove the danger, it moves it: the value is
         // safe between quotes and no safer than before without them. Trading

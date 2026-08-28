@@ -24,6 +24,22 @@ final class AnalysisOptions
         public readonly int $maxTraceSteps = 64,
         public readonly int $maxSummarisedParameters = 8,
         /**
+         * Whether a value whose origin the scan cannot see counts as unknown
+         * rather than as clean.
+         *
+         * Off by default, because it is the difference between reporting flows
+         * and reporting obligations, and the second is a much larger number:
+         * WordPress's own standard says escape on output wherever the value
+         * came from, and most output in a real plugin comes from somewhere the
+         * scan cannot follow.
+         *
+         * On, the tool answers "is this value proven safe". Off, it answers
+         * "can I trace this value to something dangerous". Both are useful and
+         * they are not the same question, so the flag says which is being
+         * asked. See {@see TaintKind::Unknown}.
+         */
+        public readonly bool $unknownProvenance = false,
+        /**
          * Rounds are cheap when they are not needed: the loop exits as soon as
          * nothing changes, so a generous cap costs nothing on code that settles
          * early. It only bites where the alternative is silently incomplete
