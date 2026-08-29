@@ -158,7 +158,7 @@ final class ExplainCommand extends Command
         }
 
         $contexts = $functions->all();
-        $receivers = new ReceiverResolver();
+        $receivers = new ReceiverResolver($functions->declaredTypes());
         $static = (new ConstantTableBuilder(new ValueResolver()))->buildBoth($contexts);
         $values = (new ValueResolver())->withConstants($static['constants'], $static['returns']);
         $callables = new CallableResolver($registry, $functions, $values);

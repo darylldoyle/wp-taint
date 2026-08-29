@@ -164,7 +164,7 @@ final class Scanner
             $functions->addFile($file);
         }
 
-        $receivers = new ReceiverResolver();
+        $receivers = new ReceiverResolver($functions->declaredTypes());
         $contexts = $functions->all();
 
         // Constants first: WordPress builds include paths out of them and

@@ -32,13 +32,29 @@ final class UserFunctionTable
     /** @var SplObjectStorage<Func, FunctionContext> */
     private SplObjectStorage $byFunc;
 
+    private DeclaredTypes $declared;
+
     public function __construct()
     {
         $this->byFunc = new SplObjectStorage();
+        $this->declared = new DeclaredTypes();
+    }
+
+    /**
+     * What the scanned code declares about its own types.
+     *
+     * Built here because this is the one place that already walks every
+     * function of every file, and because it has to happen while the AST is
+     * still held.
+     */
+    public function declaredTypes(): DeclaredTypes
+    {
+        return $this->declared;
     }
 
     public function addFile(ParsedFile $file): void
     {
+        $this->declared->observeFile($file);
         $this->add(FunctionContext::create($file->script->main, $file));
 
         foreach ($file->script->functions as $func) {
@@ -57,6 +73,7 @@ final class UserFunctionTable
         // first declaration wins, deterministically, because files are walked
         // in sorted order.
         $this->byKey[$context->key] ??= $context;
+        $this->declared->observeFunction($context);
         $this->all[] = $context;
         $this->byFunc[$context->func] = $context;
 

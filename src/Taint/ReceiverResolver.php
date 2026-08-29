@@ -23,8 +23,24 @@ final class ReceiverResolver
      */
     private const WPDB_RECEIVER_NAMES = ['wpdb', 'db'];
 
+    /** How far a `a()->b->c->d()` chain is followed before giving up. */
+    private const MAX_CHAIN = 8;
+
+    public function __construct(private readonly ?DeclaredTypes $declared = null)
+    {
+    }
+
     public function classOf(Operand $receiver, FunctionContext $context, ClassTypeMap $types): ?string
     {
+        return $this->resolve($receiver, $context, $types, 0);
+    }
+
+    private function resolve(Operand $receiver, FunctionContext $context, ClassTypeMap $types, int $depth): ?string
+    {
+        if ($depth > self::MAX_CHAIN) {
+            return null;
+        }
+
         $name = OperandHelper::variableName($receiver);
 
         if ($name === 'this') {
@@ -53,6 +69,18 @@ final class ReceiverResolver
         // convention for stashing the database handle.
         $definition = OperandHelper::definingOp($receiver);
 
+        if ($definition instanceof Op\Expr\Assign) {
+            return $this->resolve($definition->expr, $context, $types, $depth + 1);
+        }
+
+        // `code_snippets()` returning `Plugin`, and `Plugin::make()` returning
+        // `self`. Declared, never inferred — see DeclaredTypes.
+        $returned = $this->returnedClass($definition, $context, $types, $depth);
+
+        if ($returned !== null) {
+            return $returned;
+        }
+
         if ($definition instanceof Op\Expr\PropertyFetch) {
             $property = OperandHelper::literalString($definition->name);
 
@@ -63,7 +91,9 @@ final class ReceiverResolver
             // Same order for the same reason: a declared `private Acme_DB $db`
             // outranks the convention, and `$this->db` with nothing declared
             // still falls back to it.
-            $declared = $types->classOfProperty($this->classOf($definition->var, $context, $types), $property);
+            $owner = $this->resolve($definition->var, $context, $types, $depth + 1);
+            $declared = $types->classOfProperty($owner, $property)
+                ?? $this->declared?->propertyClassOf($owner, $property);
 
             if ($declared !== null) {
                 return $declared;
@@ -73,5 +103,58 @@ final class ReceiverResolver
         }
 
         return null;
+    }
+
+    /**
+     * The class a call was declared to return.
+     *
+     * The method form needs its own receiver resolved first, which is what
+     * makes `aioseo()->core->db` work and what the depth limit is guarding.
+     */
+    private function returnedClass(
+        ?Op $definition,
+        FunctionContext $context,
+        ClassTypeMap $types,
+        int $depth,
+    ): ?string {
+        if ($this->declared === null) {
+            return null;
+        }
+
+        if ($definition instanceof Op\Expr\NsFuncCall) {
+            // A namespaced call falls back to the global function when the
+            // namespaced one does not exist, so both names have to be tried,
+            // in that order — the same order CallResolver uses. Reading only
+            // `name` asks about `code_snippets()` when the code declares
+            // `Code_Snippets\code_snippets(): Plugin`, and the chain stops
+            // one step in.
+            $namespaced = OperandHelper::literalString($definition->nsName);
+            $global = OperandHelper::literalString($definition->name);
+
+            return ($namespaced === null ? null : $this->declared->returnClassOf($namespaced))
+                ?? ($global === null ? null : $this->declared->returnClassOf($global));
+        }
+
+        if ($definition instanceof Op\Expr\FuncCall) {
+            $name = OperandHelper::literalString($definition->name);
+
+            return $name === null ? null : $this->declared->returnClassOf($name);
+        }
+
+        if (! $definition instanceof Op\Expr\MethodCall && ! $definition instanceof Op\Expr\StaticCall) {
+            return null;
+        }
+
+        $method = OperandHelper::literalString($definition->name);
+
+        if ($method === null) {
+            return null;
+        }
+
+        $owner = $definition instanceof Op\Expr\StaticCall
+            ? OperandHelper::literalString($definition->class)
+            : $this->resolve($definition->var, $context, $types, $depth + 1);
+
+        return $owner === null ? null : $this->declared->returnClassOf($owner . '::' . $method);
     }
 }

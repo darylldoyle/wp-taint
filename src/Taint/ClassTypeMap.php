@@ -109,7 +109,13 @@ final class ClassTypeMap
         }
     }
 
-    private static function declaredClassName(Op\Type $type): ?string
+    /**
+     * Public because {@see DeclaredTypes} reads return types the same way, and
+     * two spellings of "what class does this declaration name" that could drift
+     * apart is exactly the disagreement that made receiver resolution wrong in
+     * the first place.
+     */
+    public static function declaredClassName(Op\Type $type): ?string
     {
         if ($type instanceof Op\Type\Reference) {
             $name = OperandHelper::literalString($type->declaration);
