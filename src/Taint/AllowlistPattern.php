@@ -69,17 +69,24 @@ final class AllowlistPattern
      */
     public static function clears(string $pattern, string $replacement): ?TaintSet
     {
+        // Checked first, because the CSV shape is an anchored *positive* class
+        // and `retainedCharacters()` only understands a negated one — it
+        // returns null here, and the allowlist path would leave before asking.
+        $csv = self::neutralisesCsvFormulas($pattern, $replacement)
+            ? [TaintKind::Csv]
+            : [];
+
         $retained = self::retainedCharacters($pattern);
 
         if ($retained === null) {
-            return null;
+            return $csv === [] ? null : TaintSet::of(...$csv);
         }
 
         // Whatever is substituted in ends up in the output too, so it is held
         // to the same standard as the characters the class kept.
         $retained .= $replacement;
 
-        $kinds = [];
+        $kinds = $csv;
 
         foreach (self::DANGEROUS as $kind => $dangerous) {
             if (self::sharesNoCharacter($retained, $dangerous)) {
@@ -92,6 +99,82 @@ final class AllowlistPattern
         }
 
         return $kinds === [] ? null : TaintSet::of(...$kinds);
+    }
+
+    /**
+     * The documented fix for CSV formula injection, recognised.
+     *
+     * A spreadsheet treats a cell beginning `=`, `+`, `-` or `@` as a formula.
+     * Prefixing one with an apostrophe, tab or space stops that, and it is what
+     * `wp.output.csv-injection` tells people to do:
+     *
+     *     $name = preg_replace( '/^([=+\-@])/', "'$1", $row['name'] );
+     *
+     * Asking for something and then not crediting it when it is done is the
+     * same defect as advice that cannot be followed. This is the one shape that
+     * counts: anchored at the start, a class covering all four characters, and
+     * a replacement that begins with a neutraliser.
+     *
+     * The character has to be first in the replacement. `$1'` puts the
+     * apostrophe *after* the `=`, which neutralises nothing.
+     */
+    private static function neutralisesCsvFormulas(string $pattern, string $replacement): bool
+    {
+        if ($replacement === '' || ! str_contains("'\t ", $replacement[0])) {
+            return false;
+        }
+
+        $body = self::patternBody($pattern);
+
+        if ($body === null || ! str_starts_with($body, '^')) {
+            return false;
+        }
+
+        $class = self::firstCharacterClass($body);
+
+        if ($class === null) {
+            return false;
+        }
+
+        foreach (['=', '+', '-', '@'] as $formula) {
+            if (! str_contains($class, $formula)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * The contents of the first `[...]` in a pattern body, escapes flattened.
+     */
+    private static function firstCharacterClass(string $body): ?string
+    {
+        if (preg_match('/\[([^\]]*)\]/', $body, $matches) !== 1) {
+            return null;
+        }
+
+        return str_replace('\\', '', $matches[1]);
+    }
+
+    /**
+     * A pattern's body, between its delimiters.
+     */
+    private static function patternBody(string $pattern): ?string
+    {
+        if (strlen($pattern) < 3) {
+            return null;
+        }
+
+        $delimiter = $pattern[0];
+
+        if (str_contains('([{< \\', $delimiter) || ctype_alnum($delimiter)) {
+            return null;
+        }
+
+        $end = strrpos($pattern, $delimiter);
+
+        return $end === false || $end === 0 ? null : substr($pattern, 1, $end - 1);
     }
 
     /**
