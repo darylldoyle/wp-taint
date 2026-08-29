@@ -13,6 +13,67 @@ Findings that crossed one of these carry `imprecise: true` in JSON output,
 
 ---
 
+## At a glance
+
+Two questions bring people here. This table answers both; each row links to the
+reasoning.
+
+**Misses** means it can stay quiet about a real bug. **Over-reports** means it
+can flag something safe. **Neither** means the approximation is visible in the
+output rather than in the findings.
+
+**Dataflow**
+
+| Limitation | Direction |
+| --- | --- |
+| [An array read or write with a computed key sees the whole array](#array-element-taint-is-per-key-when-both-ends-name-a-constant-key) | Over-reports |
+| [Object properties are per class, not per instance](#object-properties-are-per-class-not-per-instance) | Over-reports |
+| [A guard on a container is not followed](#a-guard-clause-is-followed-a-guard-on-a-container-is-not) | Over-reports |
+| [A value of unknown origin counts as clean by default](#unknown-provenance-is-reported-only-on-request) | Misses |
+| [A context built from a variable is not judged](#escaping-is-judged-against-its-context-but-not-a-computed-one) | Misses |
+| [`wp_update_comment()` is listed as returning its filtered argument](#escaping-must-survive-to-the-point-of-output) | Over-reports |
+| [Pluggable functions a plugin redefines outright](#escaping-must-survive-to-the-point-of-output) | Misses |
+| [Stored `unserialize()` needs a precondition the engine cannot check](#stored-object-injection-is-a-separate-lower-severity) | Neither |
+| [`esc_sql()` outside a readable quote position](#esc_sql-is-only-credited-inside-quotes) | Misses |
+| [Stored sources carry no `path` or `url` taint](#stored-sources-carry-html-and-sql-taint-only-not-path-or-url) | Misses |
+| [A callable that cannot be traced to a name](#dynamic-calls-are-followed-as-far-as-the-value-can-be-traced) | Configurable |
+| [An `include` whose path will not fold](#include-and-require-are-followed-unless-the-path-is-computed) | Misses |
+| [A hook registration whose name will not resolve](#hook-callbacks-are-followed-unless-the-hook-name-is-dynamic) | Misses |
+| [`remove_filter()` is not modelled](#hook-callbacks-are-followed-unless-the-hook-name-is-dynamic) | Over-reports |
+| [An unmodelled function returns clean](#an-unmodelled-function-returns-clean) | Misses |
+| [A by-reference call cannot clear its argument](#references-are-followed-and-never-cleared) | Over-reports |
+| [`wp_json_encode()` is treated as clearing `html`](#wp_json_encode-context-sensitivity-is-approximated) | Misses |
+| [Loops are not unrolled](#loops-are-analysed-to-a-fixed-point-not-unrolled) | Over-reports |
+
+**Structural rules**
+
+| Limitation | Direction |
+| --- | --- |
+| [An authorization check reached only through a dynamic call](#permission_callback-is-checked-for-what-it-reaches-and-stays-quiet-when-unsure) | Misses |
+| [A nonce alone satisfies the AJAX rule](#a-nonce-satisfies-the-ajax-rule-but-not-the-admin-post-one) | Misses |
+| [An option name anchored out of sight](#an-option-name-assembled-out-of-sight-is-assumed-to-be-anchored) | Misses |
+| [An allowlist gate on an option name](#an-option-name-assembled-out-of-sight-is-assumed-to-be-anchored) | Over-reports |
+| [`register_rest_route()` options built conditionally](#register_rest_route-options-are-folded-not-traced) | Neither |
+| [A loader component that is neither `$this` nor a local `new`](#hooks-registered-through-a-wrapper-are-followed-by-name) | Misses |
+
+**Parsing and scope**
+
+| Limitation | Direction |
+| --- | --- |
+| [`eval`'d and generated code](#evald-and-generated-code-is-not-analysed) | Misses |
+| [Code outside the scan path](#analysis-is-whole-program-and-a-plugin-is-the-natural-unit) | Misses |
+| [A function declared twice: first wins](#duplicate-function-declarations-first-wins) | Either |
+| [Six constructs are rewritten before analysis](#six-modern-constructs-are-lowered-before-analysis) | Neither |
+| [No result cache](#there-is-no-result-cache) | Neither |
+| [`--jobs` needs `pcntl`](#--jobs-needs-pcntl) | Neither |
+
+**Not implemented**
+
+[Second-order flows through a specific option key](#not-implemented), and an
+HTML reporter.
+
+---
+
 ## Dataflow
 
 ### Array element taint is per-key when both ends name a constant key
@@ -120,12 +181,18 @@ to 0.82.
 Off by default because it changes the question. Off, the tool answers "can I
 trace this value to something dangerous". On, it answers "is this value proven
 safe", which is what WordPress's own sanitise-on-input, escape-on-output
-standard actually asks — and which produces 926 more findings across the fifty
+standard actually asks — and which produces 142 more findings across the fifty
 corpus plugins, at `low` severity.
+
+The seeding is narrowed to entry points: a parameter of a function nothing in
+the scan calls. A parameter whose callers *are* visible is not unknown, because
+the caller answers for it and the scan read the caller. Marking every parameter
+produced 926 findings, of which 784 were values whose provenance had already
+been established.
 
 Neither question is wrong. The flag says which one is being asked.
 
-### Escaping is judged against the context it lands in
+### Escaping is judged against its context, but not a computed one
 
 An escaper being present is not the same as it being the right one:
 
@@ -144,11 +211,22 @@ positional `%1$s` specifiers, or a call it does not recognise as an escaper.
 `wp_get_referer()` is a source, and accusing it of being the wrong escaper both
 misnames the problem and duplicates the rule that already has it.
 
-**What it will say that some will disagree with.** `esc_url_raw()` in an
-attribute is reported. It is documented — by WordPress and by this catalogue —
-as being for storage and redirects rather than output, and WPCS rejects it for
-output too. WP Super Cache uses it in 32 form actions, which is why one pinned
-plugin moved from 9 findings to 41.
+**`esc_url_raw()` is judged by the quote character.** Both it and `esc_url()`
+run the same filter; the whole difference is the display-context block that
+encodes the apostrophe. The character filter strips `"`, `<`, `>` and space in
+both, and the scheme allowlist rejects `javascript:` in both. So only the quote
+decides it:
+
+```php
+echo '<form action="' . esc_url_raw( $u ) . '">';   // safe: nothing can get out
+echo "<form action='" . esc_url_raw( $u ) . "'>";   // reported: an apostrophe can
+```
+
+This was previously reported in both positions on the grounds that WordPress and
+WPCS document `esc_url_raw()` as being for storage rather than output. That is a
+style rule, and this file is about security: WP Super Cache writes the safe shape
+32 times and being told all 32 were wrong is how a rule teaches people to stop
+reading it.
 
 ### Escaping must survive to the point of output
 
@@ -324,7 +402,7 @@ when auditing the auditor. Every finding produced under an assumption is marked
 `--assume-dynamic-tainted` is the old spelling of `--dynamic-calls=tainted` and
 still works.
 
-### `include` and `require` are followed
+### `include` and `require` are followed, unless the path is computed
 
 ```php
 $title = $_GET['title'];
@@ -355,7 +433,7 @@ includes it, so a template included from two places sees either caller's state.
 
 `--no-follow-includes` turns the whole thing off.
 
-### Filter and action callbacks are followed
+### Hook callbacks are followed, unless the hook name is dynamic
 
 `apply_filters( 'the_content', $value )` is a call to every callback registered
 on `the_content`, and `do_action( 'acme_saved', $note )` flows its arguments
@@ -381,7 +459,7 @@ so a callback removed at runtime is still analysed.
 
 **Direction:** under-approximating, at the unresolved names.
 
-### Hook callbacks resolve in every form PHP accepts
+### A callback that will not resolve is counted, not guessed at
 
 `'function_name'`, `'Class::method'`, `array( $object, 'method' )`,
 `array( 'Class', 'method' )`, a closure, an arrow function, and an object with
@@ -433,7 +511,7 @@ Expect to find more of those, and expect the fix to be a catalogue entry. The
 flag is off unless you ask for it, and a baseline is a reasonable first step on
 a large codebase.
 
-### References are followed
+### References are followed, and never cleared
 
 ```php
 function fill( array &$out ) { $out[] = $_GET['x']; }
@@ -482,7 +560,7 @@ the analysis is concerned. Phi nodes union across every path.
 
 ## Structural rules
 
-### `permission_callback` is checked for what it reaches
+### `permission_callback` is checked for what it reaches, and stays quiet when unsure
 
 Three distinct problems, at three severities:
 
@@ -647,8 +725,6 @@ go stale on a security tool is worse than none.
 
 It was removed rather than fixed. A scan is fast enough not to need it: 926
 files in 15 seconds on a real client theme.
-
----
 
 ### `--jobs` needs `pcntl`
 
