@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Taint;
 
+use Enshrined\WpTaint\Scan\NullScanProgress;
+use Enshrined\WpTaint\Scan\ScanProgress;
 use Enshrined\WpTaint\Scan\WorkerPool;
 
 /**
@@ -53,7 +55,7 @@ final class InterproceduralResolver
      * @return array{summaries: SummaryTable, properties: PropertyTaintMap, scopes: ScopeTable, rounds: int,
      *     converged: bool}
      */
-    public function resolve(array $functions): array
+    public function resolve(array $functions, ScanProgress $progress = new NullScanProgress()): array
     {
         $summaries = new SummaryTable();
         $properties = new PropertyTaintMap();
@@ -74,8 +76,14 @@ final class InterproceduralResolver
         $rounds = 0;
         $changed = true;
 
+        // The fixed point cannot say how many rounds it needs until it stops
+        // needing them, so the phase reports a round count rather than a
+        // percentage. Real plugins settle in five to eight.
+        $progress->phase('Resolving taint across functions', null);
+
         while ($changed && $rounds < $this->options->maxInterproceduralRounds) {
             $rounds++;
+            $progress->advance();
 
             // This round's shared starting point. Each worker copies it and
             // adds only its own results, so no worker sees another's.

@@ -80,6 +80,11 @@ final class Scanner
          * @var list<string>
          */
         private readonly array $includePaths = [],
+        /**
+         * Where to report phase changes. Silent unless the caller says
+         * otherwise — see {@see NullScanProgress}.
+         */
+        private readonly ScanProgress $progress = new NullScanProgress(),
     ) {
         // Both remaining structural rules are pure AST shape checks. The
         // query-shape check that used to live here needs the dataflow verdict,
@@ -111,7 +116,10 @@ final class Scanner
         /** @var list<ParseError> $parseErrors */
         $parseErrors = [];
 
+        $this->progress->phase('Parsing', count($files));
+
         foreach ($files as $file) {
+            $this->progress->advance();
             $result = $builder->buildFromFile($file);
 
             if ($result->isSuccess()) {
@@ -137,7 +145,14 @@ final class Scanner
         /** @var array<string, true> $reference */
         $reference = [];
 
-        foreach ($this->referenceFiles($scanned) as $file) {
+        $referenceFiles = $this->referenceFiles($scanned);
+
+        if ($referenceFiles !== []) {
+            $this->progress->phase('Parsing reference trees', count($referenceFiles));
+        }
+
+        foreach ($referenceFiles as $file) {
+            $this->progress->advance();
             $result = $builder->buildFromFile($file);
 
             // A reference tree is context, not a deliverable. A file in it that
@@ -154,6 +169,7 @@ final class Scanner
             $reference[$result->file()->relativePath] = true;
         }
 
+        $this->progress->phase('Indexing symbols', count($parsed));
         $functions = new UserFunctionTable();
         $ruleContext = new RuleContext();
 
@@ -161,6 +177,7 @@ final class Scanner
         $findings = [];
 
         foreach ($parsed as $file) {
+            $this->progress->advance();
             $functions->addFile($file);
         }
 
@@ -178,6 +195,10 @@ final class Scanner
         // because the authorization rules walk them: "does this AJAX callback
         // reach a capability check, through however many helpers" is a
         // call-graph question, not a shape one.
+        // No total: these two builders walk every op of every function and
+        // reporting a count would mean threading progress through both. A bar
+        // that fills in one jump is worse than a sentence that stays put.
+        $this->progress->phase('Building the hook and call graphs', null);
         $hooks = (new HookGraphBuilder($callables, $values, $receivers))->build($contexts);
         $callGraph = (new CallGraphBuilder($this->registry, $functions, $values, $receivers, $callables, $hooks))
             ->build($contexts);
@@ -198,7 +219,10 @@ final class Scanner
             );
         }
 
+        $this->progress->phase('Structural rules', count($parsed));
+
         foreach ($parsed as $file) {
+            $this->progress->advance();
             // Structural rules are pure AST shape checks over one file, so they
             // run before the whole-program taint pass — which is what lets the
             // AST go early.
@@ -245,7 +269,7 @@ final class Scanner
         $extractor = new SummaryExtractor($analyzer, $this->options);
         $interprocedural = new InterproceduralResolver($analyzer, $extractor, $this->options, $this->jobs);
 
-        $resolution = $interprocedural->resolve($contexts);
+        $resolution = $interprocedural->resolve($contexts, $this->progress);
 
         /** @var list<AnalysisWarning> $warnings */
         $warnings = [];

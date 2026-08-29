@@ -44,7 +44,7 @@ final class ScanRunner
     /**
      * @param list<string> $files
      */
-    public function run(array $files): ScanResult
+    public function run(array $files, ScanProgress $progress = new NullScanProgress()): ScanResult
     {
         return (new Scanner(
             $this->configuration->registry,
@@ -54,6 +54,7 @@ final class ScanRunner
             $this->configuration->dumpTaintGraph,
             $this->configuration->jobs,
             $this->configuration->includePaths,
+            $progress,
         ))->scan($files);
     }
 }

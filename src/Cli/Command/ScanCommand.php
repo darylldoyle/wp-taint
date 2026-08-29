@@ -8,6 +8,7 @@ use Enshrined\WpTaint\Baseline\Baseline;
 use Enshrined\WpTaint\Baseline\BaselineWriter;
 use Enshrined\WpTaint\Baseline\InlineSuppressions;
 use Enshrined\WpTaint\Cli\Application;
+use Enshrined\WpTaint\Cli\ConsoleScanProgress;
 use Enshrined\WpTaint\Cli\ExitCode;
 use Enshrined\WpTaint\Cli\InputReader;
 use Enshrined\WpTaint\Cli\ProjectScanConfig;
@@ -19,6 +20,8 @@ use Enshrined\WpTaint\Report\Reporter;
 use Enshrined\WpTaint\Report\ReportOptions;
 use Enshrined\WpTaint\Report\SarifReporter;
 use Enshrined\WpTaint\Scan\FileFinder;
+use Enshrined\WpTaint\Scan\NullScanProgress;
+use Enshrined\WpTaint\Scan\ScanProgress;
 use Enshrined\WpTaint\Scan\ScanResult;
 use Enshrined\WpTaint\Scan\ScanRunner;
 use Enshrined\WpTaint\Support\PathHelper;
@@ -154,6 +157,11 @@ final class ScanCommand extends Command
               HELP);
     }
 
+    /**
+     * Below this, a scan finishes before a bar would be read.
+     */
+    private const PROGRESS_FILE_THRESHOLD = 50;
+
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $stderr = $output instanceof ConsoleOutputInterface ? $output->getErrorOutput() : $output;
@@ -181,7 +189,9 @@ final class ScanCommand extends Command
             return ExitCode::CLEAN;
         }
 
-        $result = (new ScanRunner($configuration))->run($files);
+        $progress = $this->progressFor($stderr, count($files));
+        $result = (new ScanRunner($configuration))->run($files, $progress);
+        $progress->finish();
 
         if ($configuration->parseReport) {
             return $this->renderParseReport($result, $output);
@@ -204,6 +214,27 @@ final class ScanCommand extends Command
         $this->emit($configuration, $result, $reader, $output);
 
         return $this->exitCode($configuration, $result);
+    }
+
+    /**
+     * A progress bar, when there is a terminal to draw one on.
+     *
+     * A scan of a real WordPress tree spends its time in two silent places —
+     * parsing, and the interprocedural fixed point — and a client theme with
+     * reference trees took seven and a half minutes without saying anything,
+     * which reads as a hang.
+     *
+     * Only for a decorated stderr. Carriage returns become thousands of lines
+     * in a CI log or a redirect, and a scan small enough not to need a bar
+     * would only flicker.
+     */
+    private function progressFor(OutputInterface $stderr, int $fileCount): ScanProgress
+    {
+        if (! $stderr->isDecorated() || $fileCount < self::PROGRESS_FILE_THRESHOLD) {
+            return new NullScanProgress();
+        }
+
+        return new ConsoleScanProgress($stderr);
     }
 
     private static function workingDirectory(): string
