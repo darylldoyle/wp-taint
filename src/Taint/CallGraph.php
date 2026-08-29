@@ -58,6 +58,16 @@ final class CallGraph
      */
     private array $imprecise = [];
 
+    /**
+     * Function keys something in the scan calls.
+     *
+     * The reverse of `$edges`, kept as it is built rather than derived on
+     * demand: it is asked once per function per analysis round.
+     *
+     * @var array<string, true>
+     */
+    private array $called = [];
+
     public function addFunction(string $key): void
     {
         $this->known[$key] = true;
@@ -67,7 +77,26 @@ final class CallGraph
     {
         if (! in_array($to, $this->edges[$from] ?? [], true)) {
             $this->edges[$from][] = $to;
+            $this->called[$to] = true;
         }
+    }
+
+    /**
+     * Does anything in the scanned code call this function?
+     *
+     * "No" is what makes a function an entry point: WordPress calls it, a theme
+     * calls it, or it is a template the runtime includes. Its parameters arrive
+     * from outside and nothing in the scan says what they hold.
+     *
+     * A hook callback with a visible `apply_filters()` dispatch does have a
+     * caller, and the arguments at that dispatch are readable — so it is not an
+     * entry point. One registered on `init` is, because core dispatches it and
+     * core is not being scanned. The hook graph is already folded into these
+     * edges, so the distinction costs nothing to make.
+     */
+    public function hasCaller(string $key): bool
+    {
+        return isset($this->called[$key]);
     }
 
     public function addExternal(string $from, string $identity): void

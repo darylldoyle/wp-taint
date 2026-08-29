@@ -240,6 +240,7 @@ final class Scanner
             $resolver,
             $this->options,
             $includes,
+            $callGraph,
         );
         $extractor = new SummaryExtractor($analyzer, $this->options);
         $interprocedural = new InterproceduralResolver($analyzer, $extractor, $this->options, $this->jobs);

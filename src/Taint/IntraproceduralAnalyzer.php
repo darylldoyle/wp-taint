@@ -22,6 +22,12 @@ final class IntraproceduralAnalyzer
         private readonly CallResolver $resolver,
         private readonly AnalysisOptions $options,
         private readonly ?IncludeGraph $includes = null,
+        /**
+         * Used for one question: does anything in the scan call this function?
+         * Null means the caller did not build a graph, and every function is
+         * then treated as an entry point — the behaviour before there was one.
+         */
+        private readonly ?CallGraph $callGraph = null,
     ) {
     }
 
@@ -60,6 +66,7 @@ final class IntraproceduralAnalyzer
             $this->options,
             $seedParameterIndex,
             $collectFindings,
+            $this->callGraph,
         ))->run();
     }
 }

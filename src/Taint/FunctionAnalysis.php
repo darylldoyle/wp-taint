@@ -165,6 +165,7 @@ final class FunctionAnalysis
         private readonly AnalysisOptions $options,
         private readonly ?int $seedParameterIndex,
         private readonly bool $collectFindings,
+        private readonly ?CallGraph $callGraph = null,
     ) {
         $this->state = new TaintState();
         $this->types = new ClassTypeMap();
@@ -608,7 +609,7 @@ final class FunctionAnalysis
      */
     private function seedUnknownParameters(): void
     {
-        if (! $this->options->unknownProvenance) {
+        if (! $this->options->unknownProvenance || ! $this->isEntryPoint()) {
             return;
         }
 
@@ -633,6 +634,29 @@ final class FunctionAnalysis
                 ),
             );
         }
+    }
+
+    /**
+     * Does this function's arguments arrive from outside the scanned code?
+     *
+     * Only then is a parameter's provenance actually unknown. Marking every
+     * parameter meant marking ones the scan can answer for itself:
+     *
+     *     function acme_render( $title ) { echo $title; }
+     *     acme_render( esc_html( $x ) );          // we can read this
+     *
+     * The caller settles that, and the summary already carries what it passed.
+     * What is genuinely unknown is a function nothing in the scan calls — a
+     * callback on a core hook, a public API a theme uses, a template WordPress
+     * includes. The call graph already folds in hook dispatches, so a callback
+     * whose `apply_filters()` we *can* see is not an entry point and its
+     * arguments are read from the dispatch like any other call.
+     *
+     * With no graph, everything is an entry point, which is where this started.
+     */
+    private function isEntryPoint(): bool
+    {
+        return $this->callGraph === null || ! $this->callGraph->hasCaller($this->context->key);
     }
 
     /**
