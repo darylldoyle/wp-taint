@@ -35,6 +35,9 @@ output rather than in the findings.
 | [Pluggable functions a plugin redefines outright](#escaping-must-survive-to-the-point-of-output) | Misses |
 | [Stored `unserialize()` needs a precondition the engine cannot check](#stored-object-injection-is-a-separate-lower-severity) | Neither |
 | [`esc_sql()` outside a readable quote position](#esc_sql-is-only-credited-inside-quotes) | Misses |
+| [`$_FILES['f']['tmp_name']` is treated as PHP's own path](#files-sub-keys-are-phps-or-the-clients-not-all-one-thing) | Misses |
+| [A sanitiser at input is credited at output](#a-sanitiser-at-input-is-credited-at-output) | Misses |
+| [A CSV formula prefix spelled any other way](#the-csv-neutraliser-the-rule-asks-for-is-recognised) | Over-reports |
 | [Stored sources carry no `path` or `url` taint](#stored-sources-carry-html-and-sql-taint-only-not-path-or-url) | Misses |
 | [A callable that cannot be traced to a name](#dynamic-calls-are-followed-as-far-as-the-value-can-be-traced) | Configurable |
 | [An `include` whose path will not fold](#include-and-require-are-followed-unless-the-path-is-computed) | Misses |
@@ -56,6 +59,7 @@ output rather than in the findings.
 | [An option name anchored out of sight](#an-option-name-assembled-out-of-sight-is-assumed-to-be-anchored) | Misses |
 | [An allowlist gate on an option name](#an-option-name-assembled-out-of-sight-is-assumed-to-be-anchored) | Over-reports |
 | [`register_rest_route()` options built conditionally](#register_rest_route-options-are-folded-not-traced) | Neither |
+| [A `sanitize_callback` that is present but useless](#register_setting-is-judged-on-its-arguments-alone) | Misses |
 | [A loader component that is neither `$this` nor a local `new`](#hooks-registered-through-a-wrapper-are-followed-by-name) | Misses |
 
 **Parsing and scope**
@@ -261,6 +265,45 @@ style rule, and this file is about security: WP Super Cache writes the safe shap
 32 times and being told all 32 were wrong is how a rule teaches people to stop
 reading it.
 
+### Output constructs carry three sinks each
+
+`echo`, `print`, `printf`, `vprintf` and `var_dump` each report three separate
+things about the same value: a traced flow to `html`, a value nothing vouches
+for, and escaping a filter undid. `printf()` and its relatives had only the
+first for a while, which cost two labelled true positives on a third-party
+suite — one with the taint in the format string and one in an argument.
+
+**What is missed.** An output construct not in the catalogue. A template engine
+that writes to the response itself, or a framework's own renderer, is invisible
+unless it is added under `[[sinks]]`.
+
+### A sanitiser at input is credited at output
+
+```php
+$q = sanitize_text_field( wp_unslash( $_GET['s'] ?? '' ) );
+echo '<h2>Results for: ' . $q . '</h2>';        // not reported
+```
+
+`sanitize_text_field()` strips tags, so the value cannot carry HTML afterwards
+and the echo is safe in a text context. The taint is cleared at the sanitiser
+and nothing puts it back.
+
+A stricter reading — WordPress's convention is to escape on output whatever was
+done on input, and WPCS does not accept `sanitize_text_field()` as an output
+escaper — would report it. Two labelled cases in a third-party suite expect
+that, and they are counted as misses rather than argued with.
+
+The reason for the looser reading is what it would cost. `sanitize_text_field()`
+into a text context is among the most common correct lines in WordPress, and
+reporting all of them buys nothing a reviewer can act on: the value provably
+cannot carry a tag.
+
+It is not the looser reading in an *attribute*, where the quotes and ampersands
+`sanitize_text_field()` leaves do matter. That is the wrong-context rule's job
+and it fires there.
+
+**Direction:** under-approximating, deliberately.
+
 ### Escaping must survive to the point of output
 
 Escaping is called *late* escaping because it has to be the last thing that
@@ -355,6 +398,26 @@ working even though the answer is wrong.
 outright rather than filter. And a filter reached inside a function whose body
 the scan cannot see.
 
+### The CSV neutraliser the rule asks for is recognised
+
+```php
+$name = preg_replace( '/^([=+\-@])/', "'$1", $row['name'] );
+fputcsv( $out, array( $name ) );                // not reported
+```
+
+A spreadsheet treats a cell beginning `=`, `+`, `-` or `@` as a formula, and
+prefixing one with an apostrophe, tab or space stops that. Asking for something
+and then not crediting it when it is done is the same defect as advice that
+cannot be followed.
+
+One shape counts: anchored at the start, a class covering all four characters,
+and a replacement whose *first* character is the neutraliser. `$1'` puts the
+apostrophe after the `=` and neutralises nothing, so it still reports.
+
+**What is missed.** Any other spelling — a `str_starts_with()` test and a
+concatenation, a `substr()` check, an allowlist of known-safe values. Those
+clear nothing and the finding stands.
+
 ### Stored object injection is a separate, lower severity
 
 `unserialize()` on data from an option, post meta or a database row instantiates
@@ -394,6 +457,39 @@ a value no protection, so they deliberately do not count as being in quotes.
 the string is not built where the sink is — the value has to reach a sink whose
 query is a concatenation or an interpolation for the position to be readable at
 all.
+
+### `$_FILES` sub-keys are PHP's or the client's, not all one thing
+
+```php
+file_get_contents( $_FILES['import']['tmp_name'] );   // not reported
+copy( $upload['tmp_name'], WP_CONTENT_DIR . '/' . $_FILES['import']['name'] );  // reported
+```
+
+PHP writes `tmp_name`, `size` and `error` itself. `tmp_name` is a path under
+`upload_tmp_dir` that the client never chose, and reading it is the only way to
+read an upload at all. The client chooses `name`, `type` and `full_path`, and
+those stay tainted.
+
+`sub_keys` on a `[[sources]]` entry says which second-level keys are the
+attacker's, for a superglobal whose first level is a name the code picks. Only
+`$_FILES` has that shape; `$_SERVER`'s `keys` allowlist works one level up and
+could not express it.
+
+The read is followed through plain assignments, because the two-statement
+spelling is as common as the one-expression one:
+
+```php
+$csv = $_FILES['subsidy_csv'];
+$this->generate_zip( $csv['tmp_name'] );
+```
+
+**What is missed.** Assignments only. A value merged from two branches, or
+carried through a function, is not followed — the base has to reach the
+superglobal fetch through assignments alone. A computed second-level key stays
+tainted, the same way `keys` treats one: someone who chooses the index chooses
+the value.
+
+**Direction:** under-approximating at `tmp_name`, deliberately.
 
 ### Stored sources carry HTML and SQL taint only, not path or url
 
@@ -776,6 +872,26 @@ Also unmodelled: an allowlist gate. WooCommerce validates with
 `in_array( $setting_id, $valid_setting_ids, true )` and `continue`, which makes
 the write safe with no literal anywhere in the name. Recognising that needs the
 guard's branch, and would be this engine's first path-sensitive analysis.
+
+### `register_setting()` is judged on its arguments alone
+
+`options.php` writes whatever is posted for a registered setting, so a missing
+`sanitize_callback` is the whole finding. There is no flow to follow: core reads
+`$_POST` and core writes the option.
+
+**What it will not claim.** Arguments it cannot read. A registration built
+conditionally, spread, or handed in through a variable is recorded as unresolved
+rather than guessed at, because a wrong answer is either a stored-XSS hole
+reported or missed.
+
+The pre-4.7 signature passed a callable as the third argument, and a plugin
+still using it has named something to clean the value, so a non-array third
+argument is accepted.
+
+A `sanitize_callback` that is present but useless — `'__return_true'`, or one
+that returns its argument — is accepted. Judging what a named callback does is
+the call graph's job and belongs in its own rule, the way the REST
+permission-callback rule already does it.
 
 ### `register_rest_route()` options are folded, not traced
 
