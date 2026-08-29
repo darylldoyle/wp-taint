@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Rules;
 
+use Enshrined\WpTaint\Finding\Finding;
 use Enshrined\WpTaint\Hooks\HookGraph;
 use Enshrined\WpTaint\Taint\CallGraph;
+use Enshrined\WpTaint\Taint\TaintSet;
 
 /**
  * Shared state for structural rules across the whole scan.
@@ -22,6 +24,46 @@ final class RuleContext
 {
     /** @var array<string, UnresolvedHook> */
     private array $unresolvedHooks = [];
+
+    /**
+     * Findings whose verdict needs a function summary, which does not exist
+     * yet when structural rules run.
+     *
+     * Structural rules walk the AST before the taint pass, and the AST is
+     * released as soon as they finish — the two passes cannot swap order and
+     * cannot coexist. What a rule *can* do is record the finding it would
+     * emit together with the question that decides it, and let the scanner
+     * adjudicate once summaries exist.
+     *
+     * The one question currently asked: does taint of these kinds survive
+     * from the callback's first parameter to its return? `register_setting()`
+     * with a user-defined `sanitize_callback` is the customer — a callback
+     * that hands the posted value back unchanged cleans nothing, and only its
+     * summary can say so.
+     *
+     * @var list<array{finding: Finding, callbackKey: string, survivesKinds: TaintSet}>
+     */
+    private array $deferred = [];
+
+    /**
+     * Emit this finding later, unless the callback's summary clears the kinds.
+     */
+    public function deferUnlessCallbackClears(Finding $finding, string $callbackKey, TaintSet $kinds): void
+    {
+        $this->deferred[] = [
+            'finding' => $finding,
+            'callbackKey' => strtolower(ltrim($callbackKey, '\\')),
+            'survivesKinds' => $kinds,
+        ];
+    }
+
+    /**
+     * @return list<array{finding: Finding, callbackKey: string, survivesKinds: TaintSet}>
+     */
+    public function deferredFindings(): array
+    {
+        return $this->deferred;
+    }
 
     private ?CallGraph $callGraph = null;
 

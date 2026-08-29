@@ -11,6 +11,8 @@ use Enshrined\WpTaint\Registry\Registry;
 use Enshrined\WpTaint\Rules\AstHelper;
 use Enshrined\WpTaint\Rules\RuleContext;
 use Enshrined\WpTaint\Rules\StructuralRule;
+use Enshrined\WpTaint\Taint\TaintKind;
+use Enshrined\WpTaint\Taint\TaintSet;
 use PhpParser\Node;
 
 /**
@@ -47,10 +49,15 @@ use PhpParser\Node;
  * "present but useless", and it needs no judgement — the same table that stops
  * these passing for sanitisers in dataflow says why.
  *
- * A *user* callback that reaches no catalogue sanitiser is accepted, because
- * absence proves nothing there: an allowlist check —
- * `return 'enabled' === $value ? 'enabled' : 'disabled';` — reaches no sanitiser
- * and is exactly right.
+ * A *user* callback is judged by its summary, which does not exist yet when
+ * this rule runs — so the finding is deferred and the scanner adjudicates it
+ * once the taint pass has summarised the callback. The question is whether
+ * {@see \Enshrined\WpTaint\Taint\TaintKind::Storage} survives from the
+ * callback's first parameter to its return: every sanitizer clears it and no
+ * propagator does, so an allowlist check —
+ * `return 'enabled' === $value ? 'enabled' : 'disabled';` — comes back clean
+ * while `return trim( $value );` does not. A callback the scan cannot
+ * summarise stays accepted, because absence proves nothing.
  */
 final class SettingWithoutSanitizeCallback implements StructuralRule
 {
@@ -136,7 +143,7 @@ final class SettingWithoutSanitizeCallback implements StructuralRule
             $callback = AstHelper::arrayItem($options, 'sanitize_callback');
 
             if ($callback !== null) {
-                return $this->inspectCallback($callback, $call, $file, $registry);
+                return $this->inspectCallback($callback, $call, $file, $registry, $context);
             }
         }
 
@@ -155,35 +162,118 @@ final class SettingWithoutSanitizeCallback implements StructuralRule
     /**
      * A named callback the catalogue knows passes its argument through.
      */
+    /**
+     * The function a callback expression names, when it is nameable.
+     *
+     * Two spellings: a plain string, and the one namespaced plugins write —
+     * `__NAMESPACE__ . '\\acme_tidy'`, which is a concat of a magic constant
+     * and a literal rather than a string node.
+     */
+    private static function callbackName(Node\Expr $callback, ?string $namespace): ?string
+    {
+        if ($callback instanceof Node\Scalar\String_) {
+            return rtrim(ltrim($callback->value, '\\'), '\\');
+        }
+
+        // `__NAMESPACE__ . '\\acme_tidy'`, the spelling namespaced plugins use.
+        // php-cfg's name resolution has already turned the magic constant into
+        // a string literal by the time the stored AST is read, so both halves
+        // fold; the MagicConst branch covers an AST that has not been through
+        // it.
+        if ($callback instanceof Node\Expr\BinaryOp\Concat) {
+            $left = self::callbackName($callback->left, $namespace);
+            $right = $callback->right instanceof Node\Scalar\String_
+                ? ltrim($callback->right->value, '\\')
+                : null;
+
+            return $left !== null && $right !== null ? $left . '\\' . $right : null;
+        }
+
+        if ($callback instanceof Node\Scalar\MagicConst\Namespace_) {
+            return $namespace;
+        }
+
+        return null;
+    }
+
+    /**
+     * The file's namespace, for resolving `__NAMESPACE__` in a callback.
+     *
+     * The first declaration only. A file with two namespace blocks registering
+     * settings in both is a shape nobody writes, and resolving against the
+     * wrong one would name a function that does not exist — which fails safe,
+     * since a key with no summary drops the deferred finding.
+     *
+     * @param list<Node\Stmt> $ast
+     */
+    private static function namespaceOf(array $ast): ?string
+    {
+        foreach ($ast as $node) {
+            if ($node instanceof Node\Stmt\Namespace_ && $node->name !== null) {
+                return $node->name->toString();
+            }
+        }
+
+        return null;
+    }
+
     private function inspectCallback(
         Node\Expr $callback,
         Node\Expr\FuncCall $call,
         ParsedFile $file,
         Registry $registry,
+        RuleContext $context,
     ): ?Finding {
-        if (! $callback instanceof Node\Scalar\String_ || str_contains($callback->value, '::')) {
+        $name = self::callbackName($callback, self::namespaceOf($file->ast()));
+
+        if ($name === null || str_contains($name, '::')) {
             return null;
         }
 
-        $matcher = \Enshrined\WpTaint\Registry\Matcher::function($callback->value);
+        $matcher = \Enshrined\WpTaint\Registry\Matcher::function($name);
 
-        if ($registry->sanitizer($matcher) !== null || $registry->propagator($matcher) === null) {
+        if ($registry->sanitizer($matcher) !== null) {
             return null;
         }
 
-        return StructuralFinding::at(
-            $call,
-            $file,
-            $registry,
-            self::RULE,
-            Severity::Medium,
-            sprintf(
-                'The sanitize_callback here is %s(), which returns its argument essentially unchanged, so '
-                    . 'options.php stores whatever is posted for this setting. Naming a pass-through as the '
-                    . 'cleaner is the same as naming none.',
-                $callback->value,
+        if ($registry->propagator($matcher) !== null) {
+            return StructuralFinding::at(
+                $call,
+                $file,
+                $registry,
+                self::RULE,
+                Severity::Medium,
+                sprintf(
+                    'The sanitize_callback here is %s(), which returns its argument essentially unchanged, so '
+                        . 'options.php stores whatever is posted for this setting. Naming a pass-through as the '
+                        . 'cleaner is the same as naming none.',
+                    $name,
+                ),
+                self::REGISTRAR,
+            );
+        }
+
+        // A user-defined callback. Its summary decides — see the class
+        // docblock — and does not exist yet, so the finding is deferred and
+        // the scanner drops it unless Storage survives the callback.
+        $context->deferUnlessCallbackClears(
+            StructuralFinding::at(
+                $call,
+                $file,
+                $registry,
+                self::RULE,
+                Severity::Low,
+                sprintf(
+                    'The sanitize_callback here is %s(), and nothing in its body clears what is posted: the '
+                        . 'value it returns is the value it was given. options.php stores that return.',
+                    $name,
+                ),
+                self::REGISTRAR,
             ),
-            self::REGISTRAR,
+            $name,
+            TaintSet::of(TaintKind::Storage),
         );
+
+        return null;
     }
 }

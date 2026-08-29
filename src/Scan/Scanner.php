@@ -292,6 +292,24 @@ final class Scanner
 
         $resolution = $interprocedural->resolve($contexts, $this->progress);
 
+        // Findings a structural rule could not decide alone. The rule recorded
+        // what it would emit and which callback settles it; the summary — which
+        // only now exists — gives the verdict. A callback the scan never
+        // summarised drops the finding, because absence proves nothing.
+        foreach ($ruleContext->deferredFindings() as $deferred) {
+            $summary = $resolution['summaries']->get($deferred['callbackKey']);
+
+            if ($summary === null) {
+                continue;
+            }
+
+            if ($summary->returnTaintFor(0)->intersect($deferred['survivesKinds'])->isEmpty()) {
+                continue;
+            }
+
+            $findings[] = $deferred['finding'];
+        }
+
         /** @var list<AnalysisWarning> $warnings */
         $warnings = [];
 

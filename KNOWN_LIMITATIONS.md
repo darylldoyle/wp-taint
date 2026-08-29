@@ -58,7 +58,6 @@ output rather than in the findings.
 | [An option name anchored out of sight](#an-option-name-assembled-out-of-sight-is-assumed-to-be-anchored) | Misses |
 | [An allowlist gate on an option name](#an-option-name-assembled-out-of-sight-is-assumed-to-be-anchored) | Over-reports |
 | [`register_rest_route()` options built conditionally](#register_rest_route-options-are-folded-not-traced) | Neither |
-| [A user-defined `sanitize_callback` that cleans nothing](#register_setting-is-judged-on-its-arguments-alone) | Misses |
 | [A loader component declared in a different file](#hooks-registered-through-a-wrapper-are-followed-by-name) | Misses |
 | [A shortcode or block callback that is never registered](#a-printed-return-shortcode-handlers-and-block-renderers) | Misses |
 
@@ -1000,9 +999,14 @@ A `sanitize_callback` naming a catalogue *propagator* is reported:
 unchanged, and naming one as the cleaner is the same as naming none. The same
 table that stops these passing for sanitisers in dataflow says why.
 
-A *user* callback that reaches no catalogue sanitiser is accepted, because
-absence proves nothing there: `return 'enabled' === $value ? 'enabled' :
-'disabled';` reaches no sanitiser and is exactly right.
+A *user* callback is judged by its own summary, adjudicated after the taint
+pass because structural rules run before summaries exist. The question is
+whether `storage` taint survives from the callback's parameter to its return —
+every sanitizer clears that kind and no propagator does — so
+`return trim( $value );` reports at `low` while
+`return 'enabled' === $value ? 'enabled' : 'disabled';` stays silent with no
+catalogue sanitizer anywhere in its body. A callback the scan cannot summarise
+stays accepted, because absence proves nothing.
 
 ### `register_rest_route()` options are folded, not traced
 

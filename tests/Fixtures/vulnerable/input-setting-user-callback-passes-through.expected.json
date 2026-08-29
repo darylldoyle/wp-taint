@@ -1,0 +1,10 @@
+{
+    "expectation": "vulnerable",
+    "findings": [
+        {
+            "ruleId": "wp.input.setting-without-sanitize",
+            "kind": "authz",
+            "line": 15
+        }
+    ]
+}
