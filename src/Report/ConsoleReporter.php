@@ -8,6 +8,7 @@ use Enshrined\WpTaint\Finding\Finding;
 use Enshrined\WpTaint\Finding\Severity;
 use Enshrined\WpTaint\Finding\TraceStep;
 use Enshrined\WpTaint\Scan\ScanResult;
+use Enshrined\WpTaint\Taint\AnalysisWarning;
 
 /**
  * The primary human interface.
@@ -18,6 +19,14 @@ use Enshrined\WpTaint\Scan\ScanResult;
  */
 final class ConsoleReporter implements Reporter
 {
+    /**
+     * How many locations to name per distinct warning before summarising.
+     *
+     * Enough to go and look, few enough that a scan producing hundreds does not
+     * bury its own findings.
+     */
+    private const MAX_WARNING_LOCATIONS = 5;
+
     public function __construct(private readonly Ansi $ansi)
     {
     }
@@ -269,11 +278,56 @@ final class ConsoleReporter implements Reporter
             )) . "\n";
         }
 
-        foreach ($result->warnings as $warning) {
-            $out .= '  ' . $this->ansi->red('warning: ' . $warning->message) . "\n";
-        }
+        $out .= $this->renderWarnings($result->warnings);
 
         return $out . $rule . "\n" . $this->renderExplainHint($result, $options);
+    }
+
+    /**
+     * Warnings, with the function they are about.
+     *
+     * The warning has always carried a file and a function name and the
+     * reporter printed neither, so three identical lines saying "results for
+     * this function may be incomplete" left no way to find out which function.
+     * Repeats are grouped for the same reason: the count is the useful part,
+     * the wall of identical lines is not.
+     *
+     * @param list<AnalysisWarning> $warnings
+     */
+    private function renderWarnings(array $warnings): string
+    {
+        if ($warnings === []) {
+            return '';
+        }
+
+        /** @var array<string, list<AnalysisWarning>> $grouped */
+        $grouped = [];
+
+        foreach ($warnings as $warning) {
+            $grouped[$warning->message][] = $warning;
+        }
+
+        $out = '';
+
+        foreach ($grouped as $message => $group) {
+            $out .= '  ' . $this->ansi->red('warning: ' . $message) . "\n";
+
+            foreach (array_slice($group, 0, self::MAX_WARNING_LOCATIONS) as $warning) {
+                $out .= '    ' . $this->ansi->dim(sprintf(
+                    '%s  %s()',
+                    $warning->file,
+                    $warning->functionName,
+                )) . "\n";
+            }
+
+            $remaining = count($group) - self::MAX_WARNING_LOCATIONS;
+
+            if ($remaining > 0) {
+                $out .= '    ' . $this->ansi->dim(sprintf('and %d more', $remaining)) . "\n";
+            }
+        }
+
+        return $out;
     }
 
     /**

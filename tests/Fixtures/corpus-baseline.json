@@ -22,7 +22,7 @@
             "critical": 1,
             "high": 1
         },
-        "warnings": 1,
+        "warnings": 0,
         "parseFailures": 0
     },
     "cookie-law-info": {
@@ -32,7 +32,7 @@
             "critical": 1,
             "high": 5
         },
-        "warnings": 1,
+        "warnings": 0,
         "parseFailures": 0
     },
     "duplicate-post": {
@@ -51,7 +51,7 @@
             "high": 12,
             "medium": 4
         },
-        "warnings": 1,
+        "warnings": 0,
         "parseFailures": 0
     },
     "wp-super-cache": {
@@ -71,7 +71,7 @@
             "high": 26,
             "medium": 13
         },
-        "warnings": 4,
+        "warnings": 0,
         "parseFailures": 0
     }
 }

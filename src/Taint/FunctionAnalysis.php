@@ -1607,6 +1607,26 @@ final class FunctionAnalysis
      */
     private function transferAssertion(Op\Expr\Assertion $op): bool
     {
+        // Someone else already writes this operand, so writing it here makes
+        // two ops disagree about one value and the fixed point never settles.
+        //
+        //     if ( isset( $GLOBALS['post'] ) && $GLOBALS['post'] instanceof WP_Post ) {
+        //
+        // php-cfg gives the assertion the *same result operand* the array read
+        // produces. The read said `(none)`, the assertion passed
+        // `escape_voided` through, and the two took turns for all 64 iterations
+        // — one function in a real theme, found by naming it in the warning.
+        //
+        // Doing nothing leaves the value to the op that genuinely produces it,
+        // which is the answer a pass-through would have copied anyway. For the
+        // narrowing branch it costs the narrowing, which can only keep taint
+        // that would otherwise be cleared — the safe direction, and not a
+        // direction the path-sensitivity fixtures travel: those get a fresh
+        // operand per branch, with the assertion as its only writer.
+        if (OperandHelper::isWrittenElsewhere($op->result, $op)) {
+            return false;
+        }
+
         if (! AssertionNarrowing::narrows($op)) {
             return $this->transferPassThrough(
                 $op,

@@ -90,6 +90,36 @@ final class OperandHelper
      * expression that *computed* the value is the fetch, and that is what
      * callers want.
      */
+    /**
+     * Does an op other than this one write this operand?
+     *
+     * php-cfg keeps every writer in `Operand::$ops`, and one operand with two
+     * writers that disagree is this project's recurring cause of a fixed point
+     * that never settles. Asking before writing is cheaper than diagnosing it
+     * afterwards.
+     */
+    public static function isWrittenElsewhere(Operand $operand, Op $op): bool
+    {
+        foreach ($operand->ops as $writer) {
+            if ($writer === $op) {
+                continue;
+            }
+
+            if ($writer instanceof Op\Expr && $writer->result === $operand) {
+                return true;
+            }
+
+            if (
+                ($writer instanceof Op\Expr\Assign || $writer instanceof Op\Expr\AssignRef)
+                && $writer->var === $operand
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public static function definingOp(?Operand $operand): ?Op
     {
         if ($operand === null) {
