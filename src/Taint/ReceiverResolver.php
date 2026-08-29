@@ -31,14 +31,21 @@ final class ReceiverResolver
             return $context->className;
         }
 
-        if ($name !== null && in_array(strtolower($name), self::WPDB_RECEIVER_NAMES, true)) {
-            return 'wpdb';
-        }
-
+        // The convention is a fallback, not an override. `$wpdb` is a global
+        // with no declaration to read, so the name is all there is — but
+        // `function f( Acme_DB $db )` says what it is, and reading `$db` as the
+        // database handle there resolved `$db->get_table_name()` to
+        // `wpdb::get_table_name()`, a method nothing defines. The call then
+        // failed to resolve, its origin was "unaccounted for", and the table
+        // name it returns was reported as an unprepared query.
         $tracked = $types->classOf($receiver);
 
         if ($tracked !== null) {
             return $tracked;
+        }
+
+        if ($name !== null && in_array(strtolower($name), self::WPDB_RECEIVER_NAMES, true)) {
+            return 'wpdb';
         }
 
         // `$this->wpdb->query()` and `$this->db->query()`: the receiver is a
@@ -49,13 +56,20 @@ final class ReceiverResolver
         if ($definition instanceof Op\Expr\PropertyFetch) {
             $property = OperandHelper::literalString($definition->name);
 
-            if ($property !== null && in_array(strtolower($property), self::WPDB_RECEIVER_NAMES, true)) {
-                return 'wpdb';
+            if ($property === null) {
+                return null;
             }
 
-            return $property === null
-                ? null
-                : $types->classOfProperty($this->classOf($definition->var, $context, $types), $property);
+            // Same order for the same reason: a declared `private Acme_DB $db`
+            // outranks the convention, and `$this->db` with nothing declared
+            // still falls back to it.
+            $declared = $types->classOfProperty($this->classOf($definition->var, $context, $types), $property);
+
+            if ($declared !== null) {
+                return $declared;
+            }
+
+            return in_array(strtolower($property), self::WPDB_RECEIVER_NAMES, true) ? 'wpdb' : null;
         }
 
         return null;
