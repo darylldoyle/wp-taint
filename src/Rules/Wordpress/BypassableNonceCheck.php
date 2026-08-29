@@ -24,9 +24,23 @@ use PhpParser\PrettyPrinter\Standard;
  * ```
  *
  * Send no `nonce` parameter at all and `isset()` is false, so the conjunction is
- * false and the nonce is never verified. The guard reads as "check the nonce if
- * one was supplied", which is the same as not checking it: an attacker chooses
- * what to supply.
+ * false, so `wp_die()` never runs. The guard reads as "check the nonce if one
+ * was supplied", which is the same as not checking it: an attacker chooses what
+ * to supply.
+ *
+ * ## The negation is the whole rule
+ *
+ * Without it the same shape is the correct idiom and fails closed:
+ *
+ * ```php
+ * if ( isset( $_POST['_wpnonce'] ) && wp_verify_nonce( $_POST['_wpnonce'], 'x' ) ) {
+ *     save();
+ * }
+ * ```
+ *
+ * Omit the nonce and nothing is saved. Matching on presence rather than parity
+ * reported that in seven plugins and none of the real shape, which is telling
+ * people a working CSRF check does not work.
  *
  * ## The precedence bug underneath
  *
@@ -73,7 +87,7 @@ final class BypassableNonceCheck implements StructuralRule
                 continue;
             }
 
-            if (! $this->verifiesSameValue($node->right, $guarded, $printer)) {
+            if (! $this->deniesOnFailure($node->right, $guarded, $printer, false)) {
                 continue;
             }
 
@@ -113,11 +127,67 @@ final class BypassableNonceCheck implements StructuralRule
     }
 
     /**
-     * Does the right-hand side verify a nonce read from exactly that value?
+     * Does the right-hand side *deny* when the nonce fails to verify?
+     *
+     * The negation is the whole rule, and matching without it inverted the
+     * answer on every case in the corpus:
+     *
+     * ```php
+     * if ( isset( $_POST['_wpnonce'] ) && wp_verify_nonce( $_POST['_wpnonce'], 'x' ) ) {
+     *     save();          // safe: no nonce, conjunction false, nothing happens
+     * }
+     *
+     * if ( isset( $_REQUEST['nonce'] ) && ! wp_verify_nonce( $_REQUEST['nonce'], 'x' ) ) {
+     *     wp_die();        // bypassable: no nonce, conjunction false, no wp_die
+     * }
+     * ```
+     *
+     * Both spell "check the nonce if one was supplied". Only the second turns
+     * that into a way in, because only the second is the guard that stops the
+     * request. Seven plugins wrote the first and were told their CSRF check did
+     * not work.
+     *
+     * Parity, not presence: `! ( isset( $x ) && verify( $x ) )` is the same safe
+     * shape written inside a negation, and Jetpack's disconnect handler is
+     * exactly that.
      *
      * Compared by printed source rather than by node identity, because
      * `$_REQUEST['nonce']` in the isset() and in the call are different nodes
      * saying the same thing. Crude, and exact enough for a shape this specific.
+     */
+    private function deniesOnFailure(Node\Expr $node, string $guarded, Standard $printer, bool $negated): bool
+    {
+        if ($node instanceof Node\Expr\BooleanNot) {
+            return $this->deniesOnFailure($node->expr, $guarded, $printer, ! $negated);
+        }
+
+        // `false === wp_verify_nonce( … )` is the same denial spelled out.
+        if (
+            $node instanceof Node\Expr\BinaryOp\Identical
+            || $node instanceof Node\Expr\BinaryOp\Equal
+        ) {
+            foreach ([[$node->left, $node->right], [$node->right, $node->left]] as [$operand, $other]) {
+                if (self::isFalseLiteral($operand)) {
+                    return $this->deniesOnFailure($other, $guarded, $printer, ! $negated);
+                }
+            }
+        }
+
+        if ($node instanceof Node\Expr\BinaryOp\BooleanAnd || $node instanceof Node\Expr\BinaryOp\BooleanOr) {
+            return $this->deniesOnFailure($node->left, $guarded, $printer, $negated)
+                || $this->deniesOnFailure($node->right, $guarded, $printer, $negated);
+        }
+
+        return $negated && $this->verifiesSameValue($node, $guarded, $printer);
+    }
+
+    private static function isFalseLiteral(Node\Expr $node): bool
+    {
+        return $node instanceof Node\Expr\ConstFetch && strtolower($node->name->toString()) === 'false';
+    }
+
+    /**
+     * Does this expression verify a nonce read from exactly that value?
      */
     private function verifiesSameValue(Node\Expr $right, string $guarded, Standard $printer): bool
     {
