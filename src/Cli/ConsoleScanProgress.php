@@ -49,6 +49,9 @@ final class ConsoleScanProgress implements ScanProgress
 
     private ?int $total = null;
 
+    /** Whether anything has been written that needs erasing. */
+    private bool $drawn = false;
+
     private readonly float $startedAt;
 
     public function __construct(private readonly OutputInterface $output)
@@ -92,6 +95,7 @@ final class ConsoleScanProgress implements ScanProgress
         if ($total === null || $total === 0) {
             // No total: say what is happening and leave it on screen. A bar
             // that cannot fill is worse than a sentence.
+            $this->drawn = true;
             $this->output->write(sprintf("\r\033[K  %s…", $this->label));
 
             return;
@@ -133,6 +137,7 @@ final class ConsoleScanProgress implements ScanProgress
         // An uncounted phase still has something to report. The fixed point
         // knows which round it is on, and "round 7" moving is the difference
         // between working and hung.
+        $this->drawn = true;
         $this->output->write(sprintf("\r\033[K  %s… round %d", $this->label, $this->done));
     }
 
@@ -147,8 +152,18 @@ final class ConsoleScanProgress implements ScanProgress
             $this->bar->finish();
             $this->bar->clear();
             $this->bar = null;
+            $this->drawn = false;
+            $this->output->write("\r\033[K");
+
+            return;
         }
 
-        $this->output->write("\r\033[K");
+        // Nothing was drawn, so there is nothing to erase. Writing the erase
+        // sequence anyway put a run of `[K` in front of the report whenever the
+        // scan finished inside the quiet period.
+        if ($this->drawn) {
+            $this->drawn = false;
+            $this->output->write("\r\033[K");
+        }
     }
 }

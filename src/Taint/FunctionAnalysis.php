@@ -84,6 +84,16 @@ final class FunctionAnalysis
     /** A hook dispatch whose result should lose any escaping its arguments carried. */
     private ?CallTarget $voidingCall = null;
 
+    /**
+     * The op of {@see $voidingCall}, kept so the trace can point at it.
+     *
+     * Without it the finding said "this value was escaped and then filtered"
+     * and the trace showed the escape and the echo and nothing in between, so
+     * the one question a reader has — filtered *where*? — had no answer in the
+     * output.
+     */
+    private ?Op\Expr $voidingOp = null;
+
 
     private bool $collecting = false;
 
@@ -1779,7 +1789,15 @@ final class FunctionAnalysis
      */
     private function writeResult(Operand $result, TaintSet $taint, ?Provenance $provenance = null): bool
     {
-        $taint = $this->voidEscaping($taint);
+        $voided = $this->voidEscaping($taint);
+
+        // Say where. A step describing the propagation is the wrong answer to
+        // "filtered where?", and it was the only one in the trace.
+        if (! $voided->equals($taint)) {
+            $provenance = $this->voidProvenance($voided) ?? $provenance;
+        }
+
+        $taint = $voided;
 
         // The callee's return is not what this call evaluates to. It was still
         // analysed, which is the point: its sinks fired.
@@ -1819,6 +1837,7 @@ final class FunctionAnalysis
         // that run a filter and return the result — `get_the_title()` looks
         // like an accessor and is a filter in a coat.
         $this->voidingCall = $matcher !== null && $this->voidsEscaping($matcher, $call) ? $call : null;
+        $this->voidingOp = $this->voidingCall === null ? null : $op;
 
         $changed = $matcher === null ? false : $this->applyByRefEffect($op, $call, $matcher);
         $changed = ($matcher === null ? false : $this->joinTemplateScope($op, $call, $matcher)) || $changed;
@@ -2837,6 +2856,46 @@ final class FunctionAnalysis
     }
 
     /**
+     * The trace step for the call that voided the escaping.
+     *
+     * `wp_sprintf()` is the case that prompted this. It looks like `sprintf()`
+     * and is not:
+     *
+     *     $_fragment = apply_filters( 'wp_sprintf', $fragment, $arg );
+     *     if ( $_fragment !== $fragment ) {
+     *         $fragment = $_fragment;      // the callback's return, verbatim
+     *     }
+     *
+     * A theme escaping every argument and handing them to it is doing careful
+     * work, and being told "this value was escaped and then filtered" with no
+     * indication of which call did the filtering is not enough to act on.
+     */
+    private function voidProvenance(TaintSet $taint): ?Provenance
+    {
+        $call = $this->voidingCall;
+        $op = $this->voidingOp;
+
+        if ($call === null || $op === null) {
+            return null;
+        }
+
+        $name = $call->matcher?->describe() ?? 'This call';
+
+        return new Provenance(
+            TraceVerb::Propagate,
+            $op,
+            sprintf(
+                '%s runs a filter and returns what the filter gave back, so any escaping applied before this '
+                    . 'point is no longer guaranteed. Escape after this call rather than before it.',
+                $name,
+            ),
+            $call->arguments,
+            callee: $name,
+            imprecise: $taint->has(TaintKind::Unknown),
+        );
+    }
+
+    /**
      * A named condition on whether a sink fires for this particular value.
      *
      * `unanchored`: an identifier with any fixed fragment in it is a different,
@@ -3099,6 +3158,41 @@ final class FunctionAnalysis
         );
     }
 
+    /**
+     * Name the call that voided the escaping, in the message itself.
+     *
+     * "This value was escaped and then filtered" leaves the reader with the
+     * one question that matters — filtered *where?* — and a theme that escaped
+     * every argument before handing them to `wp_sprintf()` has no way to guess
+     * that `wp_sprintf()` is the filter. The trace has carried the answer since
+     * the void started recording a callee; this puts it on the line people read
+     * first.
+     *
+     * The earliest step is the right one: it is where the marker entered, so
+     * when the void happened inside a callee that callee gets named rather than
+     * whatever passed the value along afterwards.
+     *
+     * @param list<TraceStep> $trace
+     */
+    private static function messageFor(string $message, TaintKind $kind, array $trace): string
+    {
+        if ($kind !== TaintKind::EscapeVoided) {
+            return $message;
+        }
+
+        foreach ($trace as $step) {
+            if ($step->callee !== null && $step->kinds->has(TaintKind::EscapeVoided)) {
+                return sprintf(
+                    'This value was escaped and then passed through %s, which runs a filter, so the escaping no '
+                        . 'longer holds.',
+                    $step->callee,
+                );
+            }
+        }
+
+        return $message;
+    }
+
     private function emit(
         string $ruleId,
         TaintKind $kind,
@@ -3120,6 +3214,7 @@ final class FunctionAnalysis
         $this->emitted[$key] = true;
 
         $sinkStep = $this->traces->sinkStep($op, TaintSet::of($kind), $sinkDescription);
+        $trace = $this->traces->build($operand, $kind, $sinkStep);
 
         $this->findings[] = new Finding(
             $ruleId,
@@ -3130,8 +3225,8 @@ final class FunctionAnalysis
             $position['line'],
             $position['column'],
             $position['endColumn'],
-            $this->registry->ruleMessage($ruleId),
-            $this->traces->build($operand, $kind, $sinkStep),
+            self::messageFor($this->registry->ruleMessage($ruleId), $kind, $trace),
+            $trace,
             Fingerprint::compute($ruleId, $this->context->file->relativePath, $identity, $snippet),
             $this->imprecise,
             $identity,
