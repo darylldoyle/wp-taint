@@ -59,7 +59,7 @@ output rather than in the findings.
 | [An allowlist gate on an option name](#an-option-name-assembled-out-of-sight-is-assumed-to-be-anchored) | Over-reports |
 | [`register_rest_route()` options built conditionally](#register_rest_route-options-are-folded-not-traced) | Neither |
 | [A user-defined `sanitize_callback` that cleans nothing](#register_setting-is-judged-on-its-arguments-alone) | Misses |
-| [A loader component that is neither `$this` nor a local `new`](#hooks-registered-through-a-wrapper-are-followed-by-name) | Misses |
+| [A loader component declared in a different file](#hooks-registered-through-a-wrapper-are-followed-by-name) | Misses |
 | [A shortcode or block callback that is never registered](#a-printed-return-shortcode-handlers-and-block-renderers) | Misses |
 
 **Parsing and scope**
