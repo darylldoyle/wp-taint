@@ -274,6 +274,11 @@ for, and escaping a filter undid. `printf()` and its relatives had only the
 first for a while, which cost two labelled true positives on a third-party
 suite — one with the taint in the format string and one in an argument.
 
+`wp_add_inline_script()` is an output construct too, and a JavaScript one: it
+prints its argument inside a `<script>` block, so a single quote closes the
+string literal and the rest is code. No HTML escaper protects it;
+`wp_json_encode()` does.
+
 **What is missed.** An output construct not in the catalogue. A template engine
 that writes to the response itself, or a framework's own renderer, is invisible
 unless it is added under `[[sinks]]`.

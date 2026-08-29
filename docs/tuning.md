@@ -1523,3 +1523,59 @@ The one shape that does report is escaping something on the way *in*:
 Redundant rather than wrong — core escapes those attributes itself — and the
 advice attached to it is imperfect, since the `<img>` markup that comes back
 cannot be escaped afterwards. Rare enough to leave.
+
+
+## Reading the second suite's misses
+
+`ideas/wp-taint-analyser-fixtures` had reported `missing=10` on every run all
+along and had never been read finding by finding. Doing that split them three
+ways.
+
+**Three were not misses.** F14, F15 and O09 are found — reported as
+`wp.xss.unescaped-output` and `wp.xss.wrong-context-escape` where the suite's
+vocabulary expects `output.escape_invalidated` and `output.wrong_context_escape`.
+That is the adapter being deliberately conservative about which of our rule ids
+may claim which of theirs, not the engine failing to find the bug.
+
+**Two were missing catalogue entries.**
+
+    $body = wp_remote_retrieve_body( wp_remote_get( $endpoint ) );
+    echo $body;                                          // F17
+    update_option( 'cache', $body );                     // I08
+
+The endpoint may be one the plugin chose; the bytes that came back are not. It
+carries the stored kinds for the same reason `get_post_meta()` does, and no
+`path` or `url` for the same reason either.
+
+    wp_add_inline_script( 'app', "window.m = '" . $message . "';" );   // F18
+
+Prints into a `<script>` block, so a single quote closes the string literal and
+the rest is code. No HTML escaper protects it.
+
+**One was a real gap, and the largest of them.**
+
+    register_block_type( 'acme/card', array( 'render_callback' => 'acme_render' ) );
+
+`render_callback` appears in 110 files across the fifty-plugin corpus and 205
+across two real client projects. WordPress calls it and prints what it returns,
+so there is no `echo` in the plugin for a rule to find — the shortcode problem
+exactly, so it reuses that machinery. Only the lookup is new: the callback
+arrives under an array key rather than in a positional argument.
+
+Its parameters are deliberately not seeded, unlike a shortcode's. A block's
+inner content is already-rendered markup meant to be printed as it is, and a
+real client theme echoes that value four times over.
+
+### What is left
+
+    F03, I06   a shortcode handler with no add_shortcode() anywhere. Both rules
+               need the registration; convention is not a signal this reads.
+    F16        a closure capturing by reference across two hooks. use ( &$x )
+               writes back out to the enclosing scope and that is not modelled.
+
+F16 is the only one of the ten that is a gap rather than a decision, and it is
+the write direction of a boundary already crossed one way — the same shape as
+the paramToProperty work.
+
+    analyser-fixtures   missing 10 -> 7
+    corpus              1,326 -> 1,323

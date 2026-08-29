@@ -143,6 +143,10 @@ function acme_badge( $atts ) {
 The return is the output, because `do_shortcode()` prints it and there is no
 `echo` in the plugin to find.
 
+A dynamic block's `render_callback` is the same shape and is treated the same
+way. Its parameters are not seeded, though: a block's inner content is
+already-rendered markup meant to be printed as it is.
+
 A closure is the other half of the same problem. Its body is a separate
 function, so what it captured has to be carried across:
 

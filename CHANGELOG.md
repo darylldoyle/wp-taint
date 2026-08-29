@@ -30,9 +30,15 @@ will contain.
   capability checks, missing `permission_callback`, missing `sanitize_callback`
   on a registered setting, actionless nonces, bypassable nonce checks, guards
   that fall through.
-- Closures, shortcodes and other entry points: what a closure captured through
-  `use` is carried into its body, and a shortcode callback's attributes are
-  treated as post content while its return value is treated as output.
+- Closures, shortcodes, blocks and other entry points: what a closure captured
+  through `use` is carried into its body; a shortcode callback's attributes are
+  treated as post content and its return value as output; and a dynamic block's
+  `render_callback` return is treated as output too, because WordPress prints
+  it and there is no `echo` in the plugin to find.
+- Remote HTTP response bodies (`wp_remote_retrieve_body()` and the header
+  accessors) are sources: the endpoint may be one the plugin chose, the bytes
+  that came back are not.
+- `wp_add_inline_script()` is an output sink in a JavaScript context.
 - Path sensitivity through php-cfg assertions, plus dominance-based guard
   detection for validators php-cfg does not assert on.
 - `scan`, `explain`, `registry:dump` and `dump-cfg` commands.
@@ -65,8 +71,9 @@ Five independent measurements, all checked in CI:
   documented issues found.
 - 47 real CVEs, scanned both sides of the fix.
 - Two third-party fixture suites written elsewhere, scored by their own scorers:
-  precision 0.98, recall 0.94, F1 0.96 with `--unknown-provenance`; precision
-  1.00, recall 0.77 by default.
+  precision 0.98, recall 0.94, F1 0.96 by default; precision 1.00, recall 0.77
+  with `--no-unknown-provenance`. The second suite, scored by its own
+  comparator, is at 7 missing of 36 scenarios.
 
 ### Known limitations
 
