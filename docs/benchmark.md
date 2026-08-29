@@ -99,7 +99,7 @@ rather than blended away.
 
 **184 single-file cases are not a codebase.** The evidence that is not
 self-scored is the corpus: 50 real plugins from WordPress.org, 21,148 files and
-4.1 million lines, currently 1,046 findings and zero convergence warnings across
+4.1 million lines, currently 1,078 findings and zero convergence warnings across
 every one of them, with a dozen false
 positive classes found and fixed at the root — each one recorded in
 [tuning.md](tuning.md) with the plugin that exposed it. Eight of those plugins

@@ -1191,3 +1191,114 @@ WooCommerce's controller still reports. The guard is in one loop and the sink in
 another, over an array populated under the guard, and the guard genuinely does
 not dominate the sink. Proving that safe is container reasoning — every write
 into this array happened under a guard — and is a different piece of work.
+
+
+## Triage pass: 1,610 findings to 1,078
+
+A sampling triage across every rule, largest first, fixing what it turned up.
+Nine changes; the benchmarks held through all of them.
+
+    corpus            1,610 -> 1,078 findings   (-33%)
+    critical            352 -> 102              (-71%)
+    vulnerable plugin  12 of 12, unchanged
+    wp-taint-fixtures  TP=46 FN=18 FP=0 TN=44, unchanged
+    analyser-fixtures  missing=10 unexpected=7, unchanged
+
+### A probe's seed was being recorded as a fact
+
+The largest single cause, and the least visible. Summaries are extracted by
+running a body once per parameter, seeding that parameter with every taint kind.
+Those runs shared the scan's property map, so the seed was written into it:
+
+```php
+function __construct( $file, $level ) {
+    $this->file = $file;              // probed with every kind
+}
+```
+
+left `MC4WP_Debug_Log::$file` permanently holding html, sql, path, shell, eval
+and ten more. `explain` said so in as many words. 334 findings rested on a seed
+like that one — Twig's template compiler as an eval sink, phpseclib's Barrett
+reduction twice, monolog's configured `proc_open()`, Wordfence's own view loader
+as local file inclusion after it had run the path through `preg_replace`.
+
+Probe runs now get a sealed copy: reads work, writes go nowhere. The copy is
+shallow and never writes an array, so PHP never copies one.
+
+That lost the flow the over-approximation had been catching by accident, so the
+second half adds `paramToProperty` — the write counterpart to `paramToSink`. A
+probe records which properties its parameter reached; the call site applies the
+taint the caller actually passed. The trace improved, because it now has
+somewhere real to start:
+
+    1. source     $log = new Acme_Logger( $_GET['f'] );
+    2. propagate  Passed to Acme_Logger::__construct(), which writes it into $file.
+    3. propagate  file_put_contents( $this->file, $line, FILE_APPEND );
+
+### Escaping a literal, twice over
+
+`wp.xss.escape-voided` went 358 -> 162 through two fixes with the same shape.
+
+Intraprocedurally: `esc_html__( 'The root URL of your site.', 'woocommerce' )`
+is a fixed English sentence before the call and the same sentence after it. The
+marker is now withheld when every argument the escaper reads is a compile-time
+constant. Testing "carries no taint" instead cost four true positives — a
+function parameter carries no taint either, and that is the case the rule exists
+for.
+
+Interprocedurally: `wc_help_tip()` genuinely ends `return apply_filters(
+'wc_help_tip', … esc_attr( $aria_label ) … )`, which a summary records as
+introduced. All 65 call sites in WooCommerce's system status report inherited
+it, each passing a fixed English sentence. The markers are a claim about a
+value; with no tainted argument they have no value to be about.
+
+### Severity that follows the evidence
+
+187 of the corpus's 352 criticals were `wp.sqli.prepare-non-literal` on this:
+
+```php
+$wpdb->prepare( "UPDATE `{$table}` SET `vtime` = LEAST(`vtime`, %d)", $t );
+```
+
+The rule's own description says taint analysis could not prove the value is
+attacker-controlled. The query-shape rule next to it already settled the
+convention — high without a proven path, critical with one — and this rule now
+follows it.
+
+### Three claims that were not true
+
+**`esc_url_raw()` in a double-quoted attribute.** Both variants run the same
+filter; the whole difference is the display-context block that encodes the
+apostrophe. The character filter strips `"`, `<`, `>` and space in both, and the
+scheme allowlist rejects `javascript:` in both. So the quote character decides
+it, and WP Super Cache's 32 `action="…"` forms were all being called wrong.
+
+**`wp.header.injection` carried CWE-113** and told 28 findings to strip CR and
+LF. PHP rejects both inside `header()` and refuses to send the header; sending
+`setcookie()` a value urlencodes it first. What is left needs no newline —
+a Content-Type that decides whether the body is HTML, a Location that decides
+where the visitor goes, a cookie name that shadows the session cookie — and that
+is what the rule says now.
+
+**`$_FILES['f']['tmp_name']`** is PHP's own path under `upload_tmp_dir`, and
+reading it is the only way to read an upload. Ten plugins were told it was path
+traversal. `sub_keys` on a source names which second-level keys are the
+client's: `name`, `type`, `full_path`.
+
+### Advice that broke the endpoint
+
+18 of 49 `wp.authz.ajax-missing-check` findings are on `wp_ajax_nopriv_*` hooks,
+and every one was told to add `current_user_can()`. That cannot pass for a
+logged-out visitor, and the handler is on that hook so logged-out visitors can
+reach it. The finding stands; what it asks for is now a nonce, or a deliberate
+decision that the endpoint is public.
+
+### Storage and output are different obligations
+
+`update_option( 'endpoint', esc_url_raw( wp_unslash( $_POST['endpoint'] ) ) )`
+is exactly right for storing a URL and exactly wrong for printing one. The write
+side was borrowing the `html` kind, which made them indistinguishable.
+`TaintKind::Storage` is the input obligation: carried by every request-facing
+source, cleared by any sanitizer and by no propagator, which is what keeps
+`trim()` and `wp_unslash()` from passing for sanitisers. It took the third-party
+suite to precision 1.00.
