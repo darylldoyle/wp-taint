@@ -202,6 +202,7 @@ final class FunctionAnalysis
         $this->types->seedFromFunction($this->context);
         $this->seedSources();
         $this->seedIncludedScope();
+        $this->seedCapturedScope();
         $this->seedIncludeResults();
 
         $iterations = 0;
@@ -324,6 +325,24 @@ final class FunctionAnalysis
      * Only `{main}` bodies: a function has its own scope and an include inside
      * one shares *that*, which the site-level join below handles.
      */
+    /**
+     * What a closure captured, put onto its body's free variables.
+     *
+     * Published by {@see transferClosure} at the site that created it.
+     */
+    private function seedCapturedScope(): void
+    {
+        if ($this->context->isMain()) {
+            return;
+        }
+
+        $this->seedScope(
+            $this->scopes->scopeInto($this->context->key),
+            '$%s was captured by this closure through its use clause.',
+            $this->context->key,
+        );
+    }
+
     private function seedIncludedScope(): void
     {
         if (! $this->context->isMain()) {
@@ -964,6 +983,7 @@ final class FunctionAnalysis
             // summarising) and must not be reset by the generic expression
             // branch below, which would wipe the seed on iteration one.
             $op instanceof Op\Expr\Param => false,
+            $op instanceof Op\Expr\Closure => $this->transferClosure($op),
             $op instanceof Op\Expr\Assign, $op instanceof Op\Expr\AssignRef => $this->transferAssign($op),
             $op instanceof Op\Expr\ArrayDimFetch => $this->transferArrayDimFetch($op),
             $op instanceof Op\Expr\PropertyFetch => $this->transferPropertyFetch($op),
@@ -1655,6 +1675,71 @@ final class FunctionAnalysis
                 [$op->expr],
             ),
         );
+    }
+
+    /**
+     * `function () use ( $raw )` — what the closure captured, published for it.
+     *
+     * The body is a separate function with its own context, and the captured
+     * variable arrives inside it as a free operand: a Temporary written by an
+     * entry Phi with nothing flowing in. Nothing connected the two, so this was
+     * silent, in both the shape WordPress writes constantly and the plain one:
+     *
+     *     $raw = $_GET['msg'];
+     *     add_action( 'wp_footer', function () use ( $raw ) {
+     *         echo $raw;
+     *     } );
+     *
+     * A capture is the same shape as an include's scope — a map of names to
+     * taint, published by one site and read by another, converging in the
+     * interprocedural loop — so it uses the same table rather than a second one.
+     *
+     * By value, not by reference: `use ( &$raw )` also writes back out, which is
+     * not modelled, so a closure that taints a captured variable by reference is
+     * still missed.
+     */
+    private function transferClosure(Op\Expr\Closure $op): bool
+    {
+        // A probe run seeds one parameter with every taint kind to find out what
+        // the function does with it. Publishing that into a table the whole scan
+        // shares makes the seed an assertion, which is the same mistake the
+        // property map made and the same fix: the baseline run, which seeds
+        // nothing and reads the body as written, is the one that publishes.
+        if ($this->seedParameterIndex !== null) {
+            return $this->state->set($op->result, TaintSet::empty());
+        }
+
+        $scope = [];
+        $origins = [];
+        $key = FunctionContext::keyFor($op->func, $this->context->file);
+
+        // By name, not by operand. php-cfg gives the use clause its own fresh
+        // `Variable` nodes rather than the SSA temporaries holding the values,
+        // so asking those operands what they carry answers "nothing" every time.
+        $enclosing = $this->namedScopeWithOrigins();
+
+        foreach ($op->useVars as $captured) {
+            if (! $captured instanceof Operand) {
+                continue;
+            }
+
+            $name = OperandHelper::variableName($captured);
+
+            if ($name === null || ! isset($enclosing['taint'][$name])) {
+                continue;
+            }
+
+            $scope[$name] = $enclosing['taint'][$name];
+
+            if (isset($enclosing['origins'][$name])) {
+                $origins[$name] = $enclosing['origins'][$name];
+            }
+        }
+
+        $changed = $scope === [] ? false : $this->scopes->addInto($key, $scope, $origins);
+
+        // The closure value itself is a callable, not the captured data.
+        return $this->state->set($op->result, TaintSet::empty()) || $changed;
     }
 
     private function transferPassThrough(Op\Expr $op, Operand $input, string $description): bool
