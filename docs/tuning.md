@@ -1302,3 +1302,101 @@ side was borrowing the `html` kind, which made them indistinguishable.
 source, cleared by any sanitizer and by no propagator, which is what keeps
 `trim()` and `wp_unslash()` from passing for sanitisers. It took the third-party
 suite to precision 1.00.
+
+
+## Narrowing --unknown-provenance to entry points
+
+The flag marks a parameter as unvouched-for and reports it if it reaches output
+unescaped. It was marking every parameter, including ones the scan can answer
+for itself:
+
+```php
+function acme_render( $title ) { echo $title; }
+acme_render( esc_html( $x ) );          // right there
+```
+
+The caller settles that. Reporting it anyway is the tool saying it does not know
+something it has already read.
+
+The real case is a function nothing in the scan calls: a callback on a hook core
+dispatches, a public API a theme uses, a template WordPress includes. The call
+graph already answers that — it is built before analysis and the authorization
+rules already walk it — so the only new part is a reverse index and one question
+at the seeding site. The hook graph is folded into those edges, which makes the
+distinction right for free: a callback whose `apply_filters()` dispatch is in the
+scan has a caller and its arguments are read from that dispatch; one registered
+on `init` has none.
+
+    corpus, flag on     +926 -> +142 findings
+    wp-taint-fixtures   recall 0.72 -> 0.84, F1 0.84 -> 0.91, precision 0.98
+
+Same recall as before the narrowing. The 784 that went away were never buying
+it — about three findings per plugin now rather than eighteen, all at `low`,
+below the default `--fail-on=high`.
+
+Still off by default. It asks a different question — "is this proven safe"
+rather than "can I trace this to something dangerous" — and which one you want
+is a decision about the review.
+
+## Following a receiver through a plugin's singleton
+
+`DeclaredTypes` is a project-wide index of what the code says about itself:
+declared return types, typed properties, promoted constructor properties, and
+`$this->x = new Foo()` anywhere in a class. It exists for the shape every
+substantial plugin is built on:
+
+```php
+$table_name = code_snippets()->db->get_table_name();
+$wpdb->get_results( "SELECT * FROM $table_name" );
+```
+
+Before it, `$db` fell through to the convention that reads a receiver of that
+name as the database handle, resolving the call to `wpdb::get_table_name()`,
+which nothing defines. That convention is now a fallback rather than an
+override, which was its own fix: a declared `Acme_Store $db` had been losing to
+it.
+
+It bought three findings. That is not the number this was aimed at, and the
+reason is recorded below.
+
+## Where the SQL shape findings actually come from
+
+Two changes aimed at `wp.sqli.prepare-non-literal` moved it by three, so the
+shape rule was instrumented to record what it fails to account for, per reported
+finding rather than per evaluation — the two give very different answers, and
+the per-evaluation one is what produced the wrong estimate.
+
+    46  Assign          a chain; bottoms out in one of the others
+    33  Phi             merged from branches, one of which failed
+    27  PropertyFetch   a table name on $this
+    25  ConcatList
+    22  Param           a table name arriving as an argument
+     6  ArrayDimFetch
+    13  calls and no-writer
+
+Three distinct causes, none of them cheap:
+
+**A table name passed as an argument** is 22 of 174 — about 13%. Resolving it
+means an interprocedural fixed point over "does every caller pass a resolved
+value", which is the shape of problem that has caused five separate
+non-convergences in this project. Wrong trade.
+
+**A table name behind a service locator.** LiteSpeed is representative:
+
+```php
+$this->__data = $this->cls( 'Data' );
+$this->_table_img_optming = $this->__data->tb( 'img_optming' );
+```
+
+`cls('Data')` picks a class by string argument. No declared type resolves that;
+it needs constant-argument-sensitive return typing.
+
+**A class outside the scan.** Jetpack calls WooCommerce's
+`OrdersTableDataStore::get_orders_table_name()`. Scanning Jetpack alone, that is
+genuinely unknowable, and the `[scan] reference` config is the answer rather
+than a code change.
+
+So the rule is left as it is. It is honestly labelled — its own description says
+taint analysis could not account for the value — and since the severity change
+it is ranked `high` rather than `critical`, which was the part that actually
+misled.
