@@ -637,11 +637,16 @@ If the scanned tree declares the same function twice — a conditionally-defined
 shim, a vendored copy — the first in sorted file order is the one summarised.
 Deterministic, but it may be the wrong one.
 
-### The result cache is all-or-nothing
+### There is no result cache
 
 Because the analysis is whole-program, the only sound cache unit is the whole
-scan. Changing one file invalidates it. Caching a single file's findings would
-be wrong the moment a function it calls changed elsewhere.
+scan: changing one file invalidates it, and caching a single file's findings
+would be wrong the moment a function it calls changed elsewhere. A cache keyed
+on everything is a cache that misses whenever anything moves, and one that can
+go stale on a security tool is worse than none.
+
+It was removed rather than fixed. A scan is fast enough not to need it: 926
+files in 15 seconds on a real client theme.
 
 ---
 

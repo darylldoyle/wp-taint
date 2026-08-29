@@ -6,6 +6,13 @@ fixture suite.
 Run on macOS 15 (arm64), PHP 8.3.32, against Semgrep 1.174.0 and Psalm 6.16.1.
 184 fixtures: 92 vulnerable, 92 safe.
 
+> **Note**
+> This is a point-in-time comparison against the suite as it stood when the
+> three tools were run together. The regression suite has grown since (226
+> fixtures today) and these numbers are not re-measured on every change, because
+> doing so means re-running two external tools. The wp-taint half is covered
+> continuously by `composer test`; the comparison is a snapshot.
+
 ## Read the middle column, not the first
 
 | | wp-taint | Semgrep | Psalm |

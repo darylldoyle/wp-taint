@@ -30,6 +30,17 @@ HIGH      wp.xss.unescaped-output
 it the file is analysed alone, and anything whose taint arrives through an
 include or a hook comes back clean.
 
+## Documentation
+
+| Guide | For |
+|-------|-----|
+| [Getting started](docs/getting-started.md) | Install, first scan, reading a finding |
+| [Scanning a WordPress project](docs/scanning-a-wordpress-project.md) | Reporting on your code among thousands of third-party files |
+| [How it works](docs/how-it-works.md) | Sources, sinks, taint kinds and the decisions behind them |
+| [CLI reference](docs/cli-reference.md) | Every command, option, config key and rule |
+| [Troubleshooting](docs/troubleshooting.md) | A scan that looks stuck, wrong or too loud |
+| [Known limitations](KNOWN_LIMITATIONS.md) | What the engine does at the edges, and why |
+
 ## Why this exists
 
 Every existing option fails on WordPress in a specific way.
@@ -119,40 +130,30 @@ $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$wpdb->prefix}items WHERE sl
 
 ## Usage
 
+```bash
+wp-taint scan ./src                       # find bugs
+wp-taint explain ./src/file.php:47 --scope=./src   # ask why
+wp-taint registry:dump                    # print the catalogue
 ```
-wp-taint scan <paths...>
-  --registry=NAME|PATH             default: wordpress (also: php-core, wordpress-vip)
-  --config=PATH                    default: ./wp-taint.toml if present
-  --format=console|json|sarif      default: console
-  --output=PATH                    default: stdout
-  --baseline=PATH
-  --generate-baseline[=PATH]
-  --min-severity=low|medium|high|critical
-  --fail-on=SEVERITY               default: high; "never" to disable
-  --no-interprocedural
-  --no-stored-taint
-  --stored-taint-writes
-  --no-structural-rules
-  --dynamic-calls=POLICY           clean | propagate (default) | tainted
-  --no-follow-includes
-  --include-path=PATH              analyse for symbols, never report (repeatable)
-  --exclude=GLOB                   repeatable
-  --jobs=N                         worker processes (default 1; needs pcntl)
-  --parse-report
-  --dump-taint-graph=PATH
-  --trace-full
-  --no-cache  --cache-dir=PATH
-  -v                               full trace on every finding
 
-wp-taint explain <file>:<line> [--kind=html|sql|...] [--scope=DIR]
-wp-taint dump-cfg <file> [--format=text|dot] [--show-lowering]
-wp-taint registry:dump [--registry=NAME] [--format=text|json]
-```
+Common options:
+
+| Option | Effect |
+|--------|--------|
+| `--format=json` | Full traces, for another tool or an agent |
+| `--fail-on=SEVERITY` | Exit 1 at or above this level. Default `high`. |
+| `--include-path=PATH` | Analyse for symbols, never report. Repeatable. |
+| `--exclude=GLOB` | Skip a tree. Repeatable. |
+| `--jobs=N` | Worker processes. Needs `ext-pcntl`. |
+| `--baseline=PATH` | Silence everything already known |
 
 Exit codes: `0` clean, `1` findings at or above `--fail-on`, `2` execution
-error — **including any file that failed to parse**. A file the scanner could
-not read is a file it could not clear, and a green build over an unread file is
-a lie.
+error, **including any file that failed to parse**. A file the scanner could not
+read is a file it could not clear, and a green build over an unread file is a
+lie.
+
+Every command, option, config key and rule id is in the
+[CLI reference](docs/cli-reference.md).
 
 ### Handing results to an agent
 
@@ -262,18 +263,18 @@ parsed and held in memory at once.
 
 | Plugin | Lines | Time | Peak RSS |
 | --- | ---: | ---: | ---: |
-| akismet | 7,678 | 1.2s | 67 MB |
-| advanced-custom-fields | 83,330 | 12.9s | 417 MB |
-| wordpress-seo | 209,674 | 25.1s | 584 MB |
-| woocommerce | 786,566 | 157.8s | 2,310 MB |
+| akismet | 7,678 | 2s | 73 MB |
+| advanced-custom-fields | 83,330 | 21s | 429 MB |
+| wordpress-seo | 209,674 | 40s | 602 MB |
+| woocommerce | 786,566 | 256s | 2,373 MB |
 
-Roughly 7 seconds per 50k lines single-threaded. `--jobs=4` roughly halves that
-— parsing stays serial, so it is not linear — and produces byte-identical
-output, which is enforced by a test rather than hoped for.
+Single-threaded, on macOS 15 (arm64), PHP 8.3.32. Roughly 10 seconds per 50k lines.
+`--jobs=4` roughly halves that (parsing stays serial, so it is not linear) and
+produces byte-identical output, which is enforced by a test rather than hoped
+for.
 
-The result cache is keyed on every input, so an unchanged re-scan is close to
-instant (15.6s to 0.18s on Duplicator). Because the analysis is whole-program,
-changing one file invalidates the whole cache; anything finer would be unsound.
+A first-party plugin or theme is a much smaller unit than any of these: a client
+theme of 926 files scans in 15 seconds.
 
 Memory is the real constraint. `bin/wp-taint` raises the limit to 2 GB, which
 covers everything in the WordPress.org top fifty except WooCommerce; for a tree
@@ -295,9 +296,12 @@ useless.
 
 | | default | `--unknown-provenance` |
 | --- | --- | --- |
-| Precision | 0.93 | 0.93 |
+| Precision | **1.00** | 0.98 |
 | Recall | 0.72 | **0.84** |
-| F1 | 0.81 | **0.89** |
+| F1 | 0.84 | **0.91** |
+
+Zero false positives across 44 labelled-safe cases by default. The flag trades
+one of those for eight more true positives.
 
 `ideas/wp-taint-analyser-fixtures` pairs 36 scenarios as vulnerable and safe
 variants, cross-file and cross-plugin. **Zero findings on all 36 safe variants**,
@@ -430,9 +434,9 @@ composer lint        # PHP_CodeSniffer, PSR-12 + Slevomat
 composer check       # all three
 ```
 
-The fixture suite in `tests/Fixtures/` is the regression net: ~70 vulnerable
-files and ~75 safe ones that are superficially similar. The safe half matters
-more — a single false positive there fails the build.
+The fixture suite in `tests/Fixtures/` is the regression net: 111 vulnerable
+files and 115 safe ones that are superficially similar. The safe half matters
+more: a single false positive there fails the build.
 
 Expectations are written as inline `// wp-taint-expect <rule-id> <kind>`
 annotations on the sink line and generated into `.expected.json` siblings by
