@@ -24,6 +24,28 @@ use Enshrined\WpTaint\Finding\TraceStep;
  */
 final class PropertyTaintMap
 {
+    /**
+     * Whether writes into this copy are discarded.
+     *
+     * A parameter probe seeds one parameter with every taint kind to find out
+     * what the function does with it. That seed is a question, not a fact, and
+     * committing its answer to a map the whole scan shares turns it into one:
+     *
+     *     function __construct( $file, $level ) {
+     *         $this->file = $file;          // probed with every kind
+     *     }
+     *
+     * left `MC4WP_Debug_Log::$file` holding html, sql, path, shell, eval and
+     * ten more, permanently, so `fopen( $this->file, 'a' )` two hundred lines
+     * away was a path-traversal finding. 334 of the corpus's 1,414 findings
+     * rested on a seed like that one — Twig's compiler as an eval sink,
+     * phpseclib's Barrett reduction, monolog's configured `proc_open()`.
+     *
+     * The property map records what the baseline run — the one that seeds
+     * nothing and reads the body as written — actually saw.
+     */
+    private bool $sealed = false;
+
     /** @var array<string, bool> */
     private array $anchored = [];
 
@@ -126,6 +148,10 @@ final class PropertyTaintMap
      */
     public function recordAnchor(?string $class, string $property, bool $anchored): void
     {
+        if ($this->sealed) {
+            return;
+        }
+
         $key = self::key($class, $property);
         $this->anchored[$key] = ($this->anchored[$key] ?? true) && $anchored;
     }
@@ -135,7 +161,26 @@ final class PropertyTaintMap
      */
     public function track(?string $class, string $property): void
     {
+        if ($this->sealed) {
+            return;
+        }
+
         $this->tracked[self::key($class, $property)] = true;
+    }
+
+    /**
+     * A copy whose writes go nowhere.
+     *
+     * Shallow, because PHP copies an array only when it is written to and this
+     * copy never writes one — so sealing is free, and stays free however large
+     * the map has grown.
+     */
+    public function sealed(): self
+    {
+        $copy = clone $this;
+        $copy->sealed = true;
+
+        return $copy;
     }
 
     /**
@@ -143,6 +188,10 @@ final class PropertyTaintMap
      */
     public function add(?string $class, string $property, TaintSet $taint, array $origin = []): bool
     {
+        if ($this->sealed) {
+            return false;
+        }
+
         $this->track($class, $property);
 
         if ($taint->isEmpty()) {

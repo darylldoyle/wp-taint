@@ -39,7 +39,10 @@ final class IntraproceduralAnalyzer
         ?int $seedParameterIndex = null,
         bool $collectFindings = true,
     ): AnalysisResult {
-        $properties = $seedParameterIndex === null ? $properties : clone $properties;
+        // A probe run asks what one parameter reaches; it does not observe the
+        // body as written, so nothing it writes belongs in the shared property
+        // map. See PropertyTaintMap::$sealed.
+        $properties = $seedParameterIndex === null ? $properties : $properties->sealed();
 
         return (new FunctionAnalysis(
             $context,
