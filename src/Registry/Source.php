@@ -56,7 +56,39 @@ final class Source
          * either way is a false SSRF finding or a missed reflected one.
          */
         public readonly ?string $appliesBy = null,
+        /**
+         * Second-level keys that are attacker-controlled, for a superglobal
+         * whose first level is a name the code chooses.
+         *
+         * `$_FILES` is the reason this exists. Its first level is the form
+         * field name and its second is a fixed set, of which PHP writes most:
+         *
+         *     $_FILES['import']['name']       the client's filename
+         *     $_FILES['import']['type']       the client's content type
+         *     $_FILES['import']['tmp_name']   PHP's own path under upload_tmp_dir
+         *     $_FILES['import']['size']       an int, from PHP
+         *     $_FILES['import']['error']      an int, from PHP
+         *
+         * Tainting all of it made `file_get_contents( $_FILES['f']['tmp_name'] )`
+         * a path-traversal finding in ten plugins. That call is not a mistake;
+         * it is the only way to read an upload, and the path in it was never the
+         * client's to choose.
+         *
+         * @var list<string>|null
+         */
+        public readonly ?array $subKeys = null,
     ) {
+    }
+
+    /**
+     * Whether a second-level access with this key is tainted.
+     *
+     * A dynamic key is tainted, the same way {@see matchesKey} treats one: an
+     * attacker who chooses the index chooses the value.
+     */
+    public function matchesSubKey(?string $key): bool
+    {
+        return $this->subKeys === null || $key === null || in_array($key, $this->subKeys, true);
     }
 
     /**

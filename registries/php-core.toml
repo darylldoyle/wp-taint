@@ -33,7 +33,12 @@ kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "
 [[sources]]
 superglobal = "_FILES"
 kinds = ["html", "html_attr", "sql", "path", "header", "storage"]
-note = "Filenames and MIME types come straight from the client."
+# PHP writes tmp_name, size and error itself. tmp_name is a path under
+# upload_tmp_dir that the client never chose, and reading it is the only way to
+# read an upload — tainting it made file_get_contents( $_FILES['f']['tmp_name'] )
+# a path-traversal finding in ten plugins.
+sub_keys = ["name", "type", "full_path"]
+note = "Filenames and MIME types come straight from the client; tmp_name, size and error are PHP's."
 
 # $_SERVER is only partially attacker-controlled. Tainting the whole
 # superglobal makes the false positive rate unmanageable, so only the keys

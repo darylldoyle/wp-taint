@@ -46,9 +46,9 @@
     },
     "loginizer": {
         "version": "2.1.0",
-        "findings": 17,
+        "findings": 16,
         "bySeverity": {
-            "high": 13,
+            "high": 12,
             "medium": 4
         },
         "warnings": 1,
@@ -65,10 +65,10 @@
     },
     "wpforms-lite": {
         "version": "2.0.1.1",
-        "findings": 44,
+        "findings": 43,
         "bySeverity": {
             "critical": 4,
-            "high": 27,
+            "high": 26,
             "medium": 13
         },
         "warnings": 4,

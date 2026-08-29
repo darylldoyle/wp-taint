@@ -1,0 +1,10 @@
+{
+    "expectation": "vulnerable",
+    "findings": [
+        {
+            "ruleId": "wp.path.file-write",
+            "kind": "path",
+            "line": 15
+        }
+    ]
+}

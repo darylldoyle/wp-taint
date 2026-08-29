@@ -25,7 +25,7 @@ final class RegistryLoader
 
     private const SOURCE_KEYS = [
         'superglobal', 'function', 'class', 'method', 'static_method', 'kinds', 'stored', 'note',
-        'arg', 'arg_literal_contains', 'keys', 'key_prefixes', 'applies_by',
+        'arg', 'arg_literal_contains', 'keys', 'key_prefixes', 'sub_keys', 'applies_by',
     ];
 
     private const SANITIZER_KEYS = [
@@ -226,6 +226,9 @@ final class RegistryLoader
                     $entry['applies_by'] ?? null,
                     Source::STRATEGIES,
                 ),
+                isset($entry['sub_keys'])
+                    ? $this->stringList($file, $context . ' sub_keys', $entry['sub_keys'])
+                    : null,
             ));
         }
     }

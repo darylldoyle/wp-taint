@@ -1146,6 +1146,10 @@ final class FunctionAnalysis
 
         $key = $op->dim === null ? null : OperandHelper::literalKey($op->dim);
 
+        if ($this->readsUntaintedSubKey($op, $key)) {
+            return $this->state->set($op->result, TaintSet::empty());
+        }
+
         if ($key !== null) {
             return $this->transferKeyedRead($op, $key);
         }
@@ -1155,6 +1159,33 @@ final class FunctionAnalysis
             $op->var,
             sprintf('Read out of %s.', OperandHelper::describe($op->var)),
         );
+    }
+
+    /**
+     * `$_FILES['import']['tmp_name']` — a second-level key PHP writes itself.
+     *
+     * The base has to be the superglobal fetch directly: following it through a
+     * variable would need the keyed taint to carry which superglobal it came
+     * from, and the two-fetch shape is how every one of the ten plugins that
+     * hit this writes it.
+     */
+    private function readsUntaintedSubKey(Op\Expr\ArrayDimFetch $op, string|int|null $key): bool
+    {
+        $base = OperandHelper::definingOp($op->var);
+
+        if (! $base instanceof Op\Expr\ArrayDimFetch) {
+            return false;
+        }
+
+        $superglobal = OperandHelper::variableName($base->var);
+
+        if ($superglobal === null) {
+            return false;
+        }
+
+        $source = $this->registry->source(Matcher::superglobal($superglobal));
+
+        return $source !== null && ! $source->matchesSubKey(is_string($key) ? $key : null);
     }
 
     /**
