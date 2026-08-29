@@ -1400,3 +1400,65 @@ So the rule is left as it is. It is honestly labelled — its own description sa
 taint analysis could not account for the value — and since the severity change
 it is ranked `high` rather than `critical`, which was the part that actually
 misled.
+
+
+## Fixing the misses an answer key names
+
+Rather than picking from the limitations list, this started from the 18 labelled
+cases `wp-taint-fixtures` says are missed. Each one is a specific claim that can
+be read, diagnosed and either fixed or refused.
+
+    default             P 1.00  R 0.72 -> 0.77   F1 0.84 -> 0.87
+    --unknown-provenance  P 0.98  R 0.84 -> 0.94   F1 0.91 -> 0.96
+                                 FN 10 -> 4
+
+### printf() had one sink where echo has three
+
+`echo` and `print` each carry `html`, `unknown` and `escape_voided`. `printf()`,
+`vprintf()` and `var_dump()` had only the first: the other two were added
+alongside `echo` and the rest of the family was missed. Nothing about `printf()`
+makes it different — it writes the same bytes to the same place.
+
+### Closures captured nothing
+
+    $raw = $_GET['msg'] ?? '';
+    add_action( 'wp_footer', function () use ( $raw ) { echo $raw; } );
+
+The body is a separate function and the captured variable arrives inside it as a
+free operand, so nothing connected the two. A capture is the same shape as an
+include's scope — a map of names to taint crossing a boundary — so it uses the
+same table.
+
+Two things had to be right. **By name, not by operand:** php-cfg gives the `use`
+clause its own fresh `Variable` nodes rather than the SSA temporaries holding
+the values, so asking those operands what they carry answers "nothing" every
+time. And **a probe run must not publish**, which is the mistake the property map
+made, with the same fix.
+
+### A shortcode is an entry point at both ends
+
+WordPress hands the callback attributes from the post body and prints what it
+returns. Three things had to be true: the registration had to be seen
+(`add_shortcode()` shares `add_action()`'s argument layout, so the hook graph
+already knew how), the parameters had to carry post content, and the return had
+to count as output — there is no `echo` to find, because `do_shortcode()` does
+the printing.
+
+Underneath was a catalogue gap: `shortcode_atts()` was listed as filterable and
+never as a propagator, so its return read as clean and every callback that
+normalises its attributes the usual way lost the taint on its first line.
+
+### register_setting() without a sanitize_callback
+
+Core reads `$_POST` and core writes the option; the plugin's only involvement is
+the registration. There is no flow to follow, which is why it is a structural
+rule. Yoast's Duplicate Post registers every one of its options in a loop with
+no callback on any of them.
+
+### One refused
+
+A REST callback's return is not treated as output. It is JSON-encoded and served
+as `application/json`, so a browser does not render it as markup, and reporting
+every callback that returns a string built from a request parameter would be
+noisy and mostly wrong. The fixture assumes a downstream HTML consumer that is
+not visible from the callback. Sinks *inside* the callback report normally.

@@ -121,11 +121,42 @@ finds more.
 Both are useful and they are not the same question, so a flag says which is
 being asked rather than a threshold splitting the difference.
 
+## Some functions are entry points
+
+Nothing in your plugin calls a hook callback, a shortcode handler or a REST
+endpoint. WordPress does, and it hands them data someone else chose.
+
+```php
+add_shortcode( 'badge', 'acme_badge' );
+
+function acme_badge( $atts ) {
+    return '<span style="color:' . $atts['color'] . '">x</span>';   // reported
+}
+```
+
+`$atts` comes from the post body, so it carries the same taint an option does.
+The return is the output, because `do_shortcode()` prints it and there is no
+`echo` in the plugin to find.
+
+A closure is the other half of the same problem. Its body is a separate
+function, so what it captured has to be carried across:
+
+```php
+$raw = $_GET['msg'] ?? '';
+add_action( 'wp_footer', function () use ( $raw ) {
+    echo $raw;                     // reported
+} );
+```
+
 ## Structural rules, for what dataflow cannot see
 
 Some bugs are not about a value at all. An AJAX handler with no capability check
 is a bug because of what is *missing*, and no amount of following values finds
 an absence.
+
+`register_setting()` with no `sanitize_callback` is the same idea from the input
+side: core reads `$_POST` and core writes the option, so the plugin's only
+involvement is the registration, and there is no flow to follow.
 
 Those run as separate rules over the syntax, and they are reachability
 questions rather than name matching. "Does this callback reach a capability

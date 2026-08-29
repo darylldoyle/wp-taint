@@ -42,6 +42,8 @@ output rather than in the findings.
 | [`remove_filter()` is not modelled](#hook-callbacks-are-followed-unless-the-hook-name-is-dynamic) | Over-reports |
 | [An unmodelled function returns clean](#an-unmodelled-function-returns-clean) | Misses |
 | [A by-reference call cannot clear its argument](#references-are-followed-and-never-cleared) | Over-reports |
+| [A closure capturing by reference, `use ( &$x )`](#a-closure-capture-is-published-by-value-only) | Misses |
+| [What a REST callback returns is not treated as output](#a-rest-callbacks-return-is-not-output) | Misses |
 | [`wp_json_encode()` is treated as clearing `html`](#wp_json_encode-context-sensitivity-is-approximated) | Misses |
 | [Loops are not unrolled](#loops-are-analysed-to-a-fixed-point-not-unrolled) | Over-reports |
 
@@ -543,6 +545,77 @@ that variable; only growing keeps the fixed point monotone.
 overwrites its argument with something clean cannot be modelled as clearing it.
 And a variable aliased anywhere in a function is treated as aliased throughout
 it, rather than only after the binding.
+
+### A closure capture is published by value only
+
+```php
+$raw = $_GET['msg'] ?? '';
+add_action( 'wp_footer', function () use ( $raw ) {
+    echo $raw;                     // reported
+} );
+```
+
+The body is a separate function with its own context, and the captured variable
+arrives inside it as a free operand. What the closure captured is published at
+the site that created it and read by the body, using the same table an
+`include`'s scope uses, because it is the same shape: a map of names to taint
+crossing a boundary.
+
+By name rather than by operand, because php-cfg gives the `use` clause its own
+fresh `Variable` nodes rather than the SSA temporaries holding the values.
+
+**What is missed.** `use ( &$raw )` also writes back out to the enclosing scope,
+which is not modelled, so a closure that taints a captured variable by reference
+is not seen. And a capture whose value comes from the enclosing function's own
+parameter is only seen once a caller supplies it, for the same reason a property
+is: the run that publishes is the one that seeds nothing.
+
+**Direction:** under-approximating, at the by-reference captures.
+
+### A shortcode callback is an entry point at both ends
+
+```php
+add_shortcode( 'badge', 'acme_badge' );
+
+function acme_badge( $atts ) {
+    $atts = shortcode_atts( array( 'color' => 'blue' ), $atts );
+    return '<span style="color:' . $atts['color'] . '">x</span>';   // reported
+}
+```
+
+WordPress hands the callback attributes taken from the post body and prints
+whatever it returns, so both ends are modelled. `$atts` and `$content` carry the
+kinds a stored source introduces, because they are chosen by whoever can edit
+the post — a contributor, on most sites. The return is treated as output:
+`do_shortcode()` does the printing and the call that reaches the callback is
+core's, so there is no `echo` for a rule to find.
+
+`$tag` is the third parameter and is the shortcode's own name, which the plugin
+chose, so it is left alone.
+
+**What is missed.** A registration whose callback will not resolve, and one made
+through a wrapper — `add_shortcode()` is matched as a function call only, unlike
+`add_action()`, which is also matched on a loader method.
+
+### A REST callback's return is not output
+
+```php
+function acme_rest_echo( $request ) {
+    return '<b>' . $request->get_param( 'name' ) . '</b>';   // not reported
+}
+```
+
+Deliberate. A REST callback's return is JSON-encoded and served as
+`application/json`, so a browser does not render it as markup. Reporting every
+callback that returns a string built from a request parameter would be noisy and
+mostly wrong.
+
+It is a real bug where something downstream renders that response as HTML, and
+that consumer is not visible from the callback. A sink inside the callback —
+`echo`, a query, a file path — is reported normally; it is only the return that
+is not treated as output.
+
+**Direction:** under-approximating, deliberately.
 
 ### `wp_json_encode()` context-sensitivity is approximated
 

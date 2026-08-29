@@ -14,7 +14,7 @@ will contain.
 
 - Interprocedural taint analysis over SSA form, following values across
   functions, files, `include`/`require` and hook dispatches.
-- 29 rules covering XSS, SQL injection, authorization, CSRF, path traversal,
+- 30 rules covering XSS, SQL injection, authorization, CSRF, path traversal,
   object injection, SSRF, open redirect, header and LDAP injection, and CSV
   formula injection.
 - Taint as a set of kinds rather than a boolean, so an HTML escaper does not
@@ -27,8 +27,12 @@ will contain.
 - Context-sensitive escaping checks, down to the quote character around an
   attribute.
 - Structural rules for bugs that are an absence rather than a value: missing
-  capability checks, missing `permission_callback`, actionless nonces,
-  bypassable nonce checks, guards that fall through.
+  capability checks, missing `permission_callback`, missing `sanitize_callback`
+  on a registered setting, actionless nonces, bypassable nonce checks, guards
+  that fall through.
+- Closures, shortcodes and other entry points: what a closure captured through
+  `use` is carried into its body, and a shortcode callback's attributes are
+  treated as post content while its return value is treated as output.
 - Path sensitivity through php-cfg assertions, plus dominance-based guard
   detection for validators php-cfg does not assert on.
 - `scan`, `explain`, `registry:dump` and `dump-cfg` commands.
@@ -51,7 +55,7 @@ will contain.
 
 Five independent measurements, all checked in CI:
 
-- 226 first-party fixtures, 115 of them labelled safe. A single false positive
+- 232 first-party fixtures, 118 of them labelled safe. A single false positive
   in the safe half fails the build.
 - A 50-plugin corpus from WordPress.org: 21,148 files, 4.1 million lines. Eight
   plugins are pinned by version and their counts are asserted.
@@ -59,7 +63,8 @@ Five independent measurements, all checked in CI:
   documented issues found.
 - 47 real CVEs, scanned both sides of the fix.
 - Two third-party fixture suites written elsewhere, scored by their own scorers:
-  precision 0.98, recall 0.84, F1 0.91 with `--unknown-provenance`.
+  precision 0.98, recall 0.94, F1 0.96 with `--unknown-provenance`; precision
+  1.00, recall 0.77 by default.
 
 ### Known limitations
 

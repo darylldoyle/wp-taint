@@ -297,8 +297,8 @@ useless.
 | | default | `--unknown-provenance` |
 | --- | --- | --- |
 | Precision | **1.00** | 0.98 |
-| Recall | 0.72 | **0.84** |
-| F1 | 0.84 | **0.91** |
+| Recall | 0.77 | **0.94** |
+| F1 | 0.87 | **0.96** |
 
 Zero false positives across 44 labelled-safe cases by default. The flag trades
 one of those for eight more true positives.
@@ -434,8 +434,8 @@ composer lint        # PHP_CodeSniffer, PSR-12 + Slevomat
 composer check       # all three
 ```
 
-The fixture suite in `tests/Fixtures/` is the regression net: 111 vulnerable
-files and 115 safe ones that are superficially similar. The safe half matters
+The fixture suite in `tests/Fixtures/` is the regression net: 114 vulnerable
+files and 118 safe ones that are superficially similar. The safe half matters
 more: a single false positive there fails the build.
 
 Expectations are written as inline `// wp-taint-expect <rule-id> <kind>`

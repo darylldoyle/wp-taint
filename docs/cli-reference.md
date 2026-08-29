@@ -161,7 +161,7 @@ after `--` is required.
 
 ## Rules
 
-29 rules. The id is stable and is what you suppress or filter on.
+30 rules. The id is stable and is what you suppress or filter on.
 
 ### Output
 
@@ -221,5 +221,6 @@ after `--` is required.
 | Rule | Reports |
 |------|---------|
 | `wp.stored.untrusted-write` | Unsanitised input written to an option or meta (`--stored-taint-writes`) |
+| `wp.input.setting-without-sanitize` | `register_setting()` with no `sanitize_callback` |
 
 Run `wp-taint registry:dump` for the full description and remediation of each.
