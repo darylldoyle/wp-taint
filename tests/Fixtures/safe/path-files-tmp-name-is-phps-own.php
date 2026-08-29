@@ -19,3 +19,13 @@ function acme_import_settings(): string {
 
 	return (string) file_get_contents( $_FILES['import']['tmp_name'] );
 }
+
+/**
+ * The same read spread over two statements, which is how the first real client
+ * codebase this was pointed at spelled it.
+ */
+function acme_import_via_variable(): string {
+	$upload = $_FILES['import'];
+
+	return (string) file_get_contents( $upload['tmp_name'] );
+}

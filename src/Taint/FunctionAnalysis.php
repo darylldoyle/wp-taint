@@ -39,6 +39,9 @@ final class FunctionAnalysis
      */
     private const UNPREPARED_QUERY_RULE = 'wp.sqli.unprepared-query';
 
+    /** How far {@see throughAssignments} follows `$a = $b = $c` before giving up. */
+    private const MAX_ASSIGNMENT_HOPS = 16;
+
     /**
      * Properties the seeded parameter reached, keyed to deduplicate.
      *
@@ -1273,7 +1276,7 @@ final class FunctionAnalysis
      */
     private function readsUntaintedSubKey(Op\Expr\ArrayDimFetch $op, string|int|null $key): bool
     {
-        $base = OperandHelper::definingOp($op->var);
+        $base = $this->throughAssignments($op->var);
 
         if (! $base instanceof Op\Expr\ArrayDimFetch) {
             return false;
@@ -1288,6 +1291,39 @@ final class FunctionAnalysis
         $source = $this->registry->source(Matcher::superglobal($superglobal));
 
         return $source !== null && ! $source->matchesSubKey(is_string($key) ? $key : null);
+    }
+
+    /**
+     * The op that produced a value, seen through any number of plain
+     * assignments.
+     *
+     * `$_FILES['f']['tmp_name']` is one expression and this is the same read
+     * spread over two statements:
+     *
+     *     $csv = $_FILES['subsidy_csv'];
+     *     $this->generate_zip( $csv['tmp_name'] );
+     *
+     * The first version was written against ten corpus plugins that all spell
+     * it the first way, and the first real client codebase it was pointed at
+     * spelled it the second, which reported `fopen()` on PHP's own upload path
+     * as traversal at high severity.
+     *
+     * Assignments only. Following a phi would mean asking which branch, and a
+     * value merged from two places is not one this can speak for.
+     */
+    private function throughAssignments(Operand $operand): ?Op
+    {
+        $seen = 0;
+        $definition = OperandHelper::definingOp($operand);
+
+        while (
+            ($definition instanceof Op\Expr\Assign || $definition instanceof Op\Expr\AssignRef)
+            && $seen++ < self::MAX_ASSIGNMENT_HOPS
+        ) {
+            $definition = OperandHelper::definingOp($definition->expr);
+        }
+
+        return $definition;
     }
 
     /**
