@@ -1579,3 +1579,28 @@ the paramToProperty work.
 
     analyser-fixtures   missing 10 -> 7
     corpus              1,326 -> 1,323
+
+### And then F16
+
+`use ( &$x )` is a two-way binding and only one way was modelled. php-cfg keeps
+the flag — each `use` is an `Operand\BoundVariable` with `byRef` on it — so
+telling the two apart cost nothing.
+
+A closure that writes to a by-reference capture now publishes what it assigned,
+through the same table its captures arrive on. The enclosing scope reads that
+back, and any other closure capturing the same variable receives it on the round
+after. It only ever adds, so the fixed point stays monotone, and the write-back
+is seeded once before the propagation loop rather than during it.
+
+By-value captures are untouched: `use ( $x )` copies, and a write inside the
+closure is invisible outside it. Both fixtures exist, because the difference
+between the two spellings is the whole point.
+
+    analyser-fixtures   missing 7 -> 6
+    corpus              unchanged
+    kff-shared          32.4s -> 32.4s
+
+That leaves five, and every one of them is a decision rather than a gap: two
+shortcode handlers with no `add_shortcode()` anywhere, `sanitize_text_field()`
+credited at output, a REST callback's return, and a cross-component flow already
+reported at the sink end.

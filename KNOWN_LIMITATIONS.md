@@ -45,7 +45,7 @@ output rather than in the findings.
 | [`remove_filter()` is not modelled](#hook-callbacks-are-followed-unless-the-hook-name-is-dynamic) | Over-reports |
 | [An unmodelled function returns clean](#an-unmodelled-function-returns-clean) | Misses |
 | [A by-reference call cannot clear its argument](#references-are-followed-and-never-cleared) | Over-reports |
-| [A closure capturing by reference, `use ( &$x )`](#a-closure-capture-is-published-by-value-only) | Misses |
+| [A capture of the enclosing function's own parameter](#a-closure-capture-crosses-in-both-directions) | Misses |
 | [What a REST callback returns is not treated as output](#a-rest-callbacks-return-is-not-output) | Misses |
 | [`wp_json_encode()` is treated as clearing `html`](#wp_json_encode-context-sensitivity-is-approximated) | Misses |
 | [Loops are not unrolled](#loops-are-analysed-to-a-fixed-point-not-unrolled) | Over-reports |
@@ -714,7 +714,7 @@ overwrites its argument with something clean cannot be modelled as clearing it.
 And a variable aliased anywhere in a function is treated as aliased throughout
 it, rather than only after the binding.
 
-### A closure capture is published by value only
+### A closure capture crosses in both directions
 
 ```php
 $raw = $_GET['msg'] ?? '';
@@ -732,13 +732,27 @@ crossing a boundary.
 By name rather than by operand, because php-cfg gives the `use` clause its own
 fresh `Variable` nodes rather than the SSA temporaries holding the values.
 
-**What is missed.** `use ( &$raw )` also writes back out to the enclosing scope,
-which is not modelled, so a closure that taints a captured variable by reference
-is not seen. And a capture whose value comes from the enclosing function's own
-parameter is only seen once a caller supplies it, for the same reason a property
-is: the run that publishes is the one that seeds nothing.
+`use ( &$raw )` is a two-way binding and both ways are modelled. A closure that
+writes to a by-reference capture publishes what it assigned; the enclosing scope
+picks that up, and any other closure capturing the same variable receives it on
+the round after:
 
-**Direction:** under-approximating, at the by-reference captures.
+```php
+$message = '';
+add_action( 'init',          function () use ( &$message ) { $message = $_POST['m']; } );
+add_action( 'admin_notices', function () use ( &$message ) { echo $message; } );  // reported
+```
+
+By-value captures are left alone, because `use ( $x )` copies and a write inside
+the closure is invisible outside it. That difference is the whole point of the
+two spellings.
+
+**What is missed.** A capture whose value comes from the enclosing function's
+own parameter is only seen once a caller supplies it, for the same reason a
+property is: the run that publishes is the one that seeds nothing.
+
+**Direction:** under-approximating, at a capture the enclosing function was
+handed rather than made.
 
 ### A printed return: shortcode handlers and block renderers
 

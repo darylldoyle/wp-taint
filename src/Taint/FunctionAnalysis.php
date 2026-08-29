@@ -210,6 +210,7 @@ final class FunctionAnalysis
         $this->seedSources();
         $this->seedIncludedScope();
         $this->seedCapturedScope();
+        $this->seedByReferenceCaptures();
         $this->seedIncludeResults();
 
         $iterations = 0;
@@ -269,7 +270,13 @@ final class FunctionAnalysis
      */
     private function publishScope(): void
     {
-        if (! $this->context->isMain()) {
+        // Closures as well as file-level code. A closure that captured a
+        // variable by reference writes back out to the scope that made it, and
+        // the only way the maker can learn what it wrote is if the closure says
+        // so. Nothing reads a closure's key from this table except
+        // {@see seedByReferenceCaptures}: the include machinery asks for
+        // `::{main}` keys only.
+        if (! $this->context->isMain() && ! $this->context->isClosure()) {
             return;
         }
 
@@ -348,6 +355,69 @@ final class FunctionAnalysis
             '$%s was captured by this closure through its use clause.',
             $this->context->key,
         );
+    }
+
+    /**
+     * What a closure wrote back through a by-reference capture.
+     *
+     *     $message = '';
+     *     add_action( 'init',   function () use ( &$message ) {
+     *         $message = wp_unslash( $_POST['m'] );
+     *     } );
+     *     add_action( 'render', function () use ( &$message ) {
+     *         echo $message;                              // reported
+     *     } );
+     *
+     * `use ( &$x )` is a two-way binding and only one way was modelled. The
+     * first closure's write never left it, so the second closure captured an
+     * empty string and the echo was clean.
+     *
+     * Round by round: the writing closure publishes, the enclosing scope picks
+     * it up here, and the reading closure receives it through the ordinary
+     * by-value capture on the round after that. It only ever adds, so the fixed
+     * point stays monotone.
+     *
+     * By-value captures are left alone. `use ( $x )` copies, and a write inside
+     * the closure is invisible outside it — which is the whole difference.
+     */
+    private function seedByReferenceCaptures(): void
+    {
+        foreach ($this->blocks as $block) {
+            foreach ($block->children as $op) {
+                if (! $op instanceof Op\Expr\Closure) {
+                    continue;
+                }
+
+                $key = FunctionContext::keyFor($op->func, $this->context->file);
+                $written = $this->scopes->scopeOutOf($key);
+
+                if ($written === []) {
+                    continue;
+                }
+
+                $scope = [];
+
+                foreach ($op->useVars as $captured) {
+                    if (! $captured instanceof Operand\BoundVariable || $captured->byRef !== true) {
+                        continue;
+                    }
+
+                    $name = OperandHelper::variableName($captured);
+
+                    if ($name !== null && isset($written[$name])) {
+                        $scope[$name] = $written[$name];
+                    }
+                }
+
+                if ($scope !== []) {
+                    $this->seedScope(
+                        $scope,
+                        '$%s was written by a closure that captured it by reference.',
+                        $key,
+                    );
+                }
+            }
+        }
     }
 
     private function seedIncludedScope(): void
