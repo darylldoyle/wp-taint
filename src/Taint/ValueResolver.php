@@ -6,6 +6,7 @@ namespace Enshrined\WpTaint\Taint;
 
 use Enshrined\WpTaint\Cfg\ConstantReturnTable;
 use Enshrined\WpTaint\Cfg\ConstantTable;
+use Enshrined\WpTaint\Cfg\ThemeRoots;
 use PHPCfg\Op;
 use PHPCfg\Operand;
 
@@ -30,6 +31,7 @@ final class ValueResolver
     public function __construct(
         private readonly ?ConstantTable $constants = null,
         private readonly ?ConstantReturnTable $returns = null,
+        private readonly ?ThemeRoots $themes = null,
     ) {
     }
 
@@ -43,7 +45,7 @@ final class ValueResolver
      */
     public function withConstants(ConstantTable $constants, ?ConstantReturnTable $returns = null): self
     {
-        return new self($constants, $returns);
+        return new self($constants, $returns, $this->themes);
     }
 
     /**
@@ -91,9 +93,9 @@ final class ValueResolver
             $definition instanceof Op\Expr\Assign => $this->strings($definition->expr, $depth + 1),
             $definition instanceof Op\Expr\ConstFetch => $this->fromConstant($definition),
             $definition instanceof Op\Expr\FuncCall,
-            $definition instanceof Op\Expr\NsFuncCall => $this->fromPureCall($definition, $depth),
+            $definition instanceof Op\Expr\NsFuncCall => $this->fromCall($definition, $depth),
             $definition instanceof Op\Expr\MethodCall,
-            $definition instanceof Op\Expr\StaticCall => $this->fromConstantReturn($definition),
+            $definition instanceof Op\Expr\StaticCall => $this->fromConstantReturn($definition, $depth),
             $definition instanceof Op\Phi => $this->fromPhi($definition, $depth),
             $definition instanceof Op\Expr\ConcatList => $this->fromParts($definition->list, $depth),
             $definition instanceof Op\Expr\BinaryOp\Concat => $this->fromParts(
@@ -127,6 +129,161 @@ final class ValueResolver
      * Evaluate a call whose arguments all resolve and whose result depends on
      * nothing else.
      *
+     * @return list<string>
+     */
+    /**
+     * Theme-location functions the calling file itself answers.
+     *
+     * `get_template_directory()` asks "where is the active theme" at runtime,
+     * and the static answer is the theme the calling file is in — see
+     * {@see ThemeRoots}. Themes hang their whole constant chain off it:
+     *
+     *     define( 'ACME_THEME_PATH', get_template_directory() . '/' );
+     *     define( 'ACME_THEME_INC', ACME_THEME_PATH . 'includes/' );
+     *     require_once ACME_THEME_INC . 'core.php';
+     *
+     * so without this fold every one of those includes is unresolvable.
+     *
+     * `get_stylesheet_directory()` is folded to the same answer, which is exact
+     * except when a parent and child theme are scanned together — the child is
+     * then the right answer for the stylesheet and the parent for the template,
+     * and the calling file only names its own. That case resolves to the file's
+     * own theme, the nearer of the two wrong answers, and a scan holding both
+     * is rare enough to accept it.
+     *
+     * `get_theme_file_path( $file )` is the same fact with the joining done.
+     */
+    /**
+     * @return list<string>
+     */
+    private function fromCall(Op\Expr\FuncCall|Op\Expr\NsFuncCall $op, int $depth): array
+    {
+        $theme = $this->fromThemeLocation($op, $depth);
+
+        if ($theme !== []) {
+            return $theme;
+        }
+
+        $pure = $this->fromPureCall($op, $depth);
+
+        if ($pure !== []) {
+            return $pure;
+        }
+
+        foreach ($this->callNames($op) as $name) {
+            $folded = $this->foldUserCall($name, null, $op->args, $depth);
+
+            if ($folded !== []) {
+                return $folded;
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * A user function's constant or templated return, folded at this call.
+     *
+     * The template form is what a path helper compiles to:
+     *
+     *     public static function get_view_filename( $view ) {
+     *         return __DIR__ . "/views/$view";
+     *     }
+     *     include self::get_view_filename( 'html-main.php' );
+     *
+     * The return depends only on the argument, the argument is a literal, so
+     * the fold is exact. An argument that does not fold to exactly one string
+     * folds to nothing, never to a guess.
+     *
+     * @param array<array-key, mixed> $arguments
+     *
+     * @return list<string>
+     */
+    private function foldUserCall(string $name, ?string $method, array $arguments, int $depth): array
+    {
+        if ($this->returns === null) {
+            return [];
+        }
+
+        $template = $method !== null
+            ? ($this->returns->templateFor($name) ?? $this->returns->templateForUniqueMethod($method))
+            : $this->returns->templateFor($name);
+
+        if ($template === null) {
+            return [];
+        }
+
+        $folded = '';
+
+        foreach ($template as $segment) {
+            if (is_string($segment)) {
+                $folded .= $segment;
+
+                continue;
+            }
+
+            $argument = array_values($arguments)[$segment] ?? null;
+
+            if (! $argument instanceof Operand) {
+                return [];
+            }
+
+            $values = $this->strings($argument, $depth + 1);
+
+            if (count($values) !== 1) {
+                return [];
+            }
+
+            $folded .= $values[0];
+        }
+
+        return [$folded];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function fromThemeLocation(Op\Expr\FuncCall|Op\Expr\NsFuncCall $op, int $depth): array
+    {
+        if ($this->themes === null || $this->themes->isEmpty()) {
+            return [];
+        }
+
+        $name = $this->pureFunctionName($op) ?? $this->callNames($op)[0] ?? null;
+
+        if (
+            $name === null
+            || ! in_array(
+                strtolower(ltrim($name, '\\')),
+                ['get_template_directory', 'get_stylesheet_directory', 'get_theme_file_path'],
+                true,
+            )
+        ) {
+            return [];
+        }
+
+        $root = $this->themes->forFile($op->getFile());
+
+        if ($root === null) {
+            return [];
+        }
+
+        if (strtolower(ltrim($name, '\\')) !== 'get_theme_file_path') {
+            return [$root];
+        }
+
+        $file = $op->args[0] ?? null;
+
+        if (! $file instanceof Operand) {
+            return [$root . '/'];
+        }
+
+        $values = $this->strings($file, $depth + 1);
+
+        return count($values) === 1 ? [$root . '/' . ltrim($values[0], '/')] : [];
+    }
+
+    /**
      * @return list<string>
      */
     private function fromPureCall(Op\Expr\FuncCall|Op\Expr\NsFuncCall $op, int $depth): array
@@ -180,7 +337,7 @@ final class ValueResolver
      *
      * @return list<string>
      */
-    private function fromConstantReturn(Op\Expr\MethodCall|Op\Expr\StaticCall $op): array
+    private function fromConstantReturn(Op\Expr\MethodCall|Op\Expr\StaticCall $op, int $depth): array
     {
         if ($this->returns === null) {
             return [];
@@ -202,6 +359,21 @@ final class ValueResolver
                     return [$value];
                 }
             }
+        }
+
+        $qualified = $op instanceof Op\Expr\StaticCall
+            ? OperandHelper::literalString($op->class)
+            : null;
+
+        $templated = $this->foldUserCall(
+            ($qualified !== null ? $qualified . '::' : '') . $method,
+            $method,
+            $op->args,
+            $depth,
+        );
+
+        if ($templated !== []) {
+            return $templated;
         }
 
         $value = $this->returns->forUniqueMethod($method);

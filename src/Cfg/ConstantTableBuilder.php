@@ -107,6 +107,7 @@ final class ConstantTableBuilder
         }
 
         $values = [];
+        $templates = [];
 
         foreach (BlockOrder::of($context->func->cfg) as $block) {
             foreach ($block->children as $op) {
@@ -122,12 +123,39 @@ final class ConstantTableBuilder
 
                 $resolved = $resolver->strings($op->expr);
 
-                if (count($resolved) !== 1) {
+                if (count($resolved) === 1) {
+                    $values[] = $resolved[0];
+
+                    continue;
+                }
+
+                // Not a constant. It may still be a *template* — literal
+                // fragments around the function's own parameters — which a call
+                // with literal arguments folds exactly. See
+                // {@see ConstantReturnTable::$templates}.
+                $template = $this->templateOf($op->expr, $resolver, $context);
+
+                if ($template === null) {
                     return;
                 }
 
-                $values[] = $resolved[0];
+                $templates[] = $template;
             }
+        }
+
+        if ($templates !== []) {
+            // Constants and templates from different branches of one function
+            // do not merge, and neither do two different templates: any
+            // disagreement between returns means the answer depends on control
+            // flow this pass does not model.
+            $unique = array_unique($templates, SORT_REGULAR);
+            $first = reset($unique);
+
+            if ($values === [] && count($unique) === 1 && $first !== false) {
+                $returns->recordTemplate($context->key, $first);
+            }
+
+            return;
         }
 
         $unique = array_unique($values);
@@ -135,6 +163,113 @@ final class ConstantTableBuilder
         if (count($unique) === 1) {
             $returns->record($context->key, reset($unique));
         }
+    }
+
+    /**
+     * A return expression as literal fragments around the function's own
+     * parameters, or null when any part is neither.
+     *
+     * Strict on purpose. A part that is a *transformed* parameter —
+     * `basename( $view )`, `$view . $suffix` — is not the parameter, and
+     * substituting the caller's argument into it would fold to a path the
+     * code never builds.
+     *
+     * @return list<string|int>|null
+     */
+    private function templateOf(
+        Operand $expr,
+        ValueResolver $resolver,
+        FunctionContext $context,
+    ): ?array {
+        $parts = self::flattenConcat($expr, 0);
+
+        if ($parts === null) {
+            return null;
+        }
+
+        $parameters = [];
+
+        foreach (array_values($context->func->params) as $index => $param) {
+            if ($param instanceof Op\Expr\Param) {
+                $parameters[spl_object_id($param->result)] = $index;
+            }
+        }
+
+        $segments = [];
+
+        foreach ($parts as $part) {
+            if (! $part instanceof Operand) {
+                return null;
+            }
+
+            $index = $parameters[spl_object_id($part)] ?? null;
+
+            if ($index !== null) {
+                $segments[] = $index;
+
+                continue;
+            }
+
+            $resolved = $resolver->strings($part);
+
+            if (count($resolved) !== 1) {
+                return null;
+            }
+
+            $segments[] = $resolved[0];
+        }
+
+        // A template with no parameter in it is a constant that failed to
+        // resolve for some other reason; recording it would hide that.
+        return array_filter($segments, 'is_int') === [] ? null : $segments;
+    }
+
+    /**
+     * Every atomic operand of a concatenation, however it nests.
+     *
+     * `__DIR__ . "/views/$view"` is not one concat: the interpolated string is
+     * its own op whose result feeds the outer one, so the parameter sits two
+     * levels down. Flattening walks through Concat, ConcatList and plain
+     * assignments; anything else is an atom for the caller to classify.
+     *
+     * @return list<Operand>|null null when nesting exceeds the budget
+     */
+    private static function flattenConcat(Operand $operand, int $depth): ?array
+    {
+        if ($depth > 8) {
+            return null;
+        }
+
+        $definition = OperandHelper::definingOp($operand);
+
+        $parts = match (true) {
+            $definition instanceof Op\Expr\ConcatList => $definition->list,
+            $definition instanceof Op\Expr\BinaryOp\Concat => [$definition->left, $definition->right],
+            $definition instanceof Op\Expr\Assign => [$definition->expr],
+            default => null,
+        };
+
+        if ($parts === null) {
+            return [$operand];
+        }
+
+        $flat = [];
+
+        foreach ($parts as $part) {
+            if (! $part instanceof Operand) {
+                return null;
+            }
+
+            $inner = self::flattenConcat($part, $depth + 1);
+
+            if ($inner === null) {
+                return null;
+            }
+
+            $flat = [...$flat, ...$inner];
+        }
+
+        return $flat;
     }
 
     private function collect(ConstantTable $table, ValueResolver $resolver, mixed $op): void

@@ -1638,3 +1638,51 @@ and voids — nothing escaping could have been applied to.
 
     corpus, both suites and the vulnerable plugin unchanged
     four fixtures, one per fix
+
+
+## Includes that would not fold, measured then fixed
+
+The misses table called this a medium project aimed at `get_template_part()`.
+Measuring first changed the target: across five big corpus plugins, 424
+unresolved includes split into 272 pointing at WordPress core (out of scan by
+design), ~100 crude-classifier noise, 38 genuinely dynamic — and the real
+mechanical gaps were elsewhere.
+
+**Theme constant chains** were the loudest failure on real client themes, not
+plugins. `get_template_directory()` is a runtime question with a static answer
+whenever the calling file is itself inside a theme in the scan:
+
+    define( 'ACME_THEME_PATH', get_template_directory() . '/' );
+    define( 'ACME_THEME_INC', ACME_THEME_PATH . 'includes/' );
+    require_once ACME_THEME_INC . 'core.php';
+
+One fold connects the chain. ThemeRoots reads the `themes/<name>/` convention
+from the scanned file list — never the filesystem — and a client theme went from
+17 unresolved includes to 9, the recovered nine being its entire `includes/`
+tree. A plugin calling it resolves only when the scan holds exactly one theme.
+
+**Templated returns.** `include self::get_view_filename( 'html-main.php' )`
+where the helper returns `__DIR__ . "/views/$view"`. The constant-return table
+now records a *template* — literal fragments around the function's own
+parameters — when every return produces the same one, and a call with literal
+arguments folds it exactly. A transformed parameter refuses: substituting into
+`basename( $view )` would fold to a path the code never builds. The nested
+interpolation mattered: `"/views/$view"` is its own op feeding the outer concat,
+so extraction flattens recursively.
+
+Honest yield on the corpus: eight includes, not the 159 the first crude
+classifier suggested. The same fold serves hook names and every other string
+question, and it found one non-obvious bug on the way: `fromConstantReturn`
+never carried a recursion depth, so two templated helpers calling each other
+looped until memory ran out.
+
+**A bootstrap file**, suggested mid-implementation and nearly free: `bootstrap =
+["wp-taint-bootstrap.php"]` in the config or `--bootstrap` on the command line,
+for constants defined outside anything scanned — `ABSPATH` above all. It is
+mechanically `reference` under a name that answers "where do I put the define".
+Verified end to end: a bootstrap defining ABSPATH plus core referenced resolves
+`require_once ABSPATH . 'wp-admin/…'` and carries a flow through it.
+
+    corpus, both suites, vulnerable plugin   unchanged
+    kff-org-modern includes                  17 unresolved -> 9
+    585 tests

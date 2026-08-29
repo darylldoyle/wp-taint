@@ -73,6 +73,26 @@ own plugin from the reference.
 > took a 50-second scan to 7 minutes 36 seconds. Reference the plugins your code
 > actually calls into, and nothing else.
 
+## Define what the scan cannot see with a bootstrap file
+
+Some constants live outside anything you would scan — `ABSPATH` is defined in
+`wp-config.php`. A bootstrap file names them, the way PHPStan's does:
+
+```php
+<?php
+// wp-taint-bootstrap.php
+define( 'ABSPATH', '/var/www/site/' );
+```
+
+```toml
+[scan]
+bootstrap = ["wp-taint-bootstrap.php"]
+```
+
+The file is parsed for what it defines and never reported on. Any include built
+from those constants then resolves, provided the file it points at is in the
+scan or a referenced tree.
+
 ## Do not reference WordPress core
 
 Measured on a client theme: 310 files scan in 1.8 seconds alone and 163 seconds

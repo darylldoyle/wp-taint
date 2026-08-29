@@ -10,6 +10,7 @@ use Enshrined\WpTaint\Cfg\IncludeGraphBuilder;
 use Enshrined\WpTaint\Cfg\IncludeResolver;
 use Enshrined\WpTaint\Cfg\ParsedFile;
 use Enshrined\WpTaint\Cfg\ParseError;
+use Enshrined\WpTaint\Cfg\ThemeRoots;
 use Enshrined\WpTaint\Finding\Finding;
 use Enshrined\WpTaint\Finding\FindingCollection;
 use Enshrined\WpTaint\Hooks\HookGraphBuilder;
@@ -199,8 +200,14 @@ final class Scanner
         // Constants first: WordPress builds include paths out of them and
         // almost nothing else, so resolution stops dead without this, and
         // everything downstream wants a resolver that can see them.
-        $static = (new ConstantTableBuilder(new ValueResolver()))->buildBoth($contexts);
-        $values = (new ValueResolver())->withConstants($static['constants'], $static['returns']);
+        // Which theme each file belongs to, so `get_template_directory()` and
+        // the constant chains themes hang off it fold. From the scanned file
+        // list, reference trees included — a theme referenced for context still
+        // answers the question for its own files.
+        $themes = ThemeRoots::fromFiles(array_map(static fn (ParsedFile $file): string => $file->path, $parsed));
+
+        $static = (new ConstantTableBuilder(new ValueResolver(themes: $themes)))->buildBoth($contexts);
+        $values = (new ValueResolver(themes: $themes))->withConstants($static['constants'], $static['returns']);
         $callables = new CallableResolver($this->registry, $functions, $values);
 
         // The hook and call graphs are built before the structural rules run,

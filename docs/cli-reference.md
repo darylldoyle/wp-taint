@@ -27,6 +27,7 @@ wp-taint scan [options] [--] [<paths>...]
 | Option | Default | Effect |
 |--------|---------|--------|
 | `--include-path=PATH` | none | Analyse this tree for symbols, never report on it. Repeatable. |
+| `--bootstrap=FILE` | none | A file whose `define()`s the scan should know, e.g. `ABSPATH`. Repeatable. |
 | `--exclude=GLOB` | none | Skip paths matching this glob. Repeatable. |
 | `--config=FILE` | `./wp-taint.toml` | Project config file |
 | `--registry=NAME` | `wordpress` | Registry name, or a path to a TOML file |
@@ -126,6 +127,7 @@ are merged. Use it to confirm a function is modelled the way you think.
 [scan]
 paths     = ["themes/client-theme", "plugins/client-shared"]
 reference = ["plugins/some-dependency"]
+bootstrap = ["wp-taint-bootstrap.php"]
 exclude   = ["*/vendor/*", "*/node_modules/*"]
 
 [scan.options]
@@ -141,6 +143,7 @@ stored_taint_writes = false
 |-----|-----------------|
 | `paths` | positional arguments |
 | `reference` | `--include-path` |
+| `bootstrap` | `--bootstrap` |
 | `exclude` | `--exclude` |
 | `options.jobs` | `--jobs` |
 | `options.fail_on` | `--fail-on` |

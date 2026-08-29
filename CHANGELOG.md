@@ -44,7 +44,14 @@ will contain.
 - `scan`, `explain`, `registry:dump` and `dump-cfg` commands.
 - Console, JSON and SARIF output.
 - Baselines and inline `wp-taint-ignore-next-line` suppressions.
-- `wp-taint.toml` project config with separate `paths` and `reference` lists.
+- `wp-taint.toml` project config with separate `paths`, `reference` and
+  `bootstrap` lists — the last for files whose `define()`s the scan should
+  know, such as `ABSPATH`.
+- `get_template_directory()` and the constant chains themes hang off it fold to
+  the theme a file is in, so a theme's own `require_once THEME_INC . '…'`
+  connects.
+- Path-helper returns fold at call sites: a function returning
+  `__DIR__ . "/views/$view"` called with a literal resolves the include.
 - `--include-path` for trees analysed for symbols but never reported on.
 - Output that nothing vouches for is reported by default, at `low`, seeded only
   at entry points — a function nothing in the scan calls.

@@ -39,7 +39,7 @@ output rather than in the findings.
 | [A CSV formula prefix spelled any other way](#the-csv-neutraliser-the-rule-asks-for-is-recognised) | Over-reports |
 | [Stored sources carry no `path` or `url` taint](#stored-sources-carry-html-and-sql-taint-only-not-path-or-url) | Misses |
 | [A callable that cannot be traced to a name](#dynamic-calls-are-followed-as-far-as-the-value-can-be-traced) | Configurable |
-| [An `include` whose path will not fold](#include-and-require-are-followed-unless-the-path-is-computed) | Misses |
+| [A genuinely dynamic include path](#include-and-require-are-followed-unless-the-path-is-computed) | Misses |
 | [A hook registration whose name will not resolve](#hook-callbacks-are-followed-unless-the-hook-name-is-dynamic) | Misses |
 | [`remove_filter()` is not modelled](#hook-callbacks-are-followed-unless-the-hook-name-is-dynamic) | Over-reports |
 | [An unmodelled function returns clean](#an-unmodelled-function-returns-clean) | Misses |
@@ -578,12 +578,34 @@ Scopes join both ways, and converge in the interprocedural loop alongside the
 property map. Cycles terminate because the return direction reads the table
 rather than descending.
 
-**What is still missed.** An include whose path will not fold — about half the
-sites in the corpus — is counted rather than followed. `get_template_part()`,
-`load_template()` and `locate_template()` are not resolved through the template
-hierarchy yet. And the include path itself is not modelled: PHP would search it
+Three folds carry most of what used to fail:
+
+- **Theme location functions.** `get_template_directory()` and
+  `get_stylesheet_directory()` fold to the theme the calling file is in, read
+  from the `themes/<name>/` convention in the scanned file list. Themes hang
+  their constant chains off these — `define( 'ACME_INC', get_template_directory()
+  . '/includes/' )` — so one fold connects the chain. A real client theme went
+  from 17 unresolved includes to 9, the nine being its own `includes/` tree.
+- **Templated returns.** A helper returning `__DIR__ . "/views/$view"` called
+  with a literal folds exactly; every return must produce the same template, and
+  a transformed parameter — `basename( $view )` — refuses rather than guesses.
+- **A bootstrap file.** `bootstrap = ["wp-taint-bootstrap.php"]` names constants
+  defined outside anything scanned, `ABSPATH` above all, the way PHPStan's
+  bootstrap does. Parsed, never reported on.
+
+**What is still missed.** A genuinely dynamic path — `include $path` where the
+value comes from data or a loop over a directory listing. An include pointing at
+a file that is in neither the scan nor a referenced tree, which is most
+`ABSPATH . 'wp-admin/…'` sites unless core is referenced. A template hierarchy
+call whose named file does not exist — a dead `get_template_part()` is counted,
+not invented. And the include path itself is not modelled: PHP would search it
 before the calling file's directory, but that is runtime configuration the
 analysis cannot see.
+
+A plugin calling `get_template_directory()` resolves only when the scan holds
+exactly one theme; several themes is genuinely ambiguous. A parent and child
+theme scanned together both fold to the calling file's own theme, which is right
+for the child's stylesheet calls and wrong for a child asking about its parent.
 
 **Direction:** under-approximating at the unresolved paths, over-approximating at
 the resolved ones — a file's inbound scope is unioned over every site that

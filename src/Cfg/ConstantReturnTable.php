@@ -36,6 +36,29 @@ final class ConstantReturnTable
     private array $returns = [];
 
     /**
+     * Functions whose every return is the same *template*: literal fragments
+     * around the function's own parameters.
+     *
+     * ```php
+     * public static function get_view_filename( $view ) {
+     *     return __DIR__ . "/views/$view";
+     * }
+     * …
+     * include self::get_view_filename( 'html-main.php' );
+     * ```
+     *
+     * The return is not a constant — it depends on `$view` — and it is not
+     * computed either: fold the call's own literal argument through it and the
+     * answer is exact. WooCommerce alone has 159 includes of this shape, which
+     * was most of what the constant-return pass still could not reach.
+     *
+     * Each segment is a literal string, or a parameter index to substitute.
+     *
+     * @var array<string, list<string|int>>
+     */
+    private array $templates = [];
+
+    /**
      * Method names declared exactly once across the scan.
      *
      * `WC()->plugin_path()` names a method on a receiver whose class the value
@@ -51,7 +74,20 @@ final class ConstantReturnTable
     public function record(string $key, string $value): void
     {
         $this->returns[strtolower($key)] = $value;
+        $this->index($key);
+    }
 
+    /**
+     * @param list<string|int> $segments
+     */
+    public function recordTemplate(string $key, array $segments): void
+    {
+        $this->templates[strtolower($key)] = $segments;
+        $this->index($key);
+    }
+
+    private function index(string $key): void
+    {
         $position = strpos($key, '::');
 
         if ($position === false) {
@@ -81,8 +117,26 @@ final class ConstantReturnTable
         return $key === false ? null : ($this->returns[$key] ?? null);
     }
 
+    /**
+     * @return list<string|int>|null
+     */
+    public function templateFor(string $name): ?array
+    {
+        return $this->templates[strtolower(ltrim($name, '\\'))] ?? null;
+    }
+
+    /**
+     * @return list<string|int>|null
+     */
+    public function templateForUniqueMethod(string $method): ?array
+    {
+        $key = $this->byMethod[strtolower($method)] ?? false;
+
+        return $key === false ? null : ($this->templates[$key] ?? null);
+    }
+
     public function count(): int
     {
-        return count($this->returns);
+        return count($this->returns) + count($this->templates);
     }
 }

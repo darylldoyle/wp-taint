@@ -8,6 +8,7 @@ use Enshrined\WpTaint\Cfg\CfgBuilder;
 use Enshrined\WpTaint\Cfg\ConstantTableBuilder;
 use Enshrined\WpTaint\Cfg\IncludeGraphBuilder;
 use Enshrined\WpTaint\Cfg\IncludeResolver;
+use Enshrined\WpTaint\Cfg\ThemeRoots;
 use Enshrined\WpTaint\Cli\Application;
 use Enshrined\WpTaint\Cli\ExitCode;
 use Enshrined\WpTaint\Cli\InputReader;
@@ -19,6 +20,7 @@ use Enshrined\WpTaint\Taint\AnalysisOptions;
 use Enshrined\WpTaint\Taint\CallableResolver;
 use Enshrined\WpTaint\Taint\CallResolver;
 use Enshrined\WpTaint\Taint\Explainer;
+use Enshrined\WpTaint\Taint\FunctionContext;
 use Enshrined\WpTaint\Taint\InterproceduralResolver;
 use Enshrined\WpTaint\Taint\IntraproceduralAnalyzer;
 use Enshrined\WpTaint\Taint\ReceiverResolver;
@@ -159,8 +161,12 @@ final class ExplainCommand extends Command
 
         $contexts = $functions->all();
         $receivers = new ReceiverResolver($functions->declaredTypes());
-        $static = (new ConstantTableBuilder(new ValueResolver()))->buildBoth($contexts);
-        $values = (new ValueResolver())->withConstants($static['constants'], $static['returns']);
+        $themes = ThemeRoots::fromFiles(array_map(
+            static fn (FunctionContext $context): string => $context->file->path,
+            $contexts,
+        ));
+        $static = (new ConstantTableBuilder(new ValueResolver(themes: $themes)))->buildBoth($contexts);
+        $values = (new ValueResolver(themes: $themes))->withConstants($static['constants'], $static['returns']);
         $callables = new CallableResolver($registry, $functions, $values);
 
         // The same hook graph the scan builds. Without it `explain` would say a

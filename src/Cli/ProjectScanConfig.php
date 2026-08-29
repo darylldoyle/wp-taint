@@ -58,18 +58,30 @@ use Yosymfony\Toml\Toml;
  */
 final class ProjectScanConfig
 {
-    private const KEYS = ['paths', 'reference', 'exclude', 'options'];
+    private const KEYS = ['paths', 'reference', 'bootstrap', 'exclude', 'options'];
 
     private const OPTION_KEYS = ['jobs', 'fail_on', 'min_severity', 'format', 'baseline', 'stored_taint_writes'];
 
     /**
      * @param list<string> $paths
      * @param list<string> $reference
+     * @param list<string> $bootstrap
      * @param list<string> $excludes
      */
     private function __construct(
         public readonly array $paths,
         public readonly array $reference,
+        /**
+         * Files parsed for the constants and symbols they define, never
+         * reported on. The PHPStan/PHPUnit bootstrap idea, and mechanically the
+         * same thing as `reference`: it exists as its own key because "where do
+         * I put the `define( 'ABSPATH', … )` the scan cannot otherwise see" is
+         * a question with a name.
+         *
+         *     [scan]
+         *     bootstrap = ["wp-taint-bootstrap.php"]
+         */
+        public readonly array $bootstrap,
         public readonly array $excludes,
         public readonly ?int $jobs,
         public readonly ?string $failOn,
@@ -82,7 +94,7 @@ final class ProjectScanConfig
 
     public static function empty(): self
     {
-        return new self([], [], [], null, null, null, null, null, null);
+        return new self([], [], [], [], null, null, null, null, null, null);
     }
 
     /**
@@ -133,6 +145,7 @@ final class ProjectScanConfig
         return new self(
             self::paths($file, 'paths', $scan['paths'] ?? [], $root),
             self::paths($file, 'reference', $scan['reference'] ?? [], $root),
+            self::paths($file, 'bootstrap', $scan['bootstrap'] ?? [], $root),
             self::strings($file, 'exclude', $scan['exclude'] ?? []),
             self::integer($file, 'jobs', $options['jobs'] ?? null),
             self::text($file, 'fail_on', $options['fail_on'] ?? null),

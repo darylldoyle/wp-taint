@@ -113,6 +113,12 @@ final class ScanCommand extends Command
                 'Analyse this tree for its symbols but never report findings in it (repeatable)',
             )
             ->addOption(
+                'bootstrap',
+                null,
+                InputOption::VALUE_REQUIRED | InputOption::VALUE_IS_ARRAY,
+                'A file whose define()s the scan should know, e.g. ABSPATH; parsed, never reported on (repeatable)',
+            )
+            ->addOption(
                 'no-follow-includes',
                 null,
                 InputOption::VALUE_NONE,
@@ -272,7 +278,12 @@ final class ScanCommand extends Command
             $reader->dynamicCallPolicy(),
             ! $reader->bool('no-follow-includes'),
             ! $reader->bool('no-unknown-provenance'),
-            [...$reader->stringList('include-path'), ...$project->reference],
+            [
+                ...$reader->stringList('include-path'),
+                ...$reader->stringList('bootstrap'),
+                ...$project->reference,
+                ...$project->bootstrap,
+            ],
             $reader->bool('parse-report'),
             $reader->nullableString('dump-taint-graph'),
             ! $reader->bool('no-structural-rules'),
