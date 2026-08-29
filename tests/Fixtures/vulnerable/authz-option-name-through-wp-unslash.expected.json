@@ -1,0 +1,10 @@
+{
+    "expectation": "vulnerable",
+    "findings": [
+        {
+            "ruleId": "wp.authz.arbitrary-option-write",
+            "kind": "identifier",
+            "line": 14
+        }
+    ]
+}

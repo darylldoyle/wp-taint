@@ -258,6 +258,21 @@ final class PropertyTaintMap
             }
         }
 
+        // AND-ed, the same way recordAnchor accumulates it: one unanchored
+        // write anywhere makes the property unanchored everywhere, and that
+        // verdict has to survive the merge or a caller that anchors the name in
+        // a different function from the write loses its vote every round. This
+        // is what carries `new Setting( $_POST['name'] )` from the constructor
+        // that stores it to the method that writes the option.
+        foreach ($other->anchored as $key => $anchored) {
+            $merged = ($this->anchored[$key] ?? true) && $anchored;
+
+            if ($merged !== ($this->anchored[$key] ?? true)) {
+                $this->anchored[$key] = $merged;
+                $changed = true;
+            }
+        }
+
         return $changed;
     }
 

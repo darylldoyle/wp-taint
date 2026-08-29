@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Taint;
 
+use Enshrined\WpTaint\Registry\Registry;
 use PHPCfg\Op;
 use PHPCfg\Operand;
 use SplObjectStorage;
@@ -65,6 +66,7 @@ final class LiteralAnchor
         private readonly ?ReceiverResolver $receivers = null,
         private readonly ?FunctionContext $context = null,
         private readonly ?ClassTypeMap $types = null,
+        private readonly ?Registry $registry = null,
     ) {
     }
 
@@ -133,7 +135,12 @@ final class LiteralAnchor
             $definition instanceof Op\Expr\FuncCall,
             $definition instanceof Op\Expr\NsFuncCall,
             $definition instanceof Op\Expr\MethodCall,
-            $definition instanceof Op\Expr\StaticCall => $this->callIsAnchored($definition),
+            $definition instanceof Op\Expr\StaticCall => $this->callIsAnchored(
+                $definition,
+                $seen,
+                $depth,
+                $deferToCaller,
+            ),
             $definition instanceof Op\Expr\PropertyFetch,
             $definition instanceof Op\Expr\StaticPropertyFetch => $this->propertyIsAnchored($definition),
             // A parameter's anchor belongs to the caller. `new Acme( 'acme_' .
@@ -158,13 +165,39 @@ final class LiteralAnchor
      * An unresolvable callee counts as anchored. We cannot see what it builds,
      * so we do not claim it builds nothing fixed.
      */
-    private function callIsAnchored(Op\Expr $definition): bool
+    /**
+     * @param SplObjectStorage<Operand, true> $seen
+     */
+    private function callIsAnchored(Op\Expr $definition, SplObjectStorage $seen, int $depth, bool $deferToCaller): bool
     {
         if ($this->summaries === null || $this->resolver === null || $this->context === null) {
             return true;
         }
 
         $call = $this->resolver->resolve($definition, $this->context, $this->types ?? new ClassTypeMap());
+
+        // A pass-through carries its argument's anchor, it does not create one.
+        // `wp_unslash( $_POST['name'] )` is exactly as anchored as
+        // `$_POST['name']` — which is to say not at all — and reading it as
+        // anchored missed `update_option( wp_unslash( $_POST['name'] ) )`, a
+        // critical write the request names. A sanitizer is the same: `sanitize_
+        // key()` constrains the charset, never to a namespace the plugin owns.
+        $matcher = $call?->matcher;
+
+        if (
+            $matcher !== null
+            && $this->registry !== null
+            && ($this->registry->propagator($matcher) !== null || $this->registry->sanitizer($matcher) !== null)
+        ) {
+            foreach ($call->arguments as $argument) {
+                if ($argument instanceof Operand && $this->check($argument, $seen, $depth + 1, $deferToCaller)) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         $key = $call?->userFunctionKey;
 
         if ($key === null) {

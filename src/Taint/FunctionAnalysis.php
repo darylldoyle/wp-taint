@@ -190,7 +190,15 @@ final class FunctionAnalysis
             $literals,
             new OriginClassifier($registry, $resolver, $properties, $receivers),
         );
-        $this->anchors = new LiteralAnchor($summaries, $resolver, $properties, $receivers, $context, $this->types);
+        $this->anchors = new LiteralAnchor(
+            $summaries,
+            $resolver,
+            $properties,
+            $receivers,
+            $context,
+            $this->types,
+            $registry,
+        );
         $this->guards = new GuardAnalyzer();
         $this->returnTaint = TaintSet::empty();
         $this->returnAnchored = null;
@@ -2519,6 +2527,15 @@ final class FunctionAnalysis
                 $argumentTaint,
                 $this->propertyWriteTrace($op, $argument, $argumentTaint, $summary, $property),
             ) || $changed;
+
+            // The anchor is the caller's to settle. Inside the callee the value
+            // is a parameter, and an unknown parameter reads as anchored — so a
+            // constructor storing `$name` on a property recorded the property
+            // as anchored whatever the caller passed. Recording the argument's
+            // own anchor state closes that: `new Setting( 'acme_' . $x )` pens
+            // the option name in, `new Setting( $_POST['name'] )` does not, and
+            // AND-ing keeps one unanchored write decisive.
+            $this->properties->recordAnchor($class, $property, $this->anchors->has($argument));
         }
 
         return $changed;
