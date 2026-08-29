@@ -1,9 +1,7 @@
 <?php
 
-// wp-taint-options unknown-provenance
-
 /**
- * `--unknown-provenance` marks a parameter as unvouched-for. It used to mark
+ * Unknown provenance marks a parameter as unvouched-for. It used to mark
  * every parameter, including ones the scan can answer for itself:
  *
  *     acme_render( esc_html( $title ) );

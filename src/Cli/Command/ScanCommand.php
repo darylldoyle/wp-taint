@@ -122,7 +122,13 @@ final class ScanCommand extends Command
                 'unknown-provenance',
                 null,
                 InputOption::VALUE_NONE,
-                'Also report output whose origin cannot be traced, as an obligation rather than a flow',
+                'Deprecated: on by default. Use --no-unknown-provenance to turn it off',
+            )
+            ->addOption(
+                'no-unknown-provenance',
+                null,
+                InputOption::VALUE_NONE,
+                'Report only traced flows, not output whose origin cannot be established',
             )
             ->addOption('no-structural-rules', null, InputOption::VALUE_NONE, 'Run taint analysis only')
             ->addOption(
@@ -265,7 +271,7 @@ final class ScanCommand extends Command
             $reader->bool('stored-taint-writes') || ($project->storedTaintWrites ?? false),
             $reader->dynamicCallPolicy(),
             ! $reader->bool('no-follow-includes'),
-            $reader->bool('unknown-provenance'),
+            ! $reader->bool('no-unknown-provenance'),
             [...$reader->stringList('include-path'), ...$project->reference],
             $reader->bool('parse-report'),
             $reader->nullableString('dump-taint-graph'),

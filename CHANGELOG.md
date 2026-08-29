@@ -40,8 +40,10 @@ will contain.
 - Baselines and inline `wp-taint-ignore-next-line` suppressions.
 - `wp-taint.toml` project config with separate `paths` and `reference` lists.
 - `--include-path` for trees analysed for symbols but never reported on.
-- `--unknown-provenance` to ask "is this proven safe" instead of "can I trace
-  this to something dangerous", seeded only at entry points.
+- Output that nothing vouches for is reported by default, at `low`, seeded only
+  at entry points — a function nothing in the scan calls.
+  `--no-unknown-provenance` asks the narrower "can I trace this to something
+  dangerous" instead.
 - `--stored-taint-writes` to report unsanitised data written into options and
   meta.
 - Parallel analysis with `--jobs`, producing identical findings at any job

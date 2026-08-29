@@ -27,18 +27,24 @@ final class AnalysisOptions
          * Whether a value whose origin the scan cannot see counts as unknown
          * rather than as clean.
          *
-         * Off by default, because it is the difference between reporting flows
-         * and reporting obligations, and the second is a much larger number:
-         * WordPress's own standard says escape on output wherever the value
-         * came from, and most output in a real plugin comes from somewhere the
-         * scan cannot follow.
+         * On by default. WordPress's own standard is escape on output wherever
+         * the value came from, so output nothing vouches for is worth a look
+         * even when no flow reaches it — the reader can dismiss it in a second
+         * if they know the value is safe, and cannot dismiss what was never
+         * shown to them.
          *
          * On, the tool answers "is this value proven safe". Off, it answers
          * "can I trace this value to something dangerous". Both are useful and
-         * they are not the same question, so the flag says which is being
-         * asked. See {@see TaintKind::Unknown}.
+         * they are not the same question, so `--no-unknown-provenance` says
+         * when the second is the one being asked.
+         *
+         * It costs nothing to run: seeding a marker on an entry point's
+         * parameters is not extra work for the fixed point, and a 926-file
+         * scan measures the same either way. What it costs is findings, all at
+         * `low`, which is below the default `--fail-on` and so cannot fail a
+         * build on its own. See {@see TaintKind::Unknown}.
          */
-        public readonly bool $unknownProvenance = false,
+        public readonly bool $unknownProvenance = true,
         /**
          * Rounds are cheap when they are not needed: the loop exits as soon as
          * nothing changes, so a generous cap costs nothing on code that settles

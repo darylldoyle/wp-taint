@@ -107,19 +107,24 @@ echo '<a href="' . esc_url_raw( $u ) . '">';   // safe: no quote can survive
 echo "<a href='" . esc_url_raw( $u ) . "'>";   // unsafe: an apostrophe can
 ```
 
-## Two questions, and a flag that picks
+## Two questions, and which one is asked
 
-By default wp-taint asks: **can I trace this value back to something dangerous?**
-Everything it reports has a path.
+wp-taint asks: **is this value proven safe?** Everything with a traced path is
+reported for what that path shows, and output that nothing vouches for is
+reported at `low`.
 
-`--unknown-provenance` asks the other question: **is this value proven safe?**
-It marks parameters of functions nothing in the scan calls, because those
-arrive from outside, and reports them if they reach output unescaped. That is
-WordPress's own standard, escape on output wherever the value came from, and it
-finds more.
+That second half is WordPress's own standard: escape on output wherever the
+value came from. It applies to parameters of functions nothing in the scan
+calls, because those arrive from outside and the scan has read nothing that
+settles them. A parameter whose callers *are* visible is not unknown, because
+the caller answers for it.
 
-Both are useful and they are not the same question, so a flag says which is
-being asked rather than a threshold splitting the difference.
+`low` is below the default `--fail-on`, so it cannot fail a build on its own. A
+reader who knows the value is safe dismisses it in a second; a reader who is
+never shown it cannot.
+
+`--no-unknown-provenance` asks the narrower question — **can I trace this value
+back to something dangerous?** — and reports only what has a path.
 
 ## Some functions are entry points
 

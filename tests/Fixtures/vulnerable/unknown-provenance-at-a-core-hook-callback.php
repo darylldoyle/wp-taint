@@ -1,7 +1,5 @@
 <?php
 
-// wp-taint-options unknown-provenance
-
 /**
  * Nothing in the scan calls this — WordPress does, on a hook core dispatches.
  * Its argument arrives from outside and nothing here says what it holds, which

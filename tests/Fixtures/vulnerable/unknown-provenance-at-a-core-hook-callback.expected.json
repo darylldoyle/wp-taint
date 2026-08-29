@@ -4,7 +4,7 @@
         {
             "ruleId": "wp.output.unescaped-unknown",
             "kind": "unknown",
-            "line": 22
+            "line": 20
         }
     ]
 }

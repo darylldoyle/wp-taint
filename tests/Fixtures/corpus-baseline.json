@@ -1,8 +1,9 @@
 {
     "akismet": {
         "version": "5.7.2",
-        "findings": 6,
+        "findings": 12,
         "bySeverity": {
+            "low": 6,
             "medium": 6
         },
         "warnings": 0,
@@ -37,8 +38,9 @@
     },
     "duplicate-post": {
         "version": "4.7",
-        "findings": 2,
+        "findings": 3,
         "bySeverity": {
+            "low": 1,
             "medium": 2
         },
         "warnings": 0,
@@ -65,10 +67,11 @@
     },
     "wpforms-lite": {
         "version": "2.0.1.1",
-        "findings": 43,
+        "findings": 50,
         "bySeverity": {
             "critical": 4,
             "high": 26,
+            "low": 7,
             "medium": 13
         },
         "warnings": 0,

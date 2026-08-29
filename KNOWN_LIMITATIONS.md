@@ -29,7 +29,7 @@ output rather than in the findings.
 | [An array read or write with a computed key sees the whole array](#array-element-taint-is-per-key-when-both-ends-name-a-constant-key) | Over-reports |
 | [Object properties are per class, not per instance](#object-properties-are-per-class-not-per-instance) | Over-reports |
 | [A guard on a container is not followed](#a-guard-clause-is-followed-a-guard-on-a-container-is-not) | Over-reports |
-| [A value of unknown origin counts as clean by default](#unknown-provenance-is-reported-only-on-request) | Misses |
+| [A value of unknown origin, with `--no-unknown-provenance`](#unknown-provenance-is-reported-by-default) | Misses |
 | [A context built from a variable is not judged](#escaping-is-judged-against-its-context-but-not-a-computed-one) | Misses |
 | [`wp_update_comment()` is listed as returning its filtered argument](#escaping-must-survive-to-the-point-of-output) | Over-reports |
 | [Pluggable functions a plugin redefines outright](#escaping-must-survive-to-the-point-of-output) | Misses |
@@ -168,10 +168,10 @@ path to a sink, which is the shape that fast path uses.
   control flow. That is container reasoning, not path sensitivity, and it is not
   done. WooCommerce's REST settings controller is the live example.
 
-### Unknown provenance is reported only on request
+### Unknown provenance is reported by default
 
-The engine has three answers for a value now — tainted, clean, and *unknown*.
-The third is new, and it is off unless `--unknown-provenance` is passed.
+The engine has three answers for a value — tainted, clean, and *unknown*. The
+third is reported at `low`, and `--no-unknown-provenance` turns it off.
 
 A parameter of a function nothing in the scan calls, or the result of a callee
 that cannot be followed, used to count as clean. That is a documented false
@@ -180,11 +180,19 @@ costs more than it looked: a third-party suite scores the output half of this
 tool at **0.18 recall** on exactly that shape, and turning the flag on takes it
 to 0.82.
 
-Off by default because it changes the question. Off, the tool answers "can I
-trace this value to something dangerous". On, it answers "is this value proven
-safe", which is what WordPress's own sanitise-on-input, escape-on-output
-standard actually asks — and which produces 142 more findings across the fifty
-corpus plugins, at `low` severity.
+On by default because it is the question WordPress's own sanitise-on-input,
+escape-on-output standard asks: is this value proven safe? It produces 157 more
+findings across the fifty corpus plugins, all at `low`, which is below the
+default `--fail-on` and so cannot fail a build on its own. A reader who knows
+the value is safe dismisses one in a second; a reader who is never shown it
+cannot.
+
+It costs nothing to run. Seeding a marker on an entry point's parameters is not
+extra work for the fixed point, and a 926-file scan measures the same either
+way.
+
+`--no-unknown-provenance` asks the narrower question, "can I trace this value to
+something dangerous", and reports only what has a path.
 
 The seeding is narrowed to entry points: a parameter of a function nothing in
 the scan calls. A parameter whose callers *are* visible is not unknown, because
@@ -193,6 +201,24 @@ produced 926 findings, of which 784 were values whose provenance had already
 been established.
 
 Neither question is wrong. The flag says which one is being asked.
+
+**A function whose output is already prepared is not affected.** VIP's guidance
+that "some WordPress functions properly prepare the data for output" holds here
+without a list of them, because two separate things have to be true before
+either rule fires. `wp.output.unescaped-unknown` needs the marker to reach the
+output, and `wp_get_attachment_image()`, `get_avatar()`, `wp_nav_menu()`,
+`paginate_links()`, `get_search_form()` and the rest are not propagators, so
+nothing carries through them. `wp.xss.escape-voided` needs evidence that
+something *was* escaped before the filterable call, which echoing one of these
+does not provide.
+
+    echo wp_get_attachment_image( $id, 'large' );                    // silent
+    echo get_avatar( $id );                                          // silent
+    echo wp_get_attachment_image( $id, 'large', false,
+        array( 'alt' => esc_attr( $title ) ) );                      // reported
+
+Only the third reports, and only because an escaped value was handed in — which
+is redundant, since core escapes those attributes itself.
 
 ### Escaping is judged against its context, but not a computed one
 

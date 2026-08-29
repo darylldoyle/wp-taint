@@ -57,8 +57,11 @@ function scanFixture(string $relative, ?AnalysisOptions $options = null, ?Regist
 
     $scanner = new Scanner(
         $registry ?? testRegistry('wordpress', true, in_array('stored-taint-writes', $requested, true)),
+        // Defaults, so the net tests what ships. A fixture opts *out* with
+        // `// wp-taint-options no-unknown-provenance` when it is specifically
+        // about the traced-flow answer.
         $options ?? new AnalysisOptions(
-            unknownProvenance: in_array('unknown-provenance', $requested, true),
+            unknownProvenance: ! in_array('no-unknown-provenance', $requested, true),
         ),
         dirname($path),
     );

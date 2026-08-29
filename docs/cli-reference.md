@@ -48,15 +48,18 @@ Severity levels are `low`, `medium`, `high` and `critical`.
 | Option | Default | Effect |
 |--------|---------|--------|
 | `--stored-taint-writes` | off | Report untrusted data written **into** options and meta |
-| `--unknown-provenance` | off | Report output whose origin cannot be traced, as an obligation |
+| `--no-unknown-provenance` | off | Report only traced flows, not output nothing vouches for |
 | `--no-stored-taint` | off | Stop treating options and post meta as tainted |
 | `--no-interprocedural` | off | Do not follow taint across function boundaries |
 | `--no-follow-includes` | off | Do not join scopes across `include` and `require` |
 | `--dynamic-calls=MODE` | `propagate` | `clean`, `propagate` or `tainted` for an unresolvable callee |
 
-`--unknown-provenance` changes the question from "can I trace this value to
-something dangerous" to "is this value proven safe". It reports about three
-extra findings per plugin, all at `low`. See [How it works](how-it-works.md).
+Output nothing vouches for is reported by default, at `low`, which is below the
+default `--fail-on` and so cannot fail a build on its own. WordPress's standard
+is escape on output wherever the value came from, and a reader can dismiss a
+`low` in a second if they know the value is safe — they cannot dismiss what was
+never shown to them. `--no-unknown-provenance` asks the narrower question, "can
+I trace this to something dangerous". See [How it works](how-it-works.md).
 
 ### Output
 
@@ -170,7 +173,7 @@ after `--` is required.
 | `wp.xss.unescaped-output` | Untrusted input reaches output unescaped |
 | `wp.xss.escape-voided` | Escaped, then passed through a filter that can replace it |
 | `wp.xss.wrong-context-escape` | Escaped for the wrong context, e.g. `esc_html` in an `href` |
-| `wp.output.unescaped-unknown` | Output with nothing vouching for it (`--unknown-provenance`) |
+| `wp.output.unescaped-unknown` | Output with nothing vouching for it |
 | `wp.output.csv-injection` | Exported value can be a spreadsheet formula |
 
 ### Database

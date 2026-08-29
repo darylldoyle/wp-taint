@@ -294,14 +294,15 @@ composer suite:check
 framing matters: a tool that flags everything scores perfect recall and is
 useless.
 
-| | default | `--unknown-provenance` |
+| | default | `--no-unknown-provenance` |
 | --- | --- | --- |
-| Precision | **1.00** | 0.98 |
-| Recall | 0.77 | **0.94** |
-| F1 | 0.87 | **0.96** |
+| Precision | 0.98 | **1.00** |
+| Recall | **0.94** | 0.77 |
+| F1 | **0.96** | 0.87 |
 
-Zero false positives across 44 labelled-safe cases by default. The flag trades
-one of those for eight more true positives.
+One false positive across 44 labelled-safe cases. `--no-unknown-provenance`
+trades eleven true positives for it, which is the wrong way round for a tool
+whose `low` band cannot fail a build.
 
 `ideas/wp-taint-analyser-fixtures` pairs 36 scenarios as vulnerable and safe
 variants, cross-file and cross-plugin. **Zero findings on all 36 safe variants**,

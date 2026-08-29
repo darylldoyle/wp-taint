@@ -1462,3 +1462,64 @@ as `application/json`, so a browser does not render it as markup, and reporting
 every callback that returns a string built from a request parameter would be
 noisy and mostly wrong. The fixture assumes a downstream HTML consumer that is
 not visible from the callback. Sinks *inside* the callback report normally.
+
+
+## Unknown provenance on by default
+
+Measured before flipping it, because "does it cost anything" is the question
+that decides it.
+
+    KFF, 926 files    off 47.2s / 52.4s    on 48.9s / 46.9s
+
+No measurable overhead. Seeding a marker on an entry point's parameters is not
+extra work for the fixed point; the same passes run either way. What it costs is
+findings, all at `low`, which is below the default `--fail-on` and so cannot
+fail a build on its own.
+
+    wp-taint-fixtures   P 1.00 R 0.77 F1 0.87  ->  P 0.98 R 0.94 F1 0.96
+    corpus              1,078 -> 1,326 findings, the 157 new ones all `low`
+    KFF                 22 -> 30 findings, the 8 new ones all `low`
+
+The argument for it is that a reader who knows a value is safe dismisses a `low`
+in a second, and a reader who is never shown it cannot. The argument against was
+that the eight it adds on a real client theme are one pattern — Gutenberg inner
+blocks, which are meant to be echoed raw — and that is a weak reason to withhold
+the other eleven true positives it finds on labelled code.
+
+The fixture harness now runs with defaults rather than pinning the flag off, so
+the regression net tests what ships. All 118 labelled-safe fixtures stay clean
+with it on, which is the number that mattered.
+
+`--no-unknown-provenance` asks the narrower question.
+
+### Functions that prepare their own output
+
+VIP's guidance that "some WordPress functions properly prepare the data for
+output" was the obvious thing to break, and it does not, without a list of those
+functions existing anywhere in the catalogue.
+
+    echo wp_get_attachment_image( $id, 'large' );        // silent
+    echo get_avatar( $id );                              // silent
+    echo wp_nav_menu( $args );                           // silent
+    echo paginate_links( $args );                        // silent
+
+Two separate things keep it that way. `wp.output.unescaped-unknown` needs the
+marker to reach the output, and none of these is a propagator, so nothing
+carries through them — an unmodelled return is clean, which is usually the
+under-approximation this project apologises for and is exactly right here.
+`wp.xss.escape-voided` needs evidence that something *was* escaped before the
+filterable call, and echoing one of these provides none.
+
+The pairing at the escape-voided sink is what does that work, and it was put
+there for a different reason: without it `echo get_option( 'x' )` reported twice,
+once as unescaped output and once as voided escaping. It turns out to be the
+same requirement.
+
+The one shape that does report is escaping something on the way *in*:
+
+    echo wp_get_attachment_image( $id, 'large', false,
+        array( 'alt' => esc_attr( $title ) ) );
+
+Redundant rather than wrong — core escapes those attributes itself — and the
+advice attached to it is imperfect, since the `<img>` markup that comes back
+cannot be escaped afterwards. Rare enough to leave.
