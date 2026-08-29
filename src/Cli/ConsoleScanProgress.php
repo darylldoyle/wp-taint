@@ -30,14 +30,30 @@ final class ConsoleScanProgress implements ScanProgress
      */
     private const REDRAW_EVERY = 25;
 
+    /**
+     * How long a scan runs before anything is drawn.
+     *
+     * A small scan finishes before a bar could be read, and flashing one up for
+     * 80ms is worse than staying quiet. Counting files instead was the first
+     * attempt and it measured the wrong thing: the count is not known until
+     * after the directory walk, which is itself the part that felt like a hang
+     * on a big tree.
+     */
+    private const QUIET_FOR_MS = 250;
+
     private ?ProgressBar $bar = null;
 
     private string $label = '';
 
     private int $done = 0;
 
+    private ?int $total = null;
+
+    private readonly float $startedAt;
+
     public function __construct(private readonly OutputInterface $output)
     {
+        $this->startedAt = microtime(true);
     }
 
     public function phase(string $label, ?int $total = null): void
@@ -45,29 +61,68 @@ final class ConsoleScanProgress implements ScanProgress
         $this->clear();
 
         $this->label = $label;
+        $this->total = $total;
         $this->done = 0;
+
+        if (! $this->awake()) {
+            return;
+        }
+
+        $this->render();
+    }
+
+    /**
+     * Has the scan been running long enough to be worth reporting on?
+     */
+    private function awake(): bool
+    {
+        return (microtime(true) - $this->startedAt) * 1000 >= self::QUIET_FOR_MS;
+    }
+
+    /**
+     * Draw the current phase from scratch.
+     *
+     * Separate from {@see phase} because a phase that begins before the quiet
+     * period is over still has to appear once it ends, part-way through.
+     */
+    private function render(): void
+    {
+        $total = $this->total;
 
         if ($total === null || $total === 0) {
             // No total: say what is happening and leave it on screen. A bar
             // that cannot fill is worse than a sentence.
-            $this->output->write(sprintf("\r\033[K  %s…", $label));
+            $this->output->write(sprintf("\r\033[K  %s…", $this->label));
 
             return;
         }
 
         $this->bar = new ProgressBar($this->output, $total);
         $this->bar->setFormat('  %message% %current%/%max% [%bar%] %percent:3s%%');
-        $this->bar->setMessage($label);
+        $this->bar->setMessage($this->label);
         $this->bar->setBarCharacter('=');
         $this->bar->setProgressCharacter('>');
         $this->bar->setEmptyBarCharacter(' ');
         $this->bar->setRedrawFrequency(self::REDRAW_EVERY);
-        $this->bar->start();
+        $this->bar->start($total);
+        $this->bar->setProgress($this->done);
     }
 
     public function advance(int $steps = 1): void
     {
         $this->done += $steps;
+
+        if (! $this->awake()) {
+            return;
+        }
+
+        // The quiet period ended part-way through this phase, so draw it now
+        // with the progress it has actually made.
+        if ($this->bar === null && $this->total !== null && $this->total !== 0) {
+            $this->render();
+
+            return;
+        }
 
         if ($this->bar !== null) {
             $this->bar->advance($steps);

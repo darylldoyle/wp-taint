@@ -21,7 +21,6 @@ use Enshrined\WpTaint\Report\ReportOptions;
 use Enshrined\WpTaint\Report\SarifReporter;
 use Enshrined\WpTaint\Scan\FileFinder;
 use Enshrined\WpTaint\Scan\NullScanProgress;
-use Enshrined\WpTaint\Scan\ScanProgress;
 use Enshrined\WpTaint\Scan\ScanResult;
 use Enshrined\WpTaint\Scan\ScanRunner;
 use Enshrined\WpTaint\Support\PathHelper;
@@ -157,15 +156,16 @@ final class ScanCommand extends Command
               HELP);
     }
 
-    /**
-     * Below this, a scan finishes before a bar would be read.
-     */
-    private const PROGRESS_FILE_THRESHOLD = 50;
-
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $stderr = $output instanceof ConsoleOutputInterface ? $output->getErrorOutput() : $output;
         $reader = new InputReader($input);
+
+        // Created before anything slow happens. Walking the directory tree is
+        // itself seconds of silence on a WordPress install, and a progress
+        // object that only exists afterwards cannot report the part that felt
+        // like a hang.
+        $progress = $stderr->isDecorated() ? new ConsoleScanProgress($stderr) : new NullScanProgress();
 
         try {
             $configuration = $this->buildConfiguration($reader);
@@ -175,21 +175,24 @@ final class ScanCommand extends Command
             return ExitCode::ERROR;
         }
 
+        $progress->phase('Finding files', null);
+
         try {
             $files = (new FileFinder($configuration->excludes))->find($configuration->paths);
         } catch (Throwable $error) {
+            $progress->finish();
             $stderr->writeln('<error>' . $error->getMessage() . '</error>');
 
             return ExitCode::ERROR;
         }
 
         if ($files === []) {
+            $progress->finish();
             $stderr->writeln('<comment>No PHP files found in the given paths.</comment>');
 
             return ExitCode::CLEAN;
         }
 
-        $progress = $this->progressFor($stderr, count($files));
         $result = (new ScanRunner($configuration))->run($files, $progress);
         $progress->finish();
 
@@ -214,27 +217,6 @@ final class ScanCommand extends Command
         $this->emit($configuration, $result, $reader, $output);
 
         return $this->exitCode($configuration, $result);
-    }
-
-    /**
-     * A progress bar, when there is a terminal to draw one on.
-     *
-     * A scan of a real WordPress tree spends its time in two silent places —
-     * parsing, and the interprocedural fixed point — and a client theme with
-     * reference trees took seven and a half minutes without saying anything,
-     * which reads as a hang.
-     *
-     * Only for a decorated stderr. Carriage returns become thousands of lines
-     * in a CI log or a redirect, and a scan small enough not to need a bar
-     * would only flicker.
-     */
-    private function progressFor(OutputInterface $stderr, int $fileCount): ScanProgress
-    {
-        if (! $stderr->isDecorated() || $fileCount < self::PROGRESS_FILE_THRESHOLD) {
-            return new NullScanProgress();
-        }
-
-        return new ConsoleScanProgress($stderr);
     }
 
     private static function workingDirectory(): string

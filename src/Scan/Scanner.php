@@ -145,6 +145,14 @@ final class Scanner
         /** @var array<string, true> $reference */
         $reference = [];
 
+        // Announced before the walk, not after it. Finding the files in a
+        // reference tree is itself a directory crawl over someone's whole
+        // plugins directory, and reporting it only once it finished left the
+        // slow half silent.
+        if ($this->includePaths !== []) {
+            $this->progress->phase('Finding reference files', null);
+        }
+
         $referenceFiles = $this->referenceFiles($scanned);
 
         if ($referenceFiles !== []) {
