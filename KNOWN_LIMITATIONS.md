@@ -234,6 +234,11 @@ This is a structural rule, not a dataflow one, because the context belongs to
 the literal text around the hole rather than to the value: `esc_attr()` is right
 in a quoted attribute, wrong in an `href`, and wrong again in an unquoted one.
 
+A value between `<script` and its `>` is in an attribute rather than in a script
+body, and attribute rules apply to it. Counting the bare `<script` as opening a
+body asked for JavaScript escaping on an id and a URL, which would be wrong in
+turn — `esc_js()` on a URL does not stop `javascript:`.
+
 **What it will not judge.** A context built from a variable, a `printf` with
 positional `%1$s` specifiers, or a call it does not recognise as an escaper.
 `wp_get_referer()` is a source, and accusing it of being the wrong escaper both

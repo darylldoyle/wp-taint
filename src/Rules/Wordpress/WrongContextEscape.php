@@ -364,7 +364,19 @@ final class WrongContextEscape implements StructuralRule
      */
     private function inScript(string $before): bool
     {
-        $opens = preg_match_all('/<script\b/i', $before);
+        // The tag has to be *closed* to have opened a script body. A value
+        // landing between `<script` and its `>` is in an attribute, and
+        // attribute rules apply to it:
+        //
+        //     sprintf(
+        //         '<script id="%s" src="%s"></script>',
+        //         esc_attr( $id ),
+        //         esc_url( $src )
+        //     );
+        //
+        // Counting the bare `<script` called both of those wrong and asked for
+        // JavaScript escaping on an id and a URL, which would be wrong in turn.
+        $opens = preg_match_all('/<script\b[^>]*>/i', $before);
         $closes = preg_match_all('#</script\s*>#i', $before);
 
         return $opens > $closes;
