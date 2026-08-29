@@ -39,6 +39,13 @@ final class FunctionAnalysis
      */
     private const UNPREPARED_QUERY_RULE = 'wp.sqli.unprepared-query';
 
+    /**
+     * Properties the seeded parameter reached, keyed to deduplicate.
+     *
+     * @var array<string, array{0: string|null, 1: string}>
+     */
+    private array $propertiesReached = [];
+
     private TaintState $state;
 
     private ClassTypeMap $types;
@@ -222,6 +229,7 @@ final class FunctionAnalysis
             $this->warnings,
             $this->state,
             $this->returnAnchored ?? false,
+            array_values($this->propertiesReached),
         );
     }
 
@@ -1037,6 +1045,13 @@ final class FunctionAnalysis
                     : $this->staticOwnerClass($target);
 
                 $this->properties->track($owner, $property);
+
+                // Only when something reached it. A probe run seeds one
+                // parameter and no sources at all, so any taint here is the
+                // seed, which is exactly the edge a caller needs.
+                if (! $taint->isEmpty()) {
+                    $this->recordPropertyReference($owner, $property);
+                }
 
                 // Whether the written value carried a literal fragment, so a
                 // read elsewhere can tell `$this->option_name` holding
@@ -2044,6 +2059,68 @@ final class FunctionAnalysis
     }
 
     /**
+     * Write the caller's taint into the properties the callee assigns it to.
+     *
+     * The counterpart to {@see reportSummarySinks}: that one reports a sink the
+     * argument reaches inside the callee, this one records a property it lands
+     * in. Both exist because a probe run cannot commit anything itself — its
+     * parameter carries a seed rather than a value, and a seed written into the
+     * shared map becomes an assertion nobody made.
+     *
+     *     $log = new Logger( $_GET['f'] );   // Logger::$file gets path taint
+     *     $log->write();                      //   → reported, from the real flow
+     *
+     * A sealed map makes this a no-op, which is what keeps the caller's own
+     * probe runs from reintroducing the problem one frame up.
+     */
+    private function applySummaryProperties(
+        Op\Expr $op,
+        FunctionSummary $summary,
+        int $index,
+        Operand $argument,
+        TaintSet $argumentTaint,
+    ): bool {
+        $changed = false;
+
+        foreach ($summary->propertiesFor($index) as [$class, $property]) {
+            $changed = $this->properties->add(
+                $class,
+                $property,
+                $argumentTaint,
+                $this->propertyWriteTrace($op, $argument, $argumentTaint, $summary, $property),
+            ) || $changed;
+        }
+
+        return $changed;
+    }
+
+    /**
+     * The trace of a property write that happened inside a callee.
+     *
+     * @return list<TraceStep>
+     */
+    private function propertyWriteTrace(
+        Op\Expr $op,
+        Operand $argument,
+        TaintSet $taint,
+        FunctionSummary $summary,
+        string $property,
+    ): array {
+        $kind = $taint->kinds()[0] ?? null;
+
+        if ($kind === null || $this->seedParameterIndex !== null) {
+            return [];
+        }
+
+        return $this->traces->build($argument, $kind, $this->traces->step(
+            TraceVerb::Propagate,
+            $op,
+            $taint,
+            sprintf('Passed to %s(), which writes it into $%s.', $summary->displayName, $property),
+        ));
+    }
+
+    /**
      * Drop an escape-voided claim a callee cannot substantiate at this site.
      *
      * WooCommerce's `wc_help_tip()` escapes and then hands the result to a
@@ -2361,6 +2438,7 @@ final class FunctionAnalysis
         $contributors = [];
         $viaParameters = [];
         $anyArgumentTainted = false;
+        $changed = false;
 
         foreach ($call->arguments as $index => $argument) {
             // Both slots: the callee receives the whole value, and an array
@@ -2383,11 +2461,13 @@ final class FunctionAnalysis
             }
 
             $this->reportSummarySinks($op, $call, $summary, $index, $argument, $argumentTaint);
+            $changed = $this->applySummaryProperties($op, $summary, $index, $argument, $argumentTaint)
+                || $changed;
         }
 
         $result = self::withoutUnearnedEscapeMarkers($result, $anyArgumentTainted);
 
-        $changed = $this->applySummaryByRefEffects($op, $call, $summary);
+        $changed = $this->applySummaryByRefEffects($op, $call, $summary) || $changed;
 
         if ($result->isEmpty()) {
             return $this->writeResult($op->result, $result) || $changed;
@@ -2904,6 +2984,22 @@ final class FunctionAnalysis
      * Record that the seeded parameter reached a sink, for the caller's
      * benefit. Only meaningful while summarising.
      */
+    /**
+     * A probe run reached a property with the seeded parameter's taint.
+     *
+     * Keyed so the same write in a loop, or across the fixed point's rounds,
+     * records once — a growing list would make the summary compare unequal to
+     * itself and the interprocedural fixed point would never settle.
+     */
+    private function recordPropertyReference(?string $class, string $property): void
+    {
+        if ($this->seedParameterIndex === null) {
+            return;
+        }
+
+        $this->propertiesReached[strtolower($class ?? '?') . '::' . $property] = [$class, $property];
+    }
+
     private function recordSinkReference(Sink $sink, Op $op, string $identity): void
     {
         if (! $this->collecting || $this->seedParameterIndex === null) {

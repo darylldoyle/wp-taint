@@ -41,7 +41,26 @@ final class FunctionSummary
          * request verbatim.
          */
         public readonly bool $returnAnchored = false,
+        /**
+         * Properties each parameter is written into.
+         *
+         * The write counterpart to {@see $paramToSink}. A probe run's property
+         * map is sealed — its seed is a question, not something the code does —
+         * so the flow into `$this->file` is recorded here and applied at the
+         * call site with the taint the caller actually passed.
+         *
+         * @var array<int, list<array{0: string|null, 1: string}>>
+         */
+        public readonly array $paramToProperty = [],
     ) {
+    }
+
+    /**
+     * @return list<array{0: string|null, 1: string}>
+     */
+    public function propertiesFor(int $parameterIndex): array
+    {
+        return $this->paramToProperty[$parameterIndex] ?? [];
     }
 
     /**
@@ -168,7 +187,33 @@ final class FunctionSummary
             }
         }
 
+        // Same reason as the by-reference halves: a summary whose property
+        // writes are still being discovered is not settled.
+        if (array_keys($this->paramToProperty) !== array_keys($other->paramToProperty)) {
+            return false;
+        }
+
+        foreach ($this->paramToProperty as $index => $properties) {
+            $mine = array_map(self::propertyKey(...), $properties);
+            $theirs = array_map(self::propertyKey(...), $other->paramToProperty[$index] ?? []);
+
+            sort($mine);
+            sort($theirs);
+
+            if ($mine !== $theirs) {
+                return false;
+            }
+        }
+
         return count($this->paramToSink) === count($other->paramToSink);
+    }
+
+    /**
+     * @param array{0: string|null, 1: string} $property
+     */
+    private static function propertyKey(array $property): string
+    {
+        return strtolower($property[0] ?? '?') . '::' . $property[1];
     }
 
     /**

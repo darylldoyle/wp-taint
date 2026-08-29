@@ -40,6 +40,18 @@ final class AnalysisResult
          * finding.
          */
         public readonly bool $returnAnchored = false,
+        /**
+         * Properties the seeded parameter was written into.
+         *
+         * The write half of what a caller needs, and the counterpart to
+         * `$sinksReached`. A probe run's map is sealed, so the write itself
+         * goes nowhere — this records that it happened, and the caller applies
+         * the taint it actually passed.
+         *
+         * @var list<array{0: string|null, 1: string}> class name (null when
+         *                                             unresolved) and property
+         */
+        public readonly array $propertiesReached = [],
     ) {
     }
 }

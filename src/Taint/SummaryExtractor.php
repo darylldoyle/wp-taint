@@ -40,6 +40,7 @@ final class SummaryExtractor
         $paramToSink = [];
         $clears = [];
         $paramToParam = [];
+        $paramToProperty = [];
         $imprecise = $parameterCount > $analysed;
 
         for ($index = 0; $index < $analysed; $index++) {
@@ -56,6 +57,13 @@ final class SummaryExtractor
             // than returning it.
             if ($result->byRefTaint !== []) {
                 $paramToParam[$index] = $result->byRefTaint;
+            }
+
+            // Where this parameter is written into a property. A probe run's
+            // property map is sealed, so the write is recorded rather than
+            // performed, and the call site applies what the caller passed.
+            if ($result->propertiesReached !== []) {
+                $paramToProperty[$index] = $result->propertiesReached;
             }
         }
 
@@ -80,6 +88,7 @@ final class SummaryExtractor
             // The baseline run, because whether a return carries a literal is a
             // property of the body and not of which parameter was seeded.
             $baseline->returnAnchored,
+            $paramToProperty,
         );
     }
 
