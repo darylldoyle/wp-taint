@@ -61,6 +61,7 @@ output rather than in the findings.
 | [`register_rest_route()` options built conditionally](#register_rest_route-options-are-folded-not-traced) | Neither |
 | [A `sanitize_callback` that is present but useless](#register_setting-is-judged-on-its-arguments-alone) | Misses |
 | [A loader component that is neither `$this` nor a local `new`](#hooks-registered-through-a-wrapper-are-followed-by-name) | Misses |
+| [A shortcode or block callback that is never registered](#a-printed-return-shortcode-handlers-and-block-renderers) | Misses |
 
 **Parsing and scope**
 
@@ -734,7 +735,7 @@ is: the run that publishes is the one that seeds nothing.
 
 **Direction:** under-approximating, at the by-reference captures.
 
-### A shortcode callback is an entry point at both ends
+### A printed return: shortcode handlers and block renderers
 
 ```php
 add_shortcode( 'badge', 'acme_badge' );
@@ -755,9 +756,31 @@ core's, so there is no `echo` for a rule to find.
 `$tag` is the third parameter and is the shortcode's own name, which the plugin
 chose, so it is left alone.
 
-**What is missed.** A registration whose callback will not resolve, and one made
-through a wrapper — `add_shortcode()` is matched as a function call only, unlike
-`add_action()`, which is also matched on a loader method.
+A dynamic block's `render_callback` is the same shape and is handled the same
+way — WordPress calls it and prints what it returns, so there is no `echo` in
+the plugin for a rule to find:
+
+```php
+register_block_type( 'acme/card', array( 'render_callback' => 'acme_render' ) );
+
+function acme_render( $attributes, $content, $block ) {
+    return '<figcaption>' . get_post_meta( 1, 'caption', true ) . '</figcaption>';
+}
+```
+
+Its parameters are *not* seeded, unlike a shortcode's. A block's inner content
+is already-rendered markup meant to be printed as it is, and treating it as a
+source reports every correctly written block.
+
+**What is missed.** A callback that is never registered where the scan can see
+it. Both rules need the registration: a function that is a shortcode handler by
+convention alone — no `add_shortcode()` anywhere — is an ordinary function as
+far as this is concerned, and its return is not output.
+
+Also a registration whose callback will not resolve, one made through a wrapper
+(`add_shortcode()` is matched as a function call only, unlike `add_action()`,
+which is also matched on a loader method), and a `render_callback` that is not a
+literal key in a literal array.
 
 ### A REST callback's return is not output
 

@@ -181,6 +181,8 @@ final class FunctionAnalysis
         private readonly ?CallGraph $callGraph = null,
         /** @var array<string, true> */
         private readonly array $shortcodeCallbacks = [],
+        /** @var array<string, string> */
+        private readonly array $printedReturns = [],
     ) {
         $this->state = new TaintState();
         $this->types = new ClassTypeMap();
@@ -1916,7 +1918,7 @@ final class FunctionAnalysis
     }
 
     /**
-     * What a shortcode callback returns is printed by WordPress.
+     * What a shortcode or block render callback returns is printed by WordPress.
      *
      *     add_shortcode( 'badge', 'acme_badge' );
      *     function acme_badge( $atts ) {
@@ -1932,10 +1934,12 @@ final class FunctionAnalysis
      */
     private function reportShortcodeReturn(Op\Terminal\Return_ $op, Operand $operand, TaintSet $taint): void
     {
+        $kind = $this->printedReturns[$this->context->key] ?? null;
+
         if (
-            ! $this->collecting
+            $kind === null
+            || ! $this->collecting
             || ! $this->collectFindings
-            || ! isset($this->shortcodeCallbacks[$this->context->key])
             || ! $taint->has(TaintKind::Html)
         ) {
             return;
@@ -1946,10 +1950,13 @@ final class FunctionAnalysis
             TaintKind::Html,
             Severity::High,
             $op,
-            'shortcode return',
+            $kind . ' return',
             $operand,
-            'Returned from a shortcode callback, which WordPress prints. Escape it here: there is no later '
-                . 'point at which it can be escaped.',
+            sprintf(
+                'Returned from a %s, which WordPress prints. Escape it here: there is no later point at '
+                    . 'which it can be escaped.',
+                $kind,
+            ),
         );
     }
 

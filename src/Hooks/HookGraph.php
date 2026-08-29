@@ -104,11 +104,49 @@ final class HookGraph
     }
 
     /**
-     * Function keys registered as shortcode callbacks.
+     * Callbacks whose return value WordPress prints, and what each one is.
      *
-     * WordPress calls these with attributes taken from post content and prints
-     * whatever they return, so both ends need modelling: the parameters are
-     * attacker-influenced and the return value is output.
+     * A shortcode handler and a dynamic block's `render_callback` need exactly
+     * the same thing from the analysis: there is no `echo` in the plugin to
+     * find, because core does the printing. They are told apart only so the
+     * finding can name the right one.
+     *
+     * A shortcode's attributes come from post content and are seeded; a block's
+     * are not, because a block's inner content is already-rendered markup that
+     * is meant to be printed as it is.
+     *
+     * @return array<string, string> function key => 'shortcode callback' or
+     *                               'block render callback'
+     */
+    public function printedReturnCallbacks(): array
+    {
+        $keys = [];
+
+        foreach ($this->byHook as $hook => $registrations) {
+            $label = match (true) {
+                str_starts_with($hook, HookGraphBuilder::SHORTCODE_PREFIX) => 'shortcode callback',
+                str_starts_with($hook, HookGraphBuilder::BLOCK_PREFIX) => 'block render callback',
+                default => null,
+            };
+
+            if ($label === null) {
+                continue;
+            }
+
+            foreach ($registrations as $registration) {
+                $key = $registration->callback->userFunctionKey;
+
+                if ($key !== null) {
+                    $keys[$key] = $label;
+                }
+            }
+        }
+
+        return $keys;
+    }
+
+    /**
+     * Just the shortcode handlers, whose parameters carry post content.
      *
      * @return array<string, true>
      */

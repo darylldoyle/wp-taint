@@ -278,6 +278,7 @@ final class Scanner
             $includes,
             $callGraph,
             $hooks->shortcodeCallbackKeys(),
+            $hooks->printedReturnCallbacks(),
         );
         $extractor = new SummaryExtractor($analyzer, $this->options);
         $interprocedural = new InterproceduralResolver($analyzer, $extractor, $this->options, $this->jobs);

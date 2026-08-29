@@ -29,11 +29,18 @@ final class IntraproceduralAnalyzer
          */
         private readonly ?CallGraph $callGraph = null,
         /**
-         * Function keys registered with `add_shortcode()`.
+         * Function keys registered with `add_shortcode()`, whose parameters
+         * carry post content.
          *
          * @var array<string, true>
          */
         private readonly array $shortcodeCallbacks = [],
+        /**
+         * Callbacks whose return value WordPress prints, and what each is.
+         *
+         * @var array<string, string>
+         */
+        private readonly array $printedReturns = [],
     ) {
     }
 
@@ -74,6 +81,7 @@ final class IntraproceduralAnalyzer
             $collectFindings,
             $this->callGraph,
             $this->shortcodeCallbacks,
+            $this->printedReturns,
         ))->run();
     }
 }

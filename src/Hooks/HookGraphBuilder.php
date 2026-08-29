@@ -51,6 +51,21 @@ final class HookGraphBuilder
     /** Prefix for the synthetic hook name a shortcode registration is filed under. */
     public const SHORTCODE_PREFIX = 'shortcode:';
 
+    /**
+     * `register_block_type( $name, [ 'render_callback' => $cb ] )`.
+     *
+     * A dynamic block's renderer is the same shape as a shortcode callback:
+     * WordPress calls it and prints what it returns. The callback arrives under
+     * an array key rather than in a positional argument, which is the only
+     * reason it needs its own path through here.
+     */
+    private const BLOCK_REGISTRARS = ['register_block_type', 'register_block_type_from_metadata'];
+
+    private const RENDER_CALLBACK_KEY = 'render_callback';
+
+    /** Prefix for a block renderer, whose return WordPress prints just the same. */
+    public const BLOCK_PREFIX = 'block:';
+
     public function __construct(
         private readonly CallableResolver $callables,
         private readonly ValueResolver $values,
@@ -102,6 +117,12 @@ final class HookGraphBuilder
 
                 if ($this->isShortcodeRegistrar($op)) {
                     $this->record($graph, $op, $context, $types, shortcode: true);
+
+                    continue;
+                }
+
+                if ($this->isBlockRegistrar($op)) {
+                    $this->recordBlockRenderer($op, $context, $types, $graph);
 
                     continue;
                 }
@@ -166,6 +187,71 @@ final class HookGraphBuilder
                 ));
             }
         }
+    }
+
+    /**
+     * Record the `render_callback` of a block registration, if it names one.
+     *
+     * Filed under the same synthetic prefix as a shortcode, because the two
+     * need exactly the same thing from the analysis: the return value is
+     * printed by WordPress, so there is no `echo` in the plugin to find.
+     */
+    private function recordBlockRenderer(
+        Op\Expr\FuncCall|Op\Expr\NsFuncCall $op,
+        FunctionContext $context,
+        ClassTypeMap $types,
+        HookGraph $graph,
+    ): void {
+        $options = $op->args[1] ?? null;
+
+        if (! $options instanceof Operand) {
+            return;
+        }
+
+        $array = OperandHelper::definingOp($options);
+
+        if (! $array instanceof Op\Expr\Array_) {
+            return;
+        }
+
+        foreach ($array->keys as $index => $key) {
+            if (
+                ! $key instanceof Operand
+                || OperandHelper::literalString($key) !== self::RENDER_CALLBACK_KEY
+            ) {
+                continue;
+            }
+
+            $value = $array->values[$index] ?? null;
+
+            if (! $value instanceof Operand) {
+                continue;
+            }
+
+            foreach ($this->callables->resolve($value, [], $context, $types, $this->receivers) as $callback) {
+                $graph->add(new HookRegistration(
+                    self::BLOCK_PREFIX . 'render',
+                    $callback,
+                    $context->file->relativePath,
+                    $op->getLine(),
+                ));
+            }
+        }
+    }
+
+    private function isBlockRegistrar(Op\Expr\FuncCall|Op\Expr\NsFuncCall $op): bool
+    {
+        $names = $op instanceof Op\Expr\NsFuncCall
+            ? [OperandHelper::literalString($op->nsName), OperandHelper::literalString($op->name)]
+            : [OperandHelper::literalString($op->name)];
+
+        foreach ($names as $name) {
+            if ($name !== null && in_array(strtolower(ltrim($name, '\\')), self::BLOCK_REGISTRARS, true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function isShortcodeRegistrar(Op\Expr\FuncCall|Op\Expr\NsFuncCall $op): bool
