@@ -178,7 +178,7 @@ final class ExplainCommand extends Command
         // clean where `scan` reports a finding through a template.
         $includes = $options->followIncludes
             ? (new IncludeGraphBuilder(
-                new IncludeResolver($values, (new FileFinder())->find([$scope]), $root),
+                new IncludeResolver($values, (new FileFinder())->find([$scope]), $root, $themes),
                 $root,
                 $registry,
                 $values,

@@ -144,14 +144,14 @@ final class ValueResolver
      *
      * so without this fold every one of those includes is unresolvable.
      *
-     * `get_stylesheet_directory()` is folded to the same answer, which is exact
-     * except when a parent and child theme are scanned together — the child is
-     * then the right answer for the stylesheet and the parent for the template,
-     * and the calling file only names its own. That case resolves to the file's
-     * own theme, the nearer of the two wrong answers, and a scan holding both
-     * is rare enough to accept it.
+     * `get_stylesheet_directory()` is the file's own theme;
+     * `get_template_directory()` is its declared parent when the scan holds it,
+     * read from style.css the way WordPress reads it. A file outside every
+     * theme folds to all candidates, the union any multi-valued answer gets.
      *
-     * `get_theme_file_path( $file )` is the same fact with the joining done.
+     * `get_theme_file_path( $file )` applies the child-overrides-parent order
+     * against the scanned file list; `get_parent_theme_file_path()` goes
+     * straight to the parent.
      */
     /**
      * @return list<string>
@@ -250,37 +250,43 @@ final class ValueResolver
         }
 
         $name = $this->pureFunctionName($op) ?? $this->callNames($op)[0] ?? null;
+        $name = $name === null ? null : strtolower(ltrim($name, '\\'));
 
-        if (
-            $name === null
-            || ! in_array(
-                strtolower(ltrim($name, '\\')),
-                ['get_template_directory', 'get_stylesheet_directory', 'get_theme_file_path'],
-                true,
-            )
-        ) {
-            return [];
+        $calling = $op->getFile();
+
+        switch ($name) {
+            case 'get_stylesheet_directory':
+                return $this->themes->stylesheetRootsFor($calling);
+
+            case 'get_template_directory':
+                return $this->themes->templateRootsFor($calling);
+
+            case 'get_theme_file_path':
+            case 'get_parent_theme_file_path':
+                $file = $op->args[0] ?? null;
+
+                if (! $file instanceof Operand) {
+                    return [];
+                }
+
+                $values = $this->strings($file, $depth + 1);
+
+                if (count($values) !== 1) {
+                    return [];
+                }
+
+                if ($name === 'get_parent_theme_file_path') {
+                    return array_map(
+                        static fn (string $root): string => $root . '/' . ltrim($values[0], '/'),
+                        $this->themes->templateRootsFor($calling),
+                    );
+                }
+
+                return $this->themes->themeFilePathsFor($calling, $values[0]);
+
+            default:
+                return [];
         }
-
-        $root = $this->themes->forFile($op->getFile());
-
-        if ($root === null) {
-            return [];
-        }
-
-        if (strtolower(ltrim($name, '\\')) !== 'get_theme_file_path') {
-            return [$root];
-        }
-
-        $file = $op->args[0] ?? null;
-
-        if (! $file instanceof Operand) {
-            return [$root . '/'];
-        }
-
-        $values = $this->strings($file, $depth + 1);
-
-        return count($values) === 1 ? [$root . '/' . ltrim($values[0], '/')] : [];
     }
 
     /**

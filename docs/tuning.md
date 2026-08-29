@@ -1686,3 +1686,31 @@ Verified end to end: a bootstrap defining ABSPATH plus core referenced resolves
     corpus, both suites, vulnerable plugin   unchanged
     kff-org-modern includes                  17 unresolved -> 9
     585 tests
+
+
+### And then the parent/child pair
+
+The paragraph above originally said a multi-theme scan was ambiguous and a
+parent/child pair folded to the wrong theme half the time. Both were fixable and
+the challenge that they should be was right: this is WordPress-specific
+analysis, and WordPress answers both questions itself.
+
+The `Template:` header in a child's `style.css` is how core resolves the pair,
+so it is how this does. `get_stylesheet_directory()` is the file's own theme;
+`get_template_directory()` is the declared parent when the scan holds it;
+`get_theme_file_path()` checks the child's copy first against the scanned file
+list, then the parent's — core's override order; `get_template_part()` from a
+child searches the parent's tree too. A plugin file folds to every scanned
+theme, the same union a two-valued hook name gets, rather than to nothing.
+
+One mismatch found on the way: the include resolver realpaths its file list and
+the template-hierarchy walk did not, so on macOS `/tmp` versus `/private/tmp`
+silently lost the parent root.
+
+Verified end to end on a synthetic pair: the child's
+`require_once get_template_directory() . '/functions.php'` connects to the
+parent, a flow through the parent's helper reports, and
+`get_template_part( 'partials/card', null, [ 'title' => $_GET['t'] ] )` from the
+child reports at the echo in the parent's partial. A caller local NOT passed
+through `$args` correctly does not flow, because template parts do not inherit
+caller locals — which is WordPress semantics, not a limitation.

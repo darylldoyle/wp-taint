@@ -59,6 +59,7 @@ final class IncludeResolver
         private readonly ValueResolver $values,
         array $files,
         private readonly string $projectRoot,
+        private readonly ?ThemeRoots $themes = null,
     ) {
         foreach ($files as $path) {
             $real = realpath($path);
@@ -197,6 +198,19 @@ final class IncludeResolver
         for ($depth = 0; $depth < 8; $depth++) {
             if (is_file($directory . '/style.css') || is_file($directory . '/functions.php')) {
                 $roots[] = $directory;
+
+                // A child theme's template hierarchy falls back to its parent:
+                // `get_template_part( 'partials/card' )` loads the parent's
+                // partials/card.php when the child has none, so the parent is
+                // a lookup root too. Which theme is the parent comes from
+                // style.css, the same way WordPress reads it.
+                if ($this->themes !== null) {
+                    // Realpathed, because the roots were built from the file
+                    // list this class also realpaths, and /tmp vs /private/tmp
+                    // is exactly the mismatch that silently loses the parent.
+                    $real = realpath($directory);
+                    $roots = [...$roots, ...$this->themes->parentsOf($real === false ? $directory : $real)];
+                }
 
                 break;
             }

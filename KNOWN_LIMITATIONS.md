@@ -602,10 +602,19 @@ not invented. And the include path itself is not modelled: PHP would search it
 before the calling file's directory, but that is runtime configuration the
 analysis cannot see.
 
-A plugin calling `get_template_directory()` resolves only when the scan holds
-exactly one theme; several themes is genuinely ambiguous. A parent and child
-theme scanned together both fold to the calling file's own theme, which is right
-for the child's stylesheet calls and wrong for a child asking about its parent.
+Parent and child themes resolve the way WordPress resolves them, from the
+`Template:` header in the child's `style.css` — the one filesystem read in this
+area, and it reads project content the scan was pointed at.
+`get_stylesheet_directory()` is the file's own theme;
+`get_template_directory()` is its declared parent when the scan holds it;
+`get_theme_file_path()` applies the child-overrides-parent order against the
+scanned file list; and `get_template_part()` from a child falls back to the
+parent's copy. A child whose declared parent is *not* in the scan folds to
+nothing, because folding to the child instead would be wrong in a way that
+looks resolved.
+
+A plugin calling any of these folds to every scanned theme — the union any
+multi-valued answer gets, since whichever theme is active could be the one.
 
 **Direction:** under-approximating at the unresolved paths, over-approximating at
 the resolved ones — a file's inbound scope is unioned over every site that

@@ -270,7 +270,7 @@ final class Scanner
         // file an include loads is a static fact.
         $includes = $this->options->followIncludes
             ? (new IncludeGraphBuilder(
-                new IncludeResolver($values, $files, $this->root),
+                new IncludeResolver($values, $files, $this->root, $themes),
                 $this->root,
                 $this->registry,
                 $values,
