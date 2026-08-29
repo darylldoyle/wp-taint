@@ -6,7 +6,7 @@
         "trueNegatives": 43
     },
     "analyser-fixtures": {
-        "missing": 10,
+        "missing": 7,
         "unexpected": 7
     }
 }

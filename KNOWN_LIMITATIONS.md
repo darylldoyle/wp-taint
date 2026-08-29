@@ -617,6 +617,23 @@ callback means.
 A callback the resolver cannot pin down is reported in the "hook registrations
 could not be resolved" count so the gap stays visible.
 
+### A remote response body is a source, and so is what it is written into
+
+```php
+$body = wp_remote_retrieve_body( wp_remote_get( $endpoint ) );
+echo $body;                              // reported
+update_option( 'acme_cache', $body );    // reported with --stored-taint-writes
+```
+
+The endpoint may be one the plugin chose; the bytes that came back are not.
+These carry the stored kinds rather than the request ones, because the shape is
+the same second-order problem an option has, and no `path` or `url` for the
+reason recorded on `get_post_meta()`.
+
+**What is missed.** A response read some other way — `$response['body']` by
+array access rather than through the accessor. Only the documented accessors are
+modelled.
+
 ### An unmodelled function returns clean
 
 A call to something the catalogue does not know and the scan cannot see — a

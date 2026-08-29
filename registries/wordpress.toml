@@ -92,6 +92,27 @@ kinds = ["html", "html_attr", "url", "header", "storage"]
 # default. `--no-stored-taint` turns them off for teams triaging reflected
 # issues first.
 
+# A remote HTTP response is somebody else's output. The endpoint may be one the
+# plugin chose, but the bytes that came back are not, and echoing them or storing
+# them is the same second-order problem an option is — which is why these carry
+# the stored kinds rather than the request ones, and no `path` or `url` for the
+# reason recorded on get_post_meta() below.
+[[sources]]
+function = "wp_remote_retrieve_body"
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv", "storage"]
+stored = true
+note = "The body of an HTTP response. Chosen by whoever runs the endpoint, not by the plugin that called it."
+
+[[sources]]
+function = "wp_remote_retrieve_header"
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv", "storage"]
+stored = true
+
+[[sources]]
+function = "wp_remote_retrieve_headers"
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv", "storage"]
+stored = true
+
 [[sources]]
 function = "get_post_meta"
 kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv", "storage"]
@@ -914,6 +935,23 @@ description = "A route declares a permission_callback, but nothing reachable fro
 remediation = "Have the callback call current_user_can() for the capability the operation requires, or return a WP_Error when the caller is not permitted."
 cwe = "CWE-862"
 message = "REST permission callback reaches no authorization check."
+
+# wp_add_inline_script() prints its argument inside a <script> block, so it is a
+# JavaScript context and no HTML escaper protects it. esc_js() and
+# wp_json_encode() do.
+[[sinks]]
+function = "wp_add_inline_script"
+args = [1]
+kind = "html"
+severity = "high"
+rule_id = "wp.xss.unescaped-output"
+
+[[sinks]]
+function = "wp_add_inline_script"
+args = [1]
+kind = "unknown"
+severity = "low"
+rule_id = "wp.output.unescaped-unknown"
 
 # Shortcode expansion is an extension point like any filter: a registered
 # shortcode decides what comes back, so escaping before it is escaping too early.
