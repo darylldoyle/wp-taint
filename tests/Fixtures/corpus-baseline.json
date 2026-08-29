@@ -1,9 +1,9 @@
 {
     "akismet": {
         "version": "5.7.2",
-        "findings": 5,
+        "findings": 6,
         "bySeverity": {
-            "medium": 5
+            "medium": 6
         },
         "warnings": 0,
         "parseFailures": 0

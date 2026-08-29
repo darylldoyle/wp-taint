@@ -405,6 +405,28 @@ kind = "path"
 severity = "high"
 rule_id = "wp.lfi.dynamic-include"
 
+# printf() and its relatives write to output exactly as `echo` does, so they
+# carry the same three sinks. They had only the `html` one: the `unknown` and
+# `escape_voided` sinks were added alongside `echo` and `print` and the rest of
+# the family was missed, which cost two labelled true positives on a
+# third-party suite — `printf( $value )` with the taint in the format string,
+# and `printf( '<span>%s</span>', $value )` with it in an argument.
+
+[[sinks]]
+function = "printf"
+all_args = true
+kind = "unknown"
+severity = "low"
+rule_id = "wp.output.unescaped-unknown"
+
+[[sinks]]
+function = "printf"
+all_args = true
+kind = "escape_voided"
+severity = "medium"
+rule_id = "wp.xss.escape-voided"
+applies_by = "escaped_then_voided"
+
 [[sinks]]
 function = "printf"
 all_args = true
@@ -415,9 +437,31 @@ rule_id = "wp.xss.unescaped-output"
 [[sinks]]
 function = "vprintf"
 all_args = true
+kind = "unknown"
+severity = "low"
+rule_id = "wp.output.unescaped-unknown"
+
+[[sinks]]
+function = "vprintf"
+all_args = true
+kind = "escape_voided"
+severity = "medium"
+rule_id = "wp.xss.escape-voided"
+applies_by = "escaped_then_voided"
+
+[[sinks]]
+function = "vprintf"
+all_args = true
 kind = "html"
 severity = "high"
 rule_id = "wp.xss.unescaped-output"
+
+[[sinks]]
+function = "var_dump"
+all_args = true
+kind = "unknown"
+severity = "low"
+rule_id = "wp.output.unescaped-unknown"
 
 [[sinks]]
 function = "var_dump"
