@@ -290,6 +290,24 @@ heuristics — anything starting `wp_` or `get_` — would have been a guess.
 order: `wp_kses_post( apply_filters( 'x', esc_html( $v ) ) )` is safe however the
 filter behaves.
 
+**A merge cannot manufacture the pair.** The rule needs one value that was
+escaped *and* then filtered, and a phi can produce that from two paths where
+neither did both:
+
+```php
+if ( is_numeric( $media_id ) ) {
+    $html = wp_get_attachment_image( $media_id, 'large' );   // voided, never escaped
+}
+if ( '' === $html && $url ) {
+    $html = sprintf( '<img src="%s">', esc_url( $url ) );    // escaped, never voided
+}
+echo $html;
+```
+
+The pair survives a merge only when one incoming operand carried both. That is a
+merge rule rather than path sensitivity: it cannot say which path runs, only
+that no single one of them did both things.
+
 **Two deliberate exceptions.**
 
 - **Registered escapers never void.** Core ends `esc_html()` with

@@ -989,7 +989,7 @@ final class FunctionAnalysis
             }
         }
 
-        $merged = $this->state->unionOf($incoming);
+        $merged = self::withoutSplitEscapeClaim($this->state->unionOf($incoming), $incoming, $this->state);
 
         if ($merged->isEmpty()) {
             return $this->state->set($phi->result, $merged);
@@ -1005,6 +1005,56 @@ final class FunctionAnalysis
                 $incoming,
             ),
         );
+    }
+
+    /**
+     * A union must not manufacture a claim neither branch made.
+     *
+     * `escape_voided` only reports alongside `escaped`: the pair says one value
+     * was escaped and then handed to a filter. A phi can produce that pair from
+     * two paths where neither did both:
+     *
+     *     if ( is_numeric( $media_id ) ) {
+     *         $html = wp_get_attachment_image( $media_id, 'large' );   // voided
+     *     }
+     *     if ( '' === $html && $url ) {
+     *         $html = sprintf( '<img src="%s">', esc_url( $url ) );    // escaped
+     *     }
+     *     echo $html;                                                  // reported
+     *
+     * The first branch never escaped anything and the second never went near a
+     * filter. Three blocks in a real client theme are exactly this, all of them
+     * the fallback-to-a-URL shape, and the finding tells the reader to fix an
+     * ordering that no path has.
+     *
+     * So the pair survives a merge only when one incoming operand carried both.
+     * `escaped` is the half dropped, because it is the marker that makes the
+     * claim; `escape_voided` alone reports nothing and still records that a
+     * filter was involved.
+     *
+     * This is a merge rule rather than path sensitivity. It cannot say which
+     * path runs, only that no single one of them did both things.
+     *
+     * @param list<Operand> $incoming
+     */
+    private static function withoutSplitEscapeClaim(
+        TaintSet $merged,
+        array $incoming,
+        TaintState $state,
+    ): TaintSet {
+        if (! $merged->has(TaintKind::Escaped) || ! $merged->has(TaintKind::EscapeVoided)) {
+            return $merged;
+        }
+
+        foreach ($incoming as $operand) {
+            $taint = $state->effectiveTaintOf($operand);
+
+            if ($taint->has(TaintKind::Escaped) && $taint->has(TaintKind::EscapeVoided)) {
+                return $merged;
+            }
+        }
+
+        return $merged->without(TaintSet::of(TaintKind::Escaped));
     }
 
     private function transfer(Op $op): bool
