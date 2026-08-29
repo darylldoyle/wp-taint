@@ -22,6 +22,7 @@ use Enshrined\WpTaint\Rules\Wordpress\MissingAdminPostCapabilityCheck;
 use Enshrined\WpTaint\Rules\Wordpress\MissingAjaxCapabilityCheck;
 use Enshrined\WpTaint\Rules\Wordpress\MissingRestPermissionCallback;
 use Enshrined\WpTaint\Rules\Wordpress\NonceWithoutAction;
+use Enshrined\WpTaint\Rules\Wordpress\SettingWithoutSanitizeCallback;
 use Enshrined\WpTaint\Rules\Wordpress\WrongContextEscape;
 use Enshrined\WpTaint\Support\PathHelper;
 use Enshrined\WpTaint\Taint\AnalysisOptions;
@@ -86,9 +87,11 @@ final class Scanner
          */
         private readonly ScanProgress $progress = new NullScanProgress(),
     ) {
-        // Both remaining structural rules are pure AST shape checks. The
-        // query-shape check that used to live here needs the dataflow verdict,
-        // so it moved into the engine as
+        // Structural rules are pure AST shape checks over one file. They exist
+        // for the bugs that are an absence — a missing capability check, a
+        // missing sanitize_callback — which no amount of following values will
+        // find. The query-shape check that used to live here needs the dataflow
+        // verdict, so it moved into the engine as
         // {@see \Enshrined\WpTaint\Taint\QueryShapeInspector}.
         $this->structuralRules = [
             new MissingRestPermissionCallback(),
@@ -98,6 +101,7 @@ final class Scanner
             new BypassableNonceCheck(),
             new GuardWithoutExit(),
             new WrongContextEscape(),
+            new SettingWithoutSanitizeCallback(),
         ];
     }
 

@@ -37,9 +37,9 @@
     },
     "duplicate-post": {
         "version": "4.7",
-        "findings": 1,
+        "findings": 2,
         "bySeverity": {
-            "medium": 1
+            "medium": 2
         },
         "warnings": 0,
         "parseFailures": 0

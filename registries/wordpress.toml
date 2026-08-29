@@ -1004,6 +1004,14 @@ cwe = "CWE-862"
 message = "An admin-post.php handler runs with no capability or nonce check."
 
 [[rules]]
+id = "wp.input.setting-without-sanitize"
+title = "Settings API option registered with no sanitize_callback"
+description = "register_setting() was called without a sanitize_callback, so options.php stores whatever is posted for that option verbatim. The request never appears in the plugin's own code — core reads $_POST and core writes the option — so there is no flow to trace, only a missing argument."
+remediation = "Pass a sanitize_callback in the third argument, choosing the sanitiser that matches what the option holds: sanitize_text_field() for a label, esc_url_raw() for a URL, absint() for an id, wp_kses_post() for markup."
+cwe = "CWE-20"
+message = "This setting is registered with no sanitize_callback."
+
+[[rules]]
 id = "wp.authz.ajax-missing-check"
 title = "AJAX handler performs no capability or nonce check"
 description = "A callback registered on a wp_ajax_* or wp_ajax_nopriv_* hook contains no current_user_can(), check_ajax_referer(), check_admin_referer() or wp_verify_nonce() call, so it is reachable by any logged-in user, or by anyone at all in the nopriv case."
