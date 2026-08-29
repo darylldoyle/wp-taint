@@ -201,6 +201,15 @@ function = "wp_trim_words"
 function = "wp_strip_all_tags"
 note = "Removes tags but leaves quotes and ampersands, so it is not sufficient for attribute context."
 
+# shortcode_atts( $defaults, $atts ) merges the attributes written in the post
+# body over the plugin's defaults and returns the result, so the attacker's half
+# comes straight back out. It was listed as filterable and not as a propagator,
+# which made the return clean and every shortcode callback that normalises its
+# attributes the usual way read as safe.
+[[propagators]]
+function = "shortcode_atts"
+args = [0, 1]
+
 [[propagators]]
 function = "apply_filters"
 args = [1]

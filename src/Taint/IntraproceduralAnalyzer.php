@@ -28,6 +28,12 @@ final class IntraproceduralAnalyzer
          * then treated as an entry point — the behaviour before there was one.
          */
         private readonly ?CallGraph $callGraph = null,
+        /**
+         * Function keys registered with `add_shortcode()`.
+         *
+         * @var array<string, true>
+         */
+        private readonly array $shortcodeCallbacks = [],
     ) {
     }
 
@@ -67,6 +73,7 @@ final class IntraproceduralAnalyzer
             $seedParameterIndex,
             $collectFindings,
             $this->callGraph,
+            $this->shortcodeCallbacks,
         ))->run();
     }
 }

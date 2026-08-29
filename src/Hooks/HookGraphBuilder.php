@@ -37,6 +37,20 @@ final class HookGraphBuilder
      */
     private const REGISTRARS = ['add_action', 'add_filter'];
 
+    /**
+     * `add_shortcode( 'tag', $callback )` shares that argument layout.
+     *
+     * It is not a hook, but it registers a callback the same way and the graph
+     * is the place that already knows how to resolve one. Registrations land
+     * under a name no `apply_filters()` can collide with, so nothing dispatches
+     * to them by accident — what needs them is
+     * {@see HookGraph::shortcodeCallbackKeys()}.
+     */
+    private const SHORTCODE_REGISTRARS = ['add_shortcode'];
+
+    /** Prefix for the synthetic hook name a shortcode registration is filed under. */
+    public const SHORTCODE_PREFIX = 'shortcode:';
+
     public function __construct(
         private readonly CallableResolver $callables,
         private readonly ValueResolver $values,
@@ -86,6 +100,12 @@ final class HookGraphBuilder
                     continue;
                 }
 
+                if ($this->isShortcodeRegistrar($op)) {
+                    $this->record($graph, $op, $context, $types, shortcode: true);
+
+                    continue;
+                }
+
                 if (! $this->isRegistrar($op)) {
                     continue;
                 }
@@ -101,6 +121,7 @@ final class HookGraphBuilder
         FunctionContext $context,
         ClassTypeMap $types,
         bool $wrapped = false,
+        bool $shortcode = false,
     ): void {
         $arguments = [];
 
@@ -136,7 +157,7 @@ final class HookGraphBuilder
         foreach ($names === [] ? [''] : $names as $hook) {
             foreach ($callbacks as $callback) {
                 $graph->add(new HookRegistration(
-                    $hook,
+                    $shortcode ? self::SHORTCODE_PREFIX . $hook : $hook,
                     $callback,
                     $context->file->relativePath,
                     $op->getLine(),
@@ -145,6 +166,24 @@ final class HookGraphBuilder
                 ));
             }
         }
+    }
+
+    private function isShortcodeRegistrar(Op\Expr\FuncCall|Op\Expr\NsFuncCall $op): bool
+    {
+        // Both spellings, for the same reason isRegistrar() checks both: inside
+        // a namespace the call compiles to the namespaced form and resolves to
+        // the global function at runtime.
+        $names = $op instanceof Op\Expr\NsFuncCall
+            ? [OperandHelper::literalString($op->nsName), OperandHelper::literalString($op->name)]
+            : [OperandHelper::literalString($op->name)];
+
+        foreach ($names as $name) {
+            if ($name !== null && in_array(strtolower(ltrim($name, '\\')), self::SHORTCODE_REGISTRARS, true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

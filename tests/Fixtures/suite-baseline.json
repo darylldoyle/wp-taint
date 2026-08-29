@@ -1,7 +1,7 @@
 {
     "wp-taint-fixtures": {
-        "truePositives": 47,
-        "falseNegatives": 17,
+        "truePositives": 48,
+        "falseNegatives": 16,
         "falsePositives": 0,
         "trueNegatives": 44
     },

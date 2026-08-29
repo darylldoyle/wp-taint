@@ -176,6 +176,8 @@ final class FunctionAnalysis
         private readonly ?int $seedParameterIndex,
         private readonly bool $collectFindings,
         private readonly ?CallGraph $callGraph = null,
+        /** @var array<string, true> */
+        private readonly array $shortcodeCallbacks = [],
     ) {
         $this->state = new TaintState();
         $this->types = new ClassTypeMap();
@@ -601,6 +603,7 @@ final class FunctionAnalysis
         }
 
         if ($this->seedParameterIndex === null) {
+            $this->seedShortcodeParameters();
             $this->seedUnknownParameters();
 
             return;
@@ -626,6 +629,51 @@ final class FunctionAnalysis
                 ),
             ),
         );
+    }
+
+    /**
+     * A shortcode callback is handed post content.
+     *
+     *     add_shortcode( 'badge', 'acme_badge' );
+     *     function acme_badge( $atts, $content = '' ) { … }
+     *
+     * `$atts` are the attributes written in the post body and `$content` is
+     * what the tag wraps, so both are chosen by whoever could edit that post —
+     * a contributor, on most sites. That is the same trust level as an option
+     * or post meta, so they carry the same kinds a stored source does rather
+     * than a request source's.
+     *
+     * `$tag` is the third parameter and is the shortcode's own name, which the
+     * plugin chose, so it is left alone.
+     */
+    private function seedShortcodeParameters(): void
+    {
+        if (! isset($this->shortcodeCallbacks[$this->context->key])) {
+            return;
+        }
+
+        $kinds = $this->registry->storedSourceKinds();
+
+        foreach (array_slice(array_values($this->context->func->params), 0, 2) as $index => $param) {
+            if (! $param instanceof Op\Expr\Param) {
+                continue;
+            }
+
+            $this->state->add(
+                $param->result,
+                $kinds,
+                new Provenance(
+                    TraceVerb::Source,
+                    $param,
+                    sprintf(
+                        'Parameter %d (%s) of a shortcode callback. Shortcode attributes and content come from '
+                            . 'post content, which anyone who can edit a post chooses.',
+                        $index,
+                        $this->context->parameterName($index),
+                    ),
+                ),
+            );
+        }
     }
 
     /**
@@ -1772,11 +1820,51 @@ final class FunctionAnalysis
             ? TaintSet::empty()
             : $this->state->taintOf($op->expr);
 
+        $this->reportShortcodeReturn($op, $op->expr, $taint);
+
         $merged = $this->returnTaint->union($taint);
         $changed = ! $merged->equals($this->returnTaint);
         $this->returnTaint = $merged;
 
         return $changed;
+    }
+
+    /**
+     * What a shortcode callback returns is printed by WordPress.
+     *
+     *     add_shortcode( 'badge', 'acme_badge' );
+     *     function acme_badge( $atts ) {
+     *         return '<span style="color:' . $atts['color'] . '">x</span>';
+     *     }
+     *
+     * There is no `echo` to find. `do_shortcode()` prints the return value, and
+     * the call that reaches it is core's, not the plugin's, so a rule looking
+     * for output constructs sees nothing and the callback reads as clean.
+     *
+     * The escaped form is unaffected: the return has to carry `html` to report,
+     * so `return '<span>' . esc_attr( $atts['color'] ) . '</span>'` stays quiet.
+     */
+    private function reportShortcodeReturn(Op\Terminal\Return_ $op, Operand $operand, TaintSet $taint): void
+    {
+        if (
+            ! $this->collecting
+            || ! $this->collectFindings
+            || ! isset($this->shortcodeCallbacks[$this->context->key])
+            || ! $taint->has(TaintKind::Html)
+        ) {
+            return;
+        }
+
+        $this->emit(
+            'wp.xss.unescaped-output',
+            TaintKind::Html,
+            Severity::High,
+            $op,
+            'shortcode return',
+            $operand,
+            'Returned from a shortcode callback, which WordPress prints. Escape it here: there is no later '
+                . 'point at which it can be escaped.',
+        );
     }
 
     private function transferEcho(Op\Terminal\Echo_ $op): bool

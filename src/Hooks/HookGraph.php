@@ -104,6 +104,36 @@ final class HookGraph
     }
 
     /**
+     * Function keys registered as shortcode callbacks.
+     *
+     * WordPress calls these with attributes taken from post content and prints
+     * whatever they return, so both ends need modelling: the parameters are
+     * attacker-influenced and the return value is output.
+     *
+     * @return array<string, true>
+     */
+    public function shortcodeCallbackKeys(): array
+    {
+        $keys = [];
+
+        foreach ($this->byHook as $hook => $registrations) {
+            if (! str_starts_with($hook, HookGraphBuilder::SHORTCODE_PREFIX)) {
+                continue;
+            }
+
+            foreach ($registrations as $registration) {
+                $key = $registration->callback->userFunctionKey;
+
+                if ($key !== null) {
+                    $keys[$key] = true;
+                }
+            }
+        }
+
+        return $keys;
+    }
+
+    /**
      * Registrations whose hook name could not be resolved.
      *
      * Surfaced rather than modelled. Each one is a place the engine knows it

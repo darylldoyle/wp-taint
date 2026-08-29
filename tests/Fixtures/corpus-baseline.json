@@ -17,20 +17,20 @@
     },
     "contact-form-7": {
         "version": "6.1.7",
-        "findings": 2,
+        "findings": 3,
         "bySeverity": {
             "critical": 1,
-            "high": 1
+            "high": 2
         },
         "warnings": 0,
         "parseFailures": 0
     },
     "cookie-law-info": {
         "version": "3.5.5",
-        "findings": 6,
+        "findings": 7,
         "bySeverity": {
             "critical": 1,
-            "high": 5
+            "high": 6
         },
         "warnings": 0,
         "parseFailures": 0

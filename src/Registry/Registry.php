@@ -6,6 +6,7 @@ namespace Enshrined\WpTaint\Registry;
 
 use Enshrined\WpTaint\Finding\RuleDefinition;
 use Enshrined\WpTaint\Finding\Severity;
+use Enshrined\WpTaint\Taint\TaintSet;
 
 /**
  * The fully resolved catalogue: sources, sanitizers, propagators, sinks, the
@@ -221,6 +222,29 @@ final class Registry
      * standard, correct WordPress idiom. Treating it as a non-literal argument
      * would produce a false positive on nearly every plugin in existence.
      *
+     * @return list<string>
+     */
+    /**
+     * The kinds a stored source introduces, unioned across the catalogue.
+     *
+     * A shortcode callback's attributes are post content, which is the same
+     * trust level `get_option()` and `get_post_meta()` model, so it asks the
+     * catalogue rather than repeating the list and drifting from it.
+     */
+    public function storedSourceKinds(): TaintSet
+    {
+        $kinds = TaintSet::empty();
+
+        foreach ($this->sources as $source) {
+            if ($source->stored) {
+                $kinds = $kinds->union($source->kinds);
+            }
+        }
+
+        return $kinds;
+    }
+
+    /**
      * @return list<string>
      */
     public function safeDatabaseIdentifiers(): array
