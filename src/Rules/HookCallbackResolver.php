@@ -101,6 +101,21 @@ final class HookCallbackResolver
      */
     private function receiverClass(Node\Expr $receiver, ?string $enclosingClass): ?string
     {
+        // `$this->admin` — a component stashed on a property. Its class is in
+        // this file three ways: a typed declaration, a promoted constructor
+        // parameter, or a `$this->admin = new Acme_Admin()` in the
+        // constructor. Boilerplate that registers through a loader keeps the
+        // component and the registration in one class, so the same file's AST
+        // is where the answer lives.
+        if (
+            $receiver instanceof Node\Expr\PropertyFetch
+            && $receiver->var instanceof Node\Expr\Variable
+            && $receiver->var->name === 'this'
+            && $receiver->name instanceof Node\Identifier
+        ) {
+            return $this->propertyClass($receiver->name->toString());
+        }
+
         if (! $receiver instanceof Node\Expr\Variable || ! is_string($receiver->name)) {
             return null;
         }
@@ -123,6 +138,64 @@ final class HookCallbackResolver
             if ($assign->expr instanceof Node\Expr\New_ && $assign->expr->class instanceof Node\Name) {
                 $found[$assign->expr->class->toString()] = true;
             }
+        }
+
+        return count($found) === 1 ? (string) array_key_first($found) : null;
+    }
+
+    /**
+     * The class a property holds, read from this file's declarations.
+     *
+     * The same three signals {@see \Enshrined\WpTaint\Taint\DeclaredTypes}
+     * indexes project-wide, limited to one AST because that is all a
+     * structural rule holds. Two classes for one property name is ambiguous
+     * and gives up, for the same reason receiverClass() does: a wrong class
+     * credits the wrong method body for an authorization check.
+     */
+    private function propertyClass(string $property): ?string
+    {
+        $found = [];
+        $finder = new NodeFinder();
+
+        foreach ($finder->findInstanceOf($this->ast, Node\Stmt\Property::class) as $declaration) {
+            if (! $declaration instanceof Node\Stmt\Property || ! $declaration->type instanceof Node\Name) {
+                continue;
+            }
+
+            foreach ($declaration->props as $declared) {
+                if ($declared->name->toString() === $property) {
+                    $found[$declaration->type->toString()] = true;
+                }
+            }
+        }
+
+        foreach ($finder->findInstanceOf($this->ast, Node\Param::class) as $parameter) {
+            if (
+                ! $parameter instanceof Node\Param
+                || $parameter->flags === 0
+                || ! $parameter->type instanceof Node\Name
+                || ! $parameter->var instanceof Node\Expr\Variable
+                || $parameter->var->name !== $property
+            ) {
+                continue;
+            }
+
+            $found[$parameter->type->toString()] = true;
+        }
+
+        foreach ($finder->findInstanceOf($this->ast, Node\Expr\Assign::class) as $assign) {
+            if (
+                ! $assign instanceof Node\Expr\Assign
+                || ! $assign->var instanceof Node\Expr\PropertyFetch
+                || ! $assign->var->name instanceof Node\Identifier
+                || $assign->var->name->toString() !== $property
+                || ! $assign->expr instanceof Node\Expr\New_
+                || ! $assign->expr->class instanceof Node\Name
+            ) {
+                continue;
+            }
+
+            $found[$assign->expr->class->toString()] = true;
         }
 
         return count($found) === 1 ? (string) array_key_first($found) : null;

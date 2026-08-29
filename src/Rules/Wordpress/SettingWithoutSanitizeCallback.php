@@ -40,9 +40,17 @@ use PhpParser\Node;
  * unresolved rather than guessed at, because a wrong answer here is either a
  * stored-XSS hole reported or missed.
  *
- * A `sanitize_callback` that is present but useless — `'__return_true'`, or a
- * callback that returns its argument — is accepted. Judging what a named
- * callback does is the call graph's job and belongs in a separate rule.
+ * A `sanitize_callback` naming a catalogue *propagator* is reported, because
+ * the catalogue already settles that question: `wp_unslash()`, `trim()` and
+ * `stripslashes()` return their argument essentially unchanged, and naming one
+ * as the cleaner is the same as naming none. This is the mistake-shaped half of
+ * "present but useless", and it needs no judgement — the same table that stops
+ * these passing for sanitisers in dataflow says why.
+ *
+ * A *user* callback that reaches no catalogue sanitiser is accepted, because
+ * absence proves nothing there: an allowlist check —
+ * `return 'enabled' === $value ? 'enabled' : 'disabled';` — reaches no sanitiser
+ * and is exactly right.
  */
 final class SettingWithoutSanitizeCallback implements StructuralRule
 {
@@ -125,8 +133,10 @@ final class SettingWithoutSanitizeCallback implements StructuralRule
                 return null;
             }
 
-            if (AstHelper::hasArrayKey($options, 'sanitize_callback')) {
-                return null;
+            $callback = AstHelper::arrayItem($options, 'sanitize_callback');
+
+            if ($callback !== null) {
+                return $this->inspectCallback($callback, $call, $file, $registry);
             }
         }
 
@@ -138,6 +148,41 @@ final class SettingWithoutSanitizeCallback implements StructuralRule
             Severity::Medium,
             'This setting has no sanitize_callback, so options.php stores whatever is posted for it '
                 . 'without cleaning it first.',
+            self::REGISTRAR,
+        );
+    }
+
+    /**
+     * A named callback the catalogue knows passes its argument through.
+     */
+    private function inspectCallback(
+        Node\Expr $callback,
+        Node\Expr\FuncCall $call,
+        ParsedFile $file,
+        Registry $registry,
+    ): ?Finding {
+        if (! $callback instanceof Node\Scalar\String_ || str_contains($callback->value, '::')) {
+            return null;
+        }
+
+        $matcher = \Enshrined\WpTaint\Registry\Matcher::function($callback->value);
+
+        if ($registry->sanitizer($matcher) !== null || $registry->propagator($matcher) === null) {
+            return null;
+        }
+
+        return StructuralFinding::at(
+            $call,
+            $file,
+            $registry,
+            self::RULE,
+            Severity::Medium,
+            sprintf(
+                'The sanitize_callback here is %s(), which returns its argument essentially unchanged, so '
+                    . 'options.php stores whatever is posted for this setting. Naming a pass-through as the '
+                    . 'cleaner is the same as naming none.',
+                $callback->value,
+            ),
             self::REGISTRAR,
         );
     }

@@ -1604,3 +1604,37 @@ That leaves five, and every one of them is a decision rather than a gap: two
 shortcode handlers with no `add_shortcode()` anywhere, `sanitize_text_field()`
 credited at output, a REST callback's return, and a cross-component flow already
 reported at the sink end.
+
+
+## Four small misses, closed in one pass
+
+Each had a one-line diagnosis in the misses table, and each fix landed where the
+diagnosis said it would.
+
+**A computed method name that folds to one string resolves.** `$m = 'verify';
+$this->$m();` was unresolvable, which walked an AJAX handler's capability check
+straight past the authorization rule — a checked handler reported as unchecked.
+The value resolver already answered this question for hook names and class
+names; the method-call path just never asked it. Several possible strings stay
+dynamic, because picking one would be a guess.
+
+**A loader component on a property resolves.** `$this->loader->add_action(
+$hook, $this->admin, 'handle' )` could not name `$this->admin`'s class, so the
+callback had no body and a missing check was invisible. The class is in the same
+file three ways — a typed declaration, a promoted constructor parameter, or a
+single `$this->admin = new Acme_Admin()` — and the resolver now reads all three,
+giving up on ambiguity for the same reason the variable path does.
+
+**A pass-through named as a sanitize_callback is reported.**
+`'sanitize_callback' => 'wp_unslash'` is the same as naming none, and the
+catalogue already says so: it is a propagator, not a sanitizer. A user callback
+that reaches no catalogue sanitiser stays accepted, because absence proves
+nothing there — an allowlist check reaches no sanitiser and is exactly right.
+
+**`wp_text_diff()` joins the filterable list.** The one content-returning
+pluggable whose core definition does not run a filter, so the generated
+catalogue could not see it. The rest of pluggable.php returns booleans, objects
+and voids — nothing escaping could have been applied to.
+
+    corpus, both suites and the vulnerable plugin unchanged
+    four fixtures, one per fix

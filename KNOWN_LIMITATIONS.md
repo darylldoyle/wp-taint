@@ -32,7 +32,6 @@ output rather than in the findings.
 | [A value of unknown origin, with `--no-unknown-provenance`](#unknown-provenance-is-reported-by-default) | Misses |
 | [A context built from a variable is not judged](#escaping-is-judged-against-its-context-but-not-a-computed-one) | Misses |
 | [`wp_update_comment()` is listed as returning its filtered argument](#escaping-must-survive-to-the-point-of-output) | Over-reports |
-| [Pluggable functions a plugin redefines outright](#escaping-must-survive-to-the-point-of-output) | Misses |
 | [Stored `unserialize()` needs a precondition the engine cannot check](#stored-object-injection-is-a-separate-lower-severity) | Neither |
 | [`esc_sql()` outside a readable quote position](#esc_sql-is-only-credited-inside-quotes) | Misses |
 | [`$_FILES['f']['tmp_name']` is treated as PHP's own path](#files-sub-keys-are-phps-or-the-clients-not-all-one-thing) | Misses |
@@ -54,12 +53,12 @@ output rather than in the findings.
 
 | Limitation | Direction |
 | --- | --- |
-| [An authorization check reached only through a dynamic call](#permission_callback-is-checked-for-what-it-reaches-and-stays-quiet-when-unsure) | Misses |
+| [An authorization check behind a genuinely unresolvable call](#permission_callback-is-checked-for-what-it-reaches-and-stays-quiet-when-unsure) | Misses |
 | [A nonce alone satisfies the AJAX rule](#a-nonce-satisfies-the-ajax-rule-but-not-the-admin-post-one) | Misses |
 | [An option name anchored out of sight](#an-option-name-assembled-out-of-sight-is-assumed-to-be-anchored) | Misses |
 | [An allowlist gate on an option name](#an-option-name-assembled-out-of-sight-is-assumed-to-be-anchored) | Over-reports |
 | [`register_rest_route()` options built conditionally](#register_rest_route-options-are-folded-not-traced) | Neither |
-| [A `sanitize_callback` that is present but useless](#register_setting-is-judged-on-its-arguments-alone) | Misses |
+| [A user-defined `sanitize_callback` that cleans nothing](#register_setting-is-judged-on-its-arguments-alone) | Misses |
 | [A loader component that is neither `$this` nor a local `new`](#hooks-registered-through-a-wrapper-are-followed-by-name) | Misses |
 | [A shortcode or block callback that is never registered](#a-printed-return-shortcode-handlers-and-block-renderers) | Misses |
 
@@ -400,9 +399,15 @@ which a generated list cannot have. It costs one finding on Akismet — the plug
 pinned to zero specifically to catch this kind of thing, which is the system
 working even though the answer is wrong.
 
-**What is still missed.** Pluggable functions, which a plugin may redefine
-outright rather than filter. And a filter reached inside a function whose body
-the scan cannot see.
+**Pluggable functions are covered too.** A plugin may redefine one outright
+rather than filter it, which is a wider grant. The generated catalogue already
+lists most of pluggable.php because those definitions happen to run filters
+internally; `wp_text_diff()` is the one content-returning pluggable that does
+not, and is curated in by hand. The rest return booleans, objects and voids —
+nothing escaping could have been applied to.
+
+**What is still missed.** A filter reached inside a function whose body the scan
+cannot see.
 
 ### The CSV neutraliser the rule asks for is recognised
 
@@ -867,9 +872,17 @@ survives only where the graph cannot speak — a callback that will not resolve,
 a walk that ran into something unfollowable — and findings resting on it are
 marked `imprecise`.
 
-**What is still missed.** A check reached only through a dynamic call the engine
-cannot resolve. Those walks report themselves incomplete, so the finding is
-marked rather than suppressed.
+A computed method name that folds to exactly one string resolves:
+
+```php
+$method = 'verify';
+$this->$method();          // walks into verify(), credits its check
+```
+
+**What is still missed.** A check reached through a call that genuinely cannot
+resolve — a name from data, or several possible strings, where picking one would
+be a guess. Those walks report themselves incomplete, so the finding is marked
+rather than suppressed.
 
 ### Hooks registered through a wrapper are followed, by name
 
@@ -893,10 +906,14 @@ of those registrations were seen at all — not resolved, not reported unresolve
 simply absent, which made a clean authorization report on a boilerplate plugin
 meaningless.
 
-**What is still missed.** The component's class, when it is neither `$this` nor
-a variable assigned from a single `new` in the same file. The boilerplate always
-constructs it locally, so the common case resolves; anything else is reported
-unresolved rather than guessed.
+A component stashed on a property resolves too, from the same file's AST: a
+typed declaration, a promoted constructor parameter, or a single
+`$this->admin = new Acme_Admin()`.
+
+**What is still missed.** A component whose class is declared in a different
+file from the registration, or held on a property two classes assign
+differently. Ambiguity gives up rather than guesses, because a wrong class
+credits the wrong method body for an authorization check.
 
 ### A nonce satisfies the AJAX rule but not the admin-post one
 
@@ -947,10 +964,14 @@ The pre-4.7 signature passed a callable as the third argument, and a plugin
 still using it has named something to clean the value, so a non-array third
 argument is accepted.
 
-A `sanitize_callback` that is present but useless — `'__return_true'`, or one
-that returns its argument — is accepted. Judging what a named callback does is
-the call graph's job and belongs in its own rule, the way the REST
-permission-callback rule already does it.
+A `sanitize_callback` naming a catalogue *propagator* is reported:
+`wp_unslash()`, `trim()` and `stripslashes()` return their argument essentially
+unchanged, and naming one as the cleaner is the same as naming none. The same
+table that stops these passing for sanitisers in dataflow says why.
+
+A *user* callback that reaches no catalogue sanitiser is accepted, because
+absence proves nothing there: `return 'enabled' === $value ? 'enabled' :
+'disabled';` reaches no sanitiser and is exactly right.
 
 ### `register_rest_route()` options are folded, not traced
 

@@ -953,6 +953,16 @@ kind = "unknown"
 severity = "low"
 rule_id = "wp.output.unescaped-unknown"
 
+# Pluggable functions can be redefined outright by any plugin, which is a wider
+# grant than a filter. The generated catalogue already lists most of them,
+# because their core definitions happen to run filters too; wp_text_diff() is
+# the one content-returning pluggable that does not, so it is curated here. The
+# rest of pluggable.php returns booleans, objects and voids — nothing escaping
+# could have been applied to.
+[[filterable]]
+function = "wp_text_diff"
+params = [0, 1]
+
 # Shortcode expansion is an extension point like any filter: a registered
 # shortcode decides what comes back, so escaping before it is escaping too early.
 [[filterable]]

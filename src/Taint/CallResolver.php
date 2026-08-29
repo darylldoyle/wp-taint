@@ -364,6 +364,22 @@ final class CallResolver
         $arguments = $this->arguments($op->args);
         $method = OperandHelper::literalString($op->name);
 
+        // A computed name that folds to exactly one string is that method.
+        //
+        //     $m = 'verify';
+        //     $this->$m();
+        //
+        // The value resolver already answers this for hook names and class
+        // names; not asking it here made the call unresolvable, which walked an
+        // AJAX handler's capability check straight past the authorization rule
+        // and reported a handler that checks as one that does not. Several
+        // answers stay dynamic: picking one would be a guess, and the union of
+        // effects belongs to the callable path, not this one.
+        if ($method === null) {
+            $names = $this->values->strings($op->name);
+            $method = count($names) === 1 ? $names[0] : null;
+        }
+
         if ($method === null) {
             return CallTarget::dynamic($arguments, OperandHelper::describe($op->var) . '->{dynamic}()');
         }
