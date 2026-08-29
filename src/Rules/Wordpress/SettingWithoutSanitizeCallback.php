@@ -204,7 +204,7 @@ final class SettingWithoutSanitizeCallback implements StructuralRule
      * wrong one would name a function that does not exist — which fails safe,
      * since a key with no summary drops the deferred finding.
      *
-     * @param list<Node\Stmt> $ast
+     * @param list<Node> $ast
      */
     private static function namespaceOf(array $ast): ?string
     {

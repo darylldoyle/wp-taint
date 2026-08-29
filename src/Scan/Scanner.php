@@ -221,7 +221,7 @@ final class Scanner
         $hooks = (new HookGraphBuilder($callables, $values, $receivers))->build($contexts);
         $callGraph = (new CallGraphBuilder($this->registry, $functions, $values, $receivers, $callables, $hooks))
             ->build($contexts);
-        $ruleContext = $ruleContext->withGraphs($callGraph, $hooks);
+        $ruleContext = $ruleContext->withGraphs($callGraph, $hooks)->withDeclaredTypes($functions->declaredTypes());
 
         // A registration we could not place is a hook edge we know exists and
         // cannot draw. Counted next to the other coverage gaps rather than

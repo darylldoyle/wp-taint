@@ -58,7 +58,6 @@ output rather than in the findings.
 | [An option name anchored out of sight](#an-option-name-assembled-out-of-sight-is-assumed-to-be-anchored) | Misses |
 | [An allowlist gate on an option name](#an-option-name-assembled-out-of-sight-is-assumed-to-be-anchored) | Over-reports |
 | [`register_rest_route()` options built conditionally](#register_rest_route-options-are-folded-not-traced) | Neither |
-| [A loader component declared in a different file](#hooks-registered-through-a-wrapper-are-followed-by-name) | Misses |
 | [A shortcode or block callback that is never registered](#a-printed-return-shortcode-handlers-and-block-renderers) | Misses |
 
 **Parsing and scope**
@@ -940,10 +939,14 @@ A component stashed on a property resolves too, from the same file's AST: a
 typed declaration, a promoted constructor parameter, or a single
 `$this->admin = new Acme_Admin()`.
 
-**What is still missed.** A component whose class is declared in a different
-file from the registration, or held on a property two classes assign
-differently. Ambiguity gives up rather than guesses, because a wrong class
-credits the wrong method body for an authorization check.
+A component whose class is declared in a *different* file resolves through the
+project-wide declared-types index: the registration hands back a call-graph key
+rather than statements, and the whole-scan graph walks it. An empty body with a
+key the graph does not know counts as unresolved, never as a finding.
+
+**What is still missed.** A property two classes assign differently. Ambiguity
+gives up rather than guesses, because a wrong class credits the wrong method
+body for an authorization check.
 
 ### A nonce satisfies the AJAX rule but not the admin-post one
 

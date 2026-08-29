@@ -134,7 +134,7 @@ abstract class HookHandlerAuthorization implements StructuralRule
             $callback = AstHelper::argument($call, 1);
 
             $resolved = $wrapped
-                ? $resolver->resolveWrapped($args, $class, self::receiverIsThis($call))
+                ? $resolver->resolveWrapped($args, $class, self::receiverIsThis($call), $context->declaredTypes())
                 : ($callback === null ? null : $resolver->resolve($callback, $class));
 
             if ($resolved === null) {
@@ -185,6 +185,16 @@ abstract class HookHandlerAuthorization implements StructuralRule
         $graph = $context->callGraph();
         $key = $resolved['key'];
         $primitives = $this->acceptedChecks($registry);
+
+        // A key with no statements is a cross-file resolution: the class body
+        // lives elsewhere and only the whole-scan call graph can walk it. When
+        // the graph does not know the key either, nothing can — that is
+        // unresolved, and the name heuristic below has no names to look at, so
+        // falling through would manufacture an imprecise finding out of
+        // nothing.
+        if ($resolved['stmts'] === [] && ($graph === null || $key === null || ! $graph->knows($key))) {
+            return ['checked' => true, 'certain' => false];
+        }
 
         if ($graph !== null && $key !== null && $graph->knows($key)) {
             if ($graph->reaches($key, $primitives, self::MAX_DEPTH)) {

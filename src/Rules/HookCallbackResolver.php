@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Rules;
 
+use Enshrined\WpTaint\Taint\DeclaredTypes;
 use PhpParser\Node;
 use PhpParser\NodeFinder;
 
@@ -50,8 +51,12 @@ final class HookCallbackResolver
      *
      * @return array{stmts: list<Node\Stmt>, description: string, key: string|null}|null
      */
-    public function resolveWrapped(array $args, ?string $enclosingClass, bool $receiverIsThis): ?array
-    {
+    public function resolveWrapped(
+        array $args,
+        ?string $enclosingClass,
+        bool $receiverIsThis,
+        ?DeclaredTypes $declared = null,
+    ): ?array {
         $args = array_values($args);
         $first = ($args[1] ?? null)?->value;
 
@@ -64,9 +69,29 @@ final class HookCallbackResolver
         $second = ($args[2] ?? null)?->value;
 
         if ($second instanceof Node\Scalar\String_ && ! $first instanceof Node\Scalar\String_) {
-            $class = $this->receiverClass($first, $enclosingClass);
+            $class = $this->receiverClass($first, $enclosingClass)
+                ?? $this->declaredComponentClass($first, $enclosingClass, $declared);
 
-            return $class === null ? null : $this->method($class, $second->value);
+            if ($class === null) {
+                return null;
+            }
+
+            $inFile = $this->method($class, $second->value);
+
+            if ($inFile !== null) {
+                return $inFile;
+            }
+
+            // The class resolved but its body lives in another file, so there
+            // are no statements to hand back — a key is enough for the
+            // whole-scan call graph to walk. The caller treats an empty body
+            // with a key the graph does not know as unresolved, never as a
+            // finding.
+            return [
+                'stmts' => [],
+                'description' => $class . '::' . $second->value . '()',
+                'key' => strtolower(ltrim($class, '\\') . '::' . $second->value),
+            ];
         }
 
         // `$this->add_action( $hook, 'method' )`: a bare method name on the
@@ -81,6 +106,33 @@ final class HookCallbackResolver
         }
 
         return $this->resolve($first, $enclosingClass);
+    }
+
+    /**
+     * The project-wide answer, when this file's AST has none.
+     *
+     * The boilerplate usually constructs the component next to the
+     * registration, which the same-file walk resolves. When the property's
+     * class is declared in a *different* file — a typed property on a class
+     * whose definition lives elsewhere — the {@see DeclaredTypes} index built
+     * from the whole scan is the only place the answer exists.
+     */
+    private function declaredComponentClass(
+        Node\Expr $receiver,
+        ?string $enclosingClass,
+        ?DeclaredTypes $declared,
+    ): ?string {
+        if (
+            $declared === null
+            || ! $receiver instanceof Node\Expr\PropertyFetch
+            || ! $receiver->var instanceof Node\Expr\Variable
+            || $receiver->var->name !== 'this'
+            || ! $receiver->name instanceof Node\Identifier
+        ) {
+            return null;
+        }
+
+        return $declared->propertyClassOf($enclosingClass, $receiver->name->toString());
     }
 
     /**

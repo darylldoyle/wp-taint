@@ -7,6 +7,7 @@ namespace Enshrined\WpTaint\Rules;
 use Enshrined\WpTaint\Finding\Finding;
 use Enshrined\WpTaint\Hooks\HookGraph;
 use Enshrined\WpTaint\Taint\CallGraph;
+use Enshrined\WpTaint\Taint\DeclaredTypes;
 use Enshrined\WpTaint\Taint\TaintSet;
 
 /**
@@ -68,6 +69,27 @@ final class RuleContext
     private ?CallGraph $callGraph = null;
 
     private ?HookGraph $hookGraph = null;
+
+    /**
+     * What the whole scan declares about its own types, for the rules whose
+     * one-file AST cannot answer a cross-file question. The loader pattern is
+     * the customer: the component class and the registration that names it are
+     * regularly in different files.
+     */
+    private ?DeclaredTypes $declaredTypes = null;
+
+    public function withDeclaredTypes(DeclaredTypes $types): self
+    {
+        $context = clone $this;
+        $context->declaredTypes = $types;
+
+        return $context;
+    }
+
+    public function declaredTypes(): ?DeclaredTypes
+    {
+        return $this->declaredTypes;
+    }
 
     /**
      * The graphs are built after this object, because they need every file
