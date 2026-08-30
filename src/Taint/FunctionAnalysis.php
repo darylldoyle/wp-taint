@@ -221,6 +221,12 @@ final class FunctionAnalysis
         $this->seedByReferenceCaptures();
         $this->seedIncludeResults();
 
+        $debug = getenv('WP_TAINT_DEBUG') !== false;
+
+        if ($debug) {
+            $this->state->countChanges();
+        }
+
         $iterations = 0;
 
         do {
@@ -231,6 +237,16 @@ final class FunctionAnalysis
         $this->publishScope();
 
         if ($changed) {
+            // In a debug run, non-convergence is a bug in this engine, not a
+            // note to the user: throw and name the operand two ops cannot agree
+            // on, which is the disease every historical incident shared and
+            // which used to be found only by a slow scan. The fixture suite
+            // runs with WP_TAINT_DEBUG set, so the next change that reintroduces
+            // it fails a test instead of shipping.
+            if ($debug) {
+                throw new NonConvergenceError($this->describeOscillation($iterations));
+            }
+
             $this->warnings[] = new AnalysisWarning(
                 $this->context->file->relativePath,
                 $this->context->displayName,
@@ -2131,6 +2147,49 @@ final class FunctionAnalysis
      * clean clears whatever a previous iteration left. With several, replacing
      * would mean the last one visited won.
      */
+    /**
+     * A non-convergence diagnostic: the operands that would not settle, and the
+     * ops that write each of them.
+     *
+     * The oscillator is the operand whose value changed far more than any
+     * other — two writers disagreeing — so naming it and its writers turns
+     * "results may be incomplete" into a line that points at the cause.
+     */
+    private function describeOscillation(int $iterations): string
+    {
+        $lines = [sprintf(
+            '%s did not converge in %d iterations.',
+            $this->context->displayName,
+            $iterations,
+        )];
+
+        foreach (array_slice($this->state->oscillators($iterations - 1), 0, 3) as $entry) {
+            $operand = $entry['operand'];
+            $writers = [];
+
+            foreach ($operand->ops as $writer) {
+                if ($writer instanceof Op) {
+                    $pos = OperandHelper::position($writer, $this->context->file->sourceMap);
+                    $writers[] = sprintf(
+                        '%s at %s:%d',
+                        (new \ReflectionClass($writer))->getShortName(),
+                        $this->context->file->relativePath,
+                        $pos['line'],
+                    );
+                }
+            }
+
+            $lines[] = sprintf(
+                '  %s changed %d times, written by: %s',
+                OperandHelper::describe($operand),
+                $entry['changes'],
+                $writers === [] ? '(unknown)' : implode('; ', $writers),
+            );
+        }
+
+        return implode("\n", $lines);
+    }
+
     private function writeResult(Operand $result, TaintSet $taint, ?Provenance $provenance = null): bool
     {
         $voided = $this->voidEscaping($taint);

@@ -28,6 +28,11 @@ final class TaintState
     /** @var SplObjectStorage<Operand, Provenance> */
     private SplObjectStorage $containerProvenance;
 
+    private bool $countsChanges = false;
+
+    /** @var SplObjectStorage<Operand, int> */
+    private SplObjectStorage $changeCounts;
+
     public function __construct()
     {
         $this->keyedTaint = new SplObjectStorage();
@@ -36,6 +41,7 @@ final class TaintState
         $this->provenance = new SplObjectStorage();
         $this->containerTaint = new SplObjectStorage();
         $this->containerProvenance = new SplObjectStorage();
+        $this->changeCounts = new SplObjectStorage();
     }
 
     /**
@@ -311,6 +317,10 @@ final class TaintState
     {
         $changed = ! $this->taintOf($operand)->equals($taint);
 
+        if ($changed && $this->countsChanges) {
+            $this->changeCounts[$operand] = ($this->changeCounts[$operand] ?? 0) + 1;
+        }
+
         $this->taint[$operand] = $taint;
 
         if ($provenance !== null && ! $taint->isEmpty()) {
@@ -318,6 +328,43 @@ final class TaintState
         }
 
         return $changed;
+    }
+
+    /**
+     * Turn on per-operand change counting, for the non-convergence invariant.
+     *
+     * Off by everywhere but a debug run, because it costs a hash write on every
+     * taint change and answers a question a passing scan never asks: which
+     * operand would not settle. An operand's value flips A->B->A only when two
+     * ops write it disagreeing — this project's one recurring cause of a fixed
+     * point that never converges, six times over — so the operand that changed
+     * far more than the rest is the culprit, named without knowing the shape.
+     */
+    public function countChanges(): void
+    {
+        $this->countsChanges = true;
+    }
+
+    /**
+     * Operands that changed value at least this many times, worst first.
+     *
+     * @return list<array{operand: Operand, changes: int}>
+     */
+    public function oscillators(int $threshold): array
+    {
+        $found = [];
+
+        foreach ($this->changeCounts as $operand) {
+            $count = $this->changeCounts[$operand];
+
+            if ($count >= $threshold) {
+                $found[] = ['operand' => $operand, 'changes' => $count];
+            }
+        }
+
+        usort($found, static fn (array $a, array $b): int => $b['changes'] <=> $a['changes']);
+
+        return $found;
     }
 
     /**

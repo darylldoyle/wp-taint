@@ -30,5 +30,13 @@
     </source>
     <php>
         <ini name="memory_limit" value="512M"/>
+        <!--
+            The whole suite runs with the non-convergence invariant armed: a
+            function whose taint fixed point does not settle throws instead of
+            warning, naming the operand two ops disagree on. Every fixture
+            converges today, so this is a tripwire for the day a change
+            reintroduces the oscillation this project has hit six times.
+        -->
+        <env name="WP_TAINT_DEBUG" value="1"/>
     </php>
 </phpunit>
