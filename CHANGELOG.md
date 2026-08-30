@@ -73,7 +73,7 @@ The first tagged release. Everything below shipped in it.
 
 Five independent measurements, all checked in CI:
 
-- 232 first-party fixtures, 118 of them labelled safe. A single false positive
+- 252 first-party fixtures, 127 of them labelled safe. A single false positive
   in the safe half fails the build.
 - A 50-plugin corpus from WordPress.org: 21,148 files, 4.1 million lines. Eight
   plugins are pinned by version and their counts are asserted.

@@ -131,6 +131,7 @@ $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$wpdb->prefix}items WHERE sl
 ## Usage
 
 ```bash
+wp-taint init /path/to/wp-content         # detect the project, write wp-taint.toml
 wp-taint scan ./src                       # find bugs
 wp-taint explain ./src/file.php:47 --scope=./src   # ask why
 wp-taint registry:dump                    # print the catalogue
@@ -435,8 +436,8 @@ composer lint        # PHP_CodeSniffer, PSR-12 + Slevomat
 composer check       # all three
 ```
 
-The fixture suite in `tests/Fixtures/` is the regression net: 114 vulnerable
-files and 118 safe ones that are superficially similar. The safe half matters
+The fixture suite in `tests/Fixtures/` is the regression net: 125 vulnerable
+files and 127 safe ones that are superficially similar. The safe half matters
 more: a single false positive there fails the build.
 
 Expectations are written as inline `// wp-taint-expect <rule-id> <kind>`
