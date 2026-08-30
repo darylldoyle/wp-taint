@@ -924,7 +924,7 @@ message = "REST route registered without a permission_callback."
 id = "wp.authz.rest-public-write"
 title = "REST route allows unauthenticated writes"
 description = "A route handling POST, PUT, PATCH or DELETE declares permission_callback => '__return_true', which permits any unauthenticated request to invoke it."
-remediation = "Replace __return_true with a current_user_can() check for the capability the operation requires."
+remediation = "Replace __return_true with a current_user_can() check for the capability the operation requires. A webhook that authenticates by verifying a provider signature inside the callback is a legitimate exception — baseline it with that reason."
 cwe = "CWE-862"
 message = "REST write route is callable by anyone."
 

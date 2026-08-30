@@ -113,9 +113,11 @@ positive classes found and fixed at the root — each one recorded in
 are pinned by version and their counts are checked in CI, so a change that moves
 them has to say so.
 
-**A false positive rate under 10% on the corpus has not been demonstrated.**
-That gate needs a finding-by-finding triage with a verdict on each, which is a
-human job and remains outstanding.
+**The corpus false-positive rate is being demonstrated one rule at a time.**
+The gate needs a finding-by-finding verdict on each finding, which is a slog, so
+it is done in slices published under [docs/triage/](triage/). First slice:
+`wp.authz.rest-public-write`, 29 findings, 0 false positives. The rest remain
+outstanding.
 
 ## Methodology
 
