@@ -7,8 +7,11 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-No release has been tagged yet. Everything below is in `main` and is what 0.1.0
-will contain.
+Nothing yet.
+
+## [0.1.0] - 2026-08-30
+
+The first tagged release. Everything below shipped in it.
 
 ### Added
 
@@ -85,7 +88,9 @@ Five independent measurements, all checked in CI:
 ### Known limitations
 
 Documented in [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md). A false positive
-rate under 10% on the corpus has not been demonstrated; that gate needs a
-finding-by-finding triage and remains outstanding.
+rate under 10% on the corpus is being demonstrated one rule at a time under
+`docs/triage/`. The first slice, `wp.authz.rest-public-write`, was 29 findings
+and 0 false positives; the rest are outstanding.
 
-[Unreleased]: https://github.com/darylldoyle/wp-taint/commits/main
+[Unreleased]: https://github.com/darylldoyle/wp-taint/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/darylldoyle/wp-taint/releases/tag/v0.1.0
