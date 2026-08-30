@@ -7,6 +7,7 @@
 | [Getting started](getting-started.md) | Install, first scan, reading a finding |
 | [Scan your own code inside a WordPress install](scanning-a-wordpress-project.md) | Reporting on a few directories among thousands of files |
 | [Troubleshooting](troubleshooting.md) | A scan that looks stuck, wrong or too loud |
+| [Running in CI](ci.md) | A GitHub Actions job with baseline and SARIF |
 
 ## Reference
 
@@ -29,3 +30,4 @@
 | Document | Contains |
 |----------|----------|
 | [php-cfg API notes](php-cfg-api-notes.md) | The CFG library's shape, for engine work |
+| [Name resolution](resolution.md) | Which of the five resolvers answers what, and why |
