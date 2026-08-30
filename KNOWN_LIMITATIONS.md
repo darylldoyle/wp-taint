@@ -972,10 +972,16 @@ That fragment is often several frames away, so the check follows function
 summaries and property writes to find it. Two gaps remain, both deliberate:
 
 - **An unresolvable callee is assumed to anchor.** A helper that returns the
-  request verbatim through a call the engine cannot follow is not reported.
-- **Anchoring is not propagated from a caller into a parameter.**
-  `new Thing( $_POST['name'] )` stored on a property and later written is
-  missed, because the constructor cannot see what its caller passed.
+  request verbatim through a call the engine cannot follow is not reported. A
+  modelled pass-through does not count as one: `wp_unslash()`, `trim()` and
+  `sanitize_key()` carry their argument's anchor through rather than creating it,
+  so `update_option( wp_unslash( $_POST['name'] ) )` reports.
+- **Anchoring now crosses a call.** `new Thing( $_POST['name'] )` stored on a
+  property and later written is reported: the caller's argument settles the
+  anchor, it is recorded onto the property, and it survives the interprocedural
+  merge. Still missed: an anchor that would have to flow *out* of a property
+  read back into a different caller, which is the by-reference-closure shape one
+  step further on.
 
 Also unmodelled: an allowlist gate. WooCommerce validates with
 `in_array( $setting_id, $valid_setting_ids, true )` and `continue`, which makes
