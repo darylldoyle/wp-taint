@@ -23,6 +23,7 @@ use Enshrined\WpTaint\Scan\FileFinder;
 use Enshrined\WpTaint\Scan\NullScanProgress;
 use Enshrined\WpTaint\Scan\ScanResult;
 use Enshrined\WpTaint\Scan\ScanRunner;
+use Enshrined\WpTaint\Scan\WorkerPool;
 use Enshrined\WpTaint\Support\PathHelper;
 use InvalidArgumentException;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -204,6 +205,43 @@ final class ScanCommand extends Command
 
             return ExitCode::CLEAN;
         }
+
+        if ($configuration->jobs > 1 && ! WorkerPool::isSupported()) {
+            $stderr->writeln(sprintf(
+                '<comment>--jobs=%d was requested but the pcntl extension is not loaded, so the scan runs on one '
+                    . 'process. Findings are identical; only the wall clock changes.</comment>',
+                $configuration->jobs,
+            ));
+        }
+
+        // A scan that runs out of memory dies with a fatal the user cannot act
+        // on. This catches that specific end and prints the one thing that
+        // fixes it, then re-raises so the exit status is unchanged.
+        $rawArgv = $_SERVER['argv'] ?? null;
+        $argv = [];
+
+        if (is_array($rawArgv)) {
+            foreach ($rawArgv as $argument) {
+                if (is_scalar($argument)) {
+                    $argv[] = (string) $argument;
+                }
+            }
+        }
+
+        $invocation = $argv === [] ? 'wp-taint scan …' : implode(' ', $argv);
+
+        $handler = static function () use ($stderr, $invocation): void {
+            $error = error_get_last();
+
+            if ($error !== null && str_contains($error['message'], 'Allowed memory size')) {
+                $stderr->writeln(sprintf(
+                    "\n<error>Ran out of memory. Re-run with a higher limit, for example:\n"
+                        . '  WP_TAINT_MEMORY_LIMIT=6G %s</error>',
+                    $invocation,
+                ));
+            }
+        };
+        register_shutdown_function($handler);
 
         $result = (new ScanRunner($configuration))->run($files, $progress);
         $progress->finish();

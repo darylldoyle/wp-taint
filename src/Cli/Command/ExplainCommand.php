@@ -12,6 +12,7 @@ use Enshrined\WpTaint\Cfg\ThemeRoots;
 use Enshrined\WpTaint\Cli\Application;
 use Enshrined\WpTaint\Cli\ExitCode;
 use Enshrined\WpTaint\Cli\InputReader;
+use Enshrined\WpTaint\Cli\ProjectScanConfig;
 use Enshrined\WpTaint\Hooks\HookGraphBuilder;
 use Enshrined\WpTaint\Registry\RegistryLoader;
 use Enshrined\WpTaint\Scan\FileFinder;
@@ -72,6 +73,42 @@ final class ExplainCommand extends Command
             );
     }
 
+    /**
+     * The scope to analyse when the user did not pass --scope.
+     *
+     * `--scope` is the difference between explaining a file alone and explaining
+     * it in context, and getting it wrong — or forgetting it — was the commonest
+     * way to get a misleading "clean" out of explain. When a wp-taint.toml sits
+     * above the file, the deepest of its `paths` that contains the file is the
+     * same scope a scan would use, so it becomes the default. Otherwise the
+     * file's own directory, as before.
+     */
+    private static function scopeFor(string $file): string
+    {
+        $config = ProjectScanConfig::discover($file);
+
+        if ($config === null) {
+            return dirname($file);
+        }
+
+        $real = realpath($file);
+        $target = $real === false ? $file : $real;
+        $best = null;
+
+        foreach (ProjectScanConfig::load($config)->paths as $path) {
+            $normalised = rtrim(str_replace('\\', '/', $path), '/');
+
+            if (
+                str_starts_with(str_replace('\\', '/', $target), $normalised . '/')
+                && ($best === null || strlen($normalised) > strlen($best))
+            ) {
+                $best = $normalised;
+            }
+        }
+
+        return $best ?? dirname($file);
+    }
+
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $reader = new InputReader($input);
@@ -105,7 +142,7 @@ final class ExplainCommand extends Command
             }
         }
 
-        $scope = $reader->nullableString('scope') ?? dirname($file);
+        $scope = $reader->nullableString('scope') ?? self::scopeFor($file);
         $root = PathHelper::normalise($scope);
 
         try {
