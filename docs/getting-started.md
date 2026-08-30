@@ -14,7 +14,25 @@ composer require --dev enshrined/wp-taint
 `ext-pcntl` is optional. Without it `--jobs` is capped at 1 and everything else
 works.
 
+## Set up a WordPress project
+
+Point `init` at your `wp-content` and it detects the themes and plugins, asks
+which you wrote, and writes a `wp-taint.toml`:
+
+```bash
+vendor/bin/wp-taint init /path/to/wp-content
+```
+
+Run non-interactively (in CI, or piped) and it writes a template instead, with
+every directory commented out for you to choose. Then scan with no arguments:
+
+```bash
+vendor/bin/wp-taint scan
+```
+
 ## Run your first scan
+
+Or point it straight at a directory:
 
 ```bash
 vendor/bin/wp-taint scan ./src

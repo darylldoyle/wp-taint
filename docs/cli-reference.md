@@ -8,6 +8,7 @@ wp-taint <command> [options] [arguments]
 
 | Command | Purpose |
 |---------|---------|
+| `init` | Detect a WordPress project and write a `wp-taint.toml` |
 | `scan` | Find bugs. The default command. |
 | `explain` | Show the taint state at one line, and why |
 | `registry:dump` | Print the fully resolved catalogue |

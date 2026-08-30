@@ -6,6 +6,7 @@ namespace Enshrined\WpTaint\Cli;
 
 use Enshrined\WpTaint\Cli\Command\DumpCfgCommand;
 use Enshrined\WpTaint\Cli\Command\ExplainCommand;
+use Enshrined\WpTaint\Cli\Command\InitCommand;
 use Enshrined\WpTaint\Cli\Command\RegistryDumpCommand;
 use Enshrined\WpTaint\Cli\Command\ScanCommand;
 use Symfony\Component\Console\Application as ConsoleApplication;
@@ -28,6 +29,7 @@ final class Application extends ConsoleApplication
         $this->add(new DumpCfgCommand());
         $this->add(new RegistryDumpCommand());
         $this->add(new ExplainCommand());
+        $this->add(new InitCommand());
 
         $this->setDefaultCommand('scan');
     }
