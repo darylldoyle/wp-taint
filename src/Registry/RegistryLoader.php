@@ -59,6 +59,8 @@ final class RegistryLoader
 
     private const AUTHORIZATION_KEYS = ['function', 'class', 'method', 'static_method', 'proves', 'note'];
 
+    private const CAPABILITY_KEYS = ['name', 'scope', 'note'];
+
     private const RULE_KEYS = ['id', 'title', 'description', 'remediation', 'cwe', 'message'];
 
     /**
@@ -71,7 +73,7 @@ final class RegistryLoader
      */
     private const TABLE_KEYS = [
         'meta', 'sources', 'sanitizers', 'propagators', 'sinks', 'safe', 'dispatchers', 'byref',
-        'templates', 'authorization', 'rules', 'options', 'scan', 'filterable',
+        'templates', 'authorization', 'capabilities', 'rules', 'options', 'scan', 'filterable',
     ];
 
     private const OPTION_KEYS = ['safe_database_identifiers'];
@@ -153,6 +155,7 @@ final class RegistryLoader
         $this->loadByRefEffects($canonical, $data['byref'] ?? [], $accumulator);
         $this->loadTemplateLoaders($canonical, $data['templates'] ?? [], $accumulator);
         $this->loadAuthorization($canonical, $data['authorization'] ?? [], $accumulator);
+        $this->loadCapabilities($canonical, $data['capabilities'] ?? [], $accumulator);
         $this->loadFilterable($canonical, $data['filterable'] ?? [], $accumulator);
         $this->loadRules($canonical, $data['rules'] ?? [], $accumulator);
         $this->loadOptions($canonical, $data['options'] ?? [], $accumulator);
@@ -547,6 +550,33 @@ final class RegistryLoader
             $accumulator->addAuthorization(
                 $this->matcherFor($file, $context, $entry, allowConstruct: false, allowSuperglobal: false),
                 $proves,
+            );
+        }
+    }
+
+    private function loadCapabilities(string $file, mixed $entries, RegistryAccumulator $accumulator): void
+    {
+        foreach ($this->tableList($file, 'capabilities', $entries) as $index => $entry) {
+            $context = sprintf('[[capabilities]] #%d', $index + 1);
+            $this->rejectUnknownKeys($file, $context, $entry, self::CAPABILITY_KEYS);
+
+            $scopeValue = $this->requiredString($file, $context . ' scope', $entry['scope'] ?? null);
+            $scope = CapabilityScope::tryFrom($scopeValue);
+
+            if ($scope === null) {
+                throw RegistryException::at($file, $context . ' scope', sprintf(
+                    '"%s" is not a capability scope. Valid scopes: %s.',
+                    $scopeValue,
+                    implode(', ', array_map(
+                        static fn (CapabilityScope $s): string => $s->value,
+                        CapabilityScope::cases(),
+                    )),
+                ));
+            }
+
+            $accumulator->addCapability(
+                $this->requiredString($file, $context . ' name', $entry['name'] ?? null),
+                $scope,
             );
         }
     }

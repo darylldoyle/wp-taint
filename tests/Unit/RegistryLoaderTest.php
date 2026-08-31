@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Enshrined\WpTaint\Registry\CapabilityScope;
 use Enshrined\WpTaint\Registry\Matcher;
 use Enshrined\WpTaint\Registry\Registry;
 use Enshrined\WpTaint\Registry\RegistryException;
@@ -154,6 +155,27 @@ it('rejects the authz category anywhere a taint kind is expected', function (): 
         function = "acme_get"
         kinds = ["authz"]
         TOML))->toThrow(RegistryException::class, 'is not a taint kind');
+});
+
+it('loads capabilities and classifies core sets by scope', function (): void {
+    $registry = testRegistry();
+
+    expect($registry->capabilityScope('edit_post'))->toBe(CapabilityScope::Object);
+    expect($registry->capabilityScope('edit_posts'))->toBe(CapabilityScope::Role);
+    expect($registry->capabilityScope('manage_options'))->toBe(CapabilityScope::Site);
+    // A capability the catalogue has never heard of.
+    expect($registry->capabilityScope('acme_manage_reports'))->toBeNull();
+});
+
+it('rejects an unknown capability scope', function (): void {
+    expect(static fn (): Registry => loadRegistry(<<<'TOML'
+        [meta]
+        name = "custom"
+
+        [[capabilities]]
+        name = "edit_post"
+        scope = "row"
+        TOML))->toThrow(RegistryException::class, 'is not a capability scope');
 });
 
 it('refuses to let a safe call be re-added as a sink', function (): void {

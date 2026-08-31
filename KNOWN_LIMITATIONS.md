@@ -960,6 +960,52 @@ handlers overwhelmingly guard with `check_ajax_referer()` alone and demanding a
 capability as well would bury the real findings under every plugin in the
 corpus.
 
+### Object authorization is a scope check, not proof the check is right
+
+`wp.authz.object-id-from-request` fires when a request-chosen post, comment,
+term or user id reaches an object operation — `wp_delete_post()`,
+`update_user_meta()` and their relatives — and nothing dominating the sink
+entitles the caller to *that object*. It is dataflow (`object_id` taint from a
+request source to the sink) crossed with a control-flow question (does an
+entitling check dominate the operation), asked at the sink the way
+{@see GuardAnalyzer} asks about validating guards.
+
+The `object_id` kind rides through `absint()`, `intval()`, `(int)` and an
+`is_numeric()` guard on purpose: coercing the id to an integer ends every
+payload and settles nothing about whose row it names. `7` is a well-formed
+attack when post 7 is someone else's.
+
+What discharges it is a dominating capability check that ties the caller to the
+object: an object-scoped meta capability with the id in hand
+(`current_user_can( 'delete_post', $id )`), or a site-wide grant
+(`manage_options`). What does not: a role capability (`edit_posts`), a nonce of
+any spelling, or a meta capability called with no id — the last of which
+`wp.authz.meta-cap-without-object` reports in its own right.
+
+Several things are deliberately on the *suppressing* side, because a false
+positive on real admin code costs more than a documented miss:
+
+- **A capability the catalogue does not know counts.** Plugins mint their own
+  capabilities and typically grant them to administrators, so
+  `[[capabilities]]` classifies the core sets and `CapabilityGuard` treats
+  anything else as site-scoped. A plugin that names a *role-shaped* capability
+  of its own is a miss until that capability is added to the catalogue.
+- **A dominating helper counts when the call graph shows it reaching an
+  entitlement primitive, or — for a call the graph cannot resolve — when its
+  name reads like a permission check.** Real handlers wrap their checks
+  constantly, and the wrapper's capability is out of reach. A helper called
+  `acme_gate()` that guards on `edit_posts` alone is credited by name.
+- **A computed capability counts.** `current_user_can( $cap, $id )` where `$cap`
+  is a variable could be object-scoped, so it suppresses.
+
+What is missed by construction: an entitling check that is not *dominating* —
+one arm of a branch that also has a path around it (which
+`wp.authz.guard-without-exit` reports separately), or a check in a sibling
+function the operation does not go through. And the sink list is the modelled
+object operations, not every function that takes an id: a plugin's own
+`$wpdb->delete( $table, [ 'ID' => $id ] )` is SQL the rule does not read as an
+object operation.
+
 ### An option name assembled out of sight is assumed to be anchored
 
 `update_option()` is reported when the option *name* comes from the request,

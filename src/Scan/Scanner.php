@@ -19,6 +19,7 @@ use Enshrined\WpTaint\Rules\RuleContext;
 use Enshrined\WpTaint\Rules\StructuralRule;
 use Enshrined\WpTaint\Rules\Wordpress\BypassableNonceCheck;
 use Enshrined\WpTaint\Rules\Wordpress\GuardWithoutExit;
+use Enshrined\WpTaint\Rules\Wordpress\MetaCapabilityWithoutObject;
 use Enshrined\WpTaint\Rules\Wordpress\MissingAdminPostCapabilityCheck;
 use Enshrined\WpTaint\Rules\Wordpress\MissingAjaxCapabilityCheck;
 use Enshrined\WpTaint\Rules\Wordpress\MissingRestPermissionCallback;
@@ -99,6 +100,7 @@ final class Scanner
             new MissingAjaxCapabilityCheck(),
             new MissingAdminPostCapabilityCheck(),
             new NonceWithoutAction(),
+            new MetaCapabilityWithoutObject(),
             new BypassableNonceCheck(),
             new GuardWithoutExit(),
             new WrongContextEscape(),

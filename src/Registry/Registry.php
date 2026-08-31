@@ -28,6 +28,7 @@ final class Registry
      * @param array<string, ByRefEffect>  $byRef         calls that write back through an argument
      * @param array<string, TemplateLoader> $templates   calls that load a theme template by name
      * @param array<string, string>       $authorization matcher identity => what it proves, "entitlement" or "intent"
+     * @param array<string, CapabilityScope> $capabilities capability name => what a passing check proves
      * @param array<string, RuleMetadata> $rules
      * @param list<string>                $safeDatabaseIdentifiers
      */
@@ -42,6 +43,7 @@ final class Registry
         private readonly array $byRef,
         private readonly array $templates,
         private readonly array $authorization,
+        private readonly array $capabilities,
         /** @var array<string, list<int>> */
         private readonly array $filterable,
         private readonly array $rules,
@@ -168,6 +170,19 @@ final class Registry
             $this->authorization,
             static fn (string $proves): bool => $proves === 'entitlement',
         ));
+    }
+
+    /**
+     * What passing a check for this capability proves about the object at hand.
+     *
+     * Null for a capability the catalogue has never heard of — a plugin's own.
+     * The caller decides what to make of that; {@see \Enshrined\WpTaint\Taint\CapabilityGuard}
+     * treats it as site-scoped, because plugin capabilities are typically
+     * admin-granted and the documented false negative beats guessing.
+     */
+    public function capabilityScope(string $capability): ?CapabilityScope
+    {
+        return $this->capabilities[strtolower($capability)] ?? null;
     }
 
     /**
@@ -375,6 +390,7 @@ final class Registry
             $this->byRef,
             $this->templates,
             $this->authorization,
+            $this->capabilities,
             $this->filterable,
             $this->rules,
             $this->safeDatabaseIdentifiers,
@@ -409,6 +425,7 @@ final class Registry
             $this->byRef,
             $this->templates,
             $this->authorization,
+            $this->capabilities,
             $this->filterable,
             $this->rules,
             $this->safeDatabaseIdentifiers,

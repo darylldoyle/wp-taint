@@ -78,6 +78,8 @@ final class FunctionAnalysis
 
     private readonly GuardAnalyzer $guards;
 
+    private readonly CapabilityGuard $capabilityGuards;
+
     /** The block being walked, so a sink can ask what guarded the path to it. */
     private ?Block $currentBlock = null;
 
@@ -200,10 +202,12 @@ final class FunctionAnalysis
             $registry,
         );
         $this->guards = new GuardAnalyzer();
+        $this->capabilityGuards = new CapabilityGuard($registry, $callGraph);
         $this->returnTaint = TaintSet::empty();
         $this->returnAnchored = null;
         $this->blocks = BlockOrder::of($this->context->func->cfg);
         $this->guards->forFunction($this->blocks);
+        $this->capabilityGuards->forFunction($this->blocks);
         $this->traces = new TraceBuilder(
             $this->state,
             $this->context->file->sourceMap,
@@ -1190,8 +1194,10 @@ final class FunctionAnalysis
             $op instanceof Op\Expr\BinaryOp\Coalesce => $this->transferBinaryConcat($op),
             $op instanceof Op\Expr\BinaryOp => $this->state->set($op->result, TaintSet::empty()),
             $op instanceof Op\Expr\Array_ => $this->transferArrayLiteral($op),
+            // An int cast ends every payload and settles nothing about whose
+            // row the number names, so the object-id kind rides through it.
             $op instanceof Op\Expr\Cast\Int_,
-            $op instanceof Op\Expr\Cast\Double,
+            $op instanceof Op\Expr\Cast\Double => $this->transferNumericCast($op),
             $op instanceof Op\Expr\Cast\Bool_ => $this->state->set($op->result, TaintSet::empty()),
             $op instanceof Op\Expr\Cast => $this->transferPassThrough(
                 $op,
@@ -1216,6 +1222,32 @@ final class FunctionAnalysis
             $op instanceof Op\Expr => $this->state->set($op->result, TaintSet::empty()),
             default => false,
         };
+    }
+
+    /**
+     * `(int) $_POST['id']` produces a number that cannot carry a quote or a
+     * tag, and still names exactly the row the request chose. Every payload
+     * kind ends here; the object-id kind is an authorization claim rather than
+     * a payload, so it is the one thing the cast keeps.
+     */
+    private function transferNumericCast(Op\Expr\Cast $op): bool
+    {
+        $kept = $this->state->effectiveTaintOf($op->expr)->intersect(TaintSet::of(TaintKind::ObjectId));
+
+        if ($kept->isEmpty()) {
+            return $this->state->set($op->result, $kept);
+        }
+
+        return $this->state->set(
+            $op->result,
+            $kept,
+            new Provenance(
+                TraceVerb::Propagate,
+                $op,
+                'Cast to a number, which ends every payload and still names the row the request chose.',
+                [$op->expr],
+            ),
+        );
     }
 
     private function transferAssign(Op\Expr\Assign|Op\Expr\AssignRef $op): bool
@@ -1895,9 +1927,12 @@ final class FunctionAnalysis
             );
         }
 
+        // A number carries no payload; it still names whichever row the
+        // request chose, so the object-id kind survives the narrowing the way
+        // it survives an int cast.
         return $this->writeResult(
             $op->result,
-            TaintSet::empty(),
+            $this->state->effectiveTaintOf($op->expr)->intersect(TaintSet::of(TaintKind::ObjectId)),
             new Provenance(
                 TraceVerb::Sanitize,
                 $op,
@@ -2481,6 +2516,14 @@ final class FunctionAnalysis
         // it before storing it. Propagators settle neither, which is what keeps
         // `trim()` and `wp_unslash()` from passing for sanitisers.
         $cleared = $cleared->without(TaintSet::of(TaintKind::Unknown, TaintKind::Storage));
+
+        // No sanitizer settles whose row an id names. absint() clears `*`
+        // because it ends every payload, and an object id is not a payload:
+        // `7` is a complete attack when post 7 is someone else's. Authorization
+        // is CapabilityGuard's question, asked at the sink.
+        if ($incoming->has(TaintKind::ObjectId)) {
+            $cleared = $cleared->union(TaintSet::of(TaintKind::ObjectId));
+        }
 
         // A quote-escaper does not remove the danger, it moves it: the value is
         // safe between quotes and no safer than before without them. Trading
@@ -3115,6 +3158,17 @@ final class FunctionAnalysis
                 continue;
             }
 
+            // The callee's probe could only see its own body. The handler
+            // shape puts the capability check in the caller and the operation
+            // one helper down, so an object-id sink is re-asked here, in the
+            // frame that holds the check.
+            if (
+                $reference->kind === TaintKind::ObjectId
+                && $this->capabilityGuards->isEntitled($this->currentBlock)
+            ) {
+                continue;
+            }
+
             $key = $reference->identityKey() . '|' . spl_object_id($op) . '|' . $index;
 
             if (isset($this->emitted[$key])) {
@@ -3414,11 +3468,20 @@ final class FunctionAnalysis
             return;
         }
 
-        // Did every path here validate the value? A guard clause is how careful
-        // WordPress code constrains a request value, and it lives in the shape
-        // of the control flow rather than in the value, so it is asked here
-        // rather than propagated. See {@see GuardAnalyzer}.
-        if ($this->guards->isGuarded($operand, $this->currentBlock)) {
+        // An object-id sink asks about the caller, not the value: a
+        // character-class guard proves the id is a number, which it was always
+        // going to be, so GuardAnalyzer has nothing to say here. What
+        // discharges it is a dominating check that entitles the caller to the
+        // object — see {@see CapabilityGuard}.
+        if ($sink->kind === TaintKind::ObjectId) {
+            if ($this->capabilityGuards->isEntitled($this->currentBlock)) {
+                return;
+            }
+        } elseif ($this->guards->isGuarded($operand, $this->currentBlock)) {
+            // Did every path here validate the value? A guard clause is how
+            // careful WordPress code constrains a request value, and it lives
+            // in the shape of the control flow rather than in the value, so it
+            // is asked here rather than propagated. See {@see GuardAnalyzer}.
             return;
         }
 

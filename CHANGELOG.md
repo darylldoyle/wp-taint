@@ -7,7 +7,27 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- Object-level authorization detection, the largest previously-silent class in
+  the authorization column.
+  - `wp.authz.object-id-from-request` reports a request-chosen post, comment,
+    term or user id reaching an object operation (`wp_delete_post()`,
+    `update_user_meta()`, `wp_set_password()` and their relatives) when no
+    check dominating the sink entitles the caller to that object. This is the
+    classic WordPress IDOR (CWE-639): the check is present and correctly named,
+    but scoped to a role rather than the row. A new `object_id` taint kind
+    carries the id and — unlike every payload kind — survives `absint()`,
+    `intval()`, `(int)` and `is_numeric()`, because coercing an id to an integer
+    proves nothing about whose row it names. The finding is discharged by an
+    object-scoped meta capability with the id in hand, or a site-wide grant,
+    read off the dominating branch by the new `CapabilityGuard`.
+  - `wp.authz.meta-cap-without-object` reports a meta capability (`edit_post`,
+    `delete_user`, …) checked with no object id, which resolves against no row
+    and so authorizes nothing about the object being operated on.
+- A `[[capabilities]]` registry section classifying core capabilities as
+  `object`, `site` or `role`, so the scope decision is data rather than code. A
+  capability the catalogue does not know is treated as site-scoped.
 
 ## [0.1.0] - 2026-08-30
 

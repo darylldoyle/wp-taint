@@ -1,0 +1,15 @@
+{
+    "expectation": "vulnerable",
+    "findings": [
+        {
+            "ruleId": "wp.authz.meta-cap-without-object",
+            "kind": "authz",
+            "line": 20
+        },
+        {
+            "ruleId": "wp.authz.object-id-from-request",
+            "kind": "object_id",
+            "line": 24
+        }
+    ]
+}
