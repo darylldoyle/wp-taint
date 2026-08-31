@@ -38,8 +38,9 @@
     },
     "duplicate-post": {
         "version": "4.7",
-        "findings": 3,
+        "findings": 5,
         "bySeverity": {
+            "high": 2,
             "low": 1,
             "medium": 2
         },
@@ -67,10 +68,10 @@
     },
     "wpforms-lite": {
         "version": "2.0.1.1",
-        "findings": 50,
+        "findings": 52,
         "bySeverity": {
             "critical": 4,
-            "high": 26,
+            "high": 28,
             "low": 7,
             "medium": 13
         },
