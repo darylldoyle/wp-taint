@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: "Found a real vulnerability in a plugin or theme?"
+    url: "https://github.com/darylldoyle/wp-taint/security/advisories/new"
+    about: "If wp-taint helped you find a live, unpatched security issue in third-party code, report it privately here — never as a public issue with a working exploit."
+  - name: "Question or idea (not a bug)"
+    url: "https://github.com/darylldoyle/wp-taint/discussions"
+    about: "How do I scan X, is this idiom supported, would you consider Y — start a discussion."
+  - name: "Docs: how it works, CI setup, known limitations"
+    url: "https://github.com/darylldoyle/wp-taint/tree/main/docs"
+    about: "Guides, the CLI reference, and the honest list of what the engine cannot do."

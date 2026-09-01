@@ -1,0 +1,58 @@
+name: "Unsupported WordPress pattern"
+description: "A WordPress idiom wp-taint does not model — a source, sink, sanitizer, or registration it does not recognise."
+title: "[pattern] "
+labels: ["unsupported-pattern"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Much of what wp-taint knows lives in a TOML catalogue, so an unmodelled
+        function is often a one-line addition rather than an engine change. Tell
+        us what it is and what it does.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: "What kind of thing is it?"
+      options:
+        - "Source — produces untrusted data (like a new superglobal or request accessor)"
+        - "Sink — where a value does damage (like a new output or query function)"
+        - "Sanitizer / escaper — makes a value safe"
+        - "Registration — a way of registering a hook, shortcode, block, or route we do not follow"
+        - "Something else / not sure"
+    validations:
+      required: true
+  - type: input
+    id: function
+    attributes:
+      label: "The function or construct"
+      description: "The WordPress or plugin function, or the syntax, that is not handled."
+      placeholder: "wp_kses_data(), or $loader->register(), or a custom framework method"
+    validations:
+      required: true
+  - type: textarea
+    id: what-it-does
+    attributes:
+      label: "What does it do?"
+      description: |
+        For a sanitizer: what does it clean, and for which context (HTML, SQL, URL, attribute)?
+        For a source: what untrusted data does it return?
+        For a sink: what is dangerous about what it receives?
+        For a registration: how does it map a name to a callback?
+        A link to its WordPress or plugin docs is ideal.
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: "Example usage"
+      description: "A short snippet showing it in context, and what wp-taint does or does not currently report on it."
+      render: php
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: "wp-taint version"
+      placeholder: "0.1.0"
+    validations:
+      required: true

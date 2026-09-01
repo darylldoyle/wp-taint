@@ -1,0 +1,55 @@
+name: "False negative"
+description: "wp-taint missed a real bug it should have caught."
+title: "[FN] "
+labels: ["false-negative"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks. A false negative is a real issue the scan stayed quiet about.
+
+        ⚠️ **If this is a live, unpatched vulnerability in a third-party plugin
+        or theme, do not post the exploit here.** Report the missed *pattern*
+        with a minimal made-up example, or see the security note when you open a
+        blank issue. Do not paste a real site's code or a working exploit.
+  - type: input
+    id: rule
+    attributes:
+      label: "Which rule should have caught it?"
+      description: "The rule you expected, e.g. wp.sqli.unprepared-query. If you are not sure, describe the bug class."
+      placeholder: "wp.sqli.unprepared-query"
+    validations:
+      required: false
+  - type: textarea
+    id: code
+    attributes:
+      label: "The code that should have been flagged"
+      description: "A minimal example — ideally something you can share freely, not a real site's source."
+      render: php
+    validations:
+      required: true
+  - type: textarea
+    id: why-vuln
+    attributes:
+      label: "Why it is a bug"
+      description: "What is the attack? Where does the untrusted value come from, and where does it do damage?"
+    validations:
+      required: true
+  - type: textarea
+    id: explain
+    attributes:
+      label: "explain output"
+      description: |
+        Run `wp-taint explain path/to/file.php:LINE` on the sink line. It often
+        says exactly where the trace was abandoned — an unresolved call, an
+        unmodelled function — which points straight at the fix.
+      render: shell
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: "wp-taint version"
+      placeholder: "0.1.0"
+    validations:
+      required: true

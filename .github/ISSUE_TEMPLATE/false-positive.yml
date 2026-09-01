@@ -1,0 +1,53 @@
+name: "False positive"
+description: "wp-taint flagged code that is actually safe."
+title: "[FP] "
+labels: ["false-positive"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. A false positive is a finding on code that is not
+        actually a bug. These directly improve precision, so the more of the
+        trace you can paste, the faster it gets fixed.
+  - type: input
+    id: rule
+    attributes:
+      label: "Rule ID"
+      description: "The rule that fired, e.g. wp.xss.unescaped-output. It is on the finding."
+      placeholder: "wp.xss.unescaped-output"
+    validations:
+      required: true
+  - type: textarea
+    id: code
+    attributes:
+      label: "The flagged code"
+      description: "The smallest snippet that still triggers it. A whole function is fine; a whole plugin is not."
+      render: php
+    validations:
+      required: true
+  - type: textarea
+    id: why-safe
+    attributes:
+      label: "Why it is safe"
+      description: "What makes this correct? e.g. the value is an integer, it is escaped in a helper we cannot see, the option is admin-only."
+    validations:
+      required: true
+  - type: textarea
+    id: explain
+    attributes:
+      label: "explain output"
+      description: |
+        Run `wp-taint explain path/to/file.php:LINE` on the finding and paste it.
+        This shows exactly where the engine's reasoning went wrong and is the
+        single most useful thing you can include.
+      render: shell
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: "wp-taint version"
+      description: "Output of `wp-taint --version`."
+      placeholder: "0.1.0"
+    validations:
+      required: true
