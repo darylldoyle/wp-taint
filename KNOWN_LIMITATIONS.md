@@ -907,6 +907,14 @@ is not treated as output.
 Modelled as clearing `html`, which is true inside a `<script>` JSON context and
 false in general. Marked imprecise.
 
+The structural rule covers the false half wherever the statement shows the
+context: `wp_json_encode()` landing in HTML text (where `<` survives it), in a
+quoted attribute (whose value the JSON's own quotes end), or in an event
+handler is reported as the wrong escaper, and `esc_attr( wp_json_encode( … ) )`
+passes. What remains approximate is the bare `echo wp_json_encode( $x )` with
+no markup in the statement — it may sit inside a `<script>` block a previous
+statement opened, so it is left to the dataflow model above.
+
 ### Loops are analysed to a fixed point, not unrolled
 
 A value tainted only on the third iteration is tainted from the first as far as

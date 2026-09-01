@@ -97,6 +97,19 @@ final class WrongContextEscape implements StructuralRule
 
     private const JS_ESCAPERS = ['esc_js', 'wp_json_encode', 'json_encode'];
 
+    /**
+     * The JSON pair, apart from esc_js().
+     *
+     * json_encode() escapes for a JavaScript value position and nothing else:
+     * `<` comes through intact, and both quote characters are JSON syntax it
+     * must emit. That makes it right inside a <script> block and wrong in HTML
+     * text (a live `<img onerror=…>` needs no closing tag), wrong in a quoted
+     * attribute (the JSON's own quotes end it), and wrong in an event handler
+     * for the same reason. esc_js() is different: it entity-encodes `<` and
+     * `"`, which is exactly the attribute case it was built for.
+     */
+    private const JSON_ENCODERS = ['wp_json_encode', 'json_encode'];
+
     /** Attributes whose value is a URL, where only URL escaping protects the scheme. */
     private const URL_ATTRIBUTES = ['href', 'src', 'action', 'formaction', 'poster', 'data', 'cite', 'longdesc'];
 
@@ -129,7 +142,7 @@ final class WrongContextEscape implements StructuralRule
                 self::RULE,
                 Severity::High,
                 sprintf(
-                    '%s() escapes for HTML text, and this value lands %s, where %s. An escaper is present, so '
+                    '%s() does not protect a value landing %s, where %s. An escaper is present, so '
                         . 'a check that only asks whether one was called reports nothing here.',
                     $escaper,
                     $where,
@@ -467,6 +480,23 @@ final class WrongContextEscape implements StructuralRule
         $attribute = $this->openAttribute($before);
 
         if ($attribute === null) {
+            // HTML text, when the statement shows it: completed markup before
+            // the hole, no tag left open. json_encode() leaves `<` intact, so
+            // JSON printed into body text is live markup. The empty-context
+            // case stays unjudged — a bare `echo wp_json_encode( $x )` may sit
+            // inside a <script> block a previous statement opened, and this
+            // rule only speaks for what the statement in front of it shows.
+            if (
+                in_array($escaper, self::JSON_ENCODERS, true)
+                && str_contains($before, '>')
+                && ! $this->insideTag($before)
+            ) {
+                return [
+                    'json_encode() leaves < intact — esc_html() around it, or a <script> block',
+                    'in HTML text',
+                ];
+            }
+
             return null;
         }
 
@@ -491,14 +521,23 @@ final class WrongContextEscape implements StructuralRule
         }
 
         if ($this->isEventHandler($name)) {
+            if (in_array($escaper, self::JSON_ENCODERS, true)) {
+                return [
+                    "the JSON's own quotes end the attribute before any JavaScript runs — esc_attr() around it",
+                    sprintf('in the %s handler', $name),
+                ];
+            }
+
             return in_array($escaper, self::JS_ESCAPERS, true)
                 ? null
                 : ['an event handler is JavaScript, not markup', sprintf('in the %s handler', $name)];
         }
 
+        // esc_js() is in the attribute-safe set and the JSON pair is not: the
+        // former entity-encodes quotes, the latter has to emit them.
         return in_array(
             $escaper,
-            [...self::ATTR_ESCAPERS, ...self::URL_ESCAPERS, ...self::JS_ESCAPERS, ...self::QUOTE_ENCODING_ESCAPERS],
+            [...self::ATTR_ESCAPERS, ...self::URL_ESCAPERS, ...self::QUOTE_ENCODING_ESCAPERS, 'esc_js'],
             true,
         )
             ? null
@@ -629,6 +668,19 @@ final class WrongContextEscape implements StructuralRule
     private function isEventHandler(string $name): bool
     {
         return str_starts_with($name, 'on') && strlen($name) > 2;
+    }
+
+    /**
+     * Does the text end inside a tag — a `<` opened and not yet closed by `>`?
+     *
+     * `'<div '` is tag interior, not body text, and the unquoted-attribute
+     * branch owns what happens there.
+     */
+    private function insideTag(string $before): bool
+    {
+        $open = strrpos($before, '<');
+
+        return $open !== false && strpos($before, '>', $open) === false;
     }
 
     /**

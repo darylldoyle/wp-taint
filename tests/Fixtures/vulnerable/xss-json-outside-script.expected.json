@@ -1,0 +1,20 @@
+{
+    "expectation": "vulnerable",
+    "findings": [
+        {
+            "ruleId": "wp.xss.wrong-context-escape",
+            "kind": "html",
+            "line": 14
+        },
+        {
+            "ruleId": "wp.xss.wrong-context-escape",
+            "kind": "html",
+            "line": 19
+        },
+        {
+            "ruleId": "wp.xss.wrong-context-escape",
+            "kind": "html",
+            "line": 24
+        }
+    ]
+}
