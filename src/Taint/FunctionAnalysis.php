@@ -1454,7 +1454,44 @@ final class FunctionAnalysis
      */
     private function readsUntaintedSubKey(Op\Expr\ArrayDimFetch $op, string|int|null $key): bool
     {
-        $base = $this->throughAssignments($op->var);
+        return $this->everyBaseSkipsSubKey($op->var, is_string($key) ? $key : null, 0);
+    }
+
+    /**
+     * Does every value this operand can hold trace to a superglobal entry
+     * whose sub-key list says this key is not the attacker's?
+     *
+     * A phi is followed when *all* of its inputs qualify:
+     *
+     *     $file = empty( $_FILES['csv'] ) ? $_FILES['fallback'] : $_FILES['csv'];
+     *     fopen( $file['tmp_name'], 'r' );
+     *
+     * Both branches are `$_FILES` entries and `tmp_name` is PHP's own path in
+     * either, so the merge is as safe as each side. One branch that is not a
+     * qualifying fetch — a parameter, a `$_POST` array — disqualifies the
+     * whole phi, because the value could be that branch's.
+     */
+    private function everyBaseSkipsSubKey(Operand $operand, ?string $key, int $depth): bool
+    {
+        if ($depth > 4) {
+            return false;
+        }
+
+        $base = $this->throughAssignments($operand);
+
+        if ($base instanceof Op\Phi) {
+            if ($base->vars === []) {
+                return false;
+            }
+
+            foreach ($base->vars as $var) {
+                if (! $var instanceof Operand || ! $this->everyBaseSkipsSubKey($var, $key, $depth + 1)) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
 
         if (! $base instanceof Op\Expr\ArrayDimFetch) {
             return false;
@@ -1468,7 +1505,7 @@ final class FunctionAnalysis
 
         $source = $this->registry->source(Matcher::superglobal($superglobal));
 
-        return $source !== null && ! $source->matchesSubKey(is_string($key) ? $key : null);
+        return $source !== null && ! $source->matchesSubKey($key);
     }
 
     /**

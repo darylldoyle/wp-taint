@@ -499,11 +499,13 @@ $csv = $_FILES['subsidy_csv'];
 $this->generate_zip( $csv['tmp_name'] );
 ```
 
-**What is missed.** Assignments only. A value merged from two branches, or
-carried through a function, is not followed — the base has to reach the
-superglobal fetch through assignments alone. A computed second-level key stays
-tainted, the same way `keys` treats one: someone who chooses the index chooses
-the value.
+**What is missed.** Assignments and branch merges only. A value merged from two
+branches is followed when *every* branch reaches a qualifying superglobal fetch
+— two `$_FILES` entries merge safely; one `$_POST` branch disqualifies the phi.
+A value carried through a function is not followed — the base has to reach the
+superglobal fetch inside one body. A computed second-level key stays tainted,
+the same way `keys` treats one: someone who chooses the index chooses the
+value.
 
 **Direction:** under-approximating at `tmp_name`, deliberately.
 
