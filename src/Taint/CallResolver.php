@@ -119,18 +119,35 @@ final class CallResolver
             return [$direct];
         }
 
-        $dispatched = $dispatcher->hook
-            ? $this->dispatchedByHook($direct, $dispatcher)
-            : $this->dispatched($direct, $dispatcher, $context, $types);
+        $prefixed = [];
+
+        if ($dispatcher->hook) {
+            [$dispatched, $prefixed] = $this->dispatchedByHook($direct, $dispatcher);
+
+            // A prefix join is a bounded guess, so it gets half the treatment
+            // an exact match gets: the callback is analysed — its parameters
+            // receive the dispatch's arguments and its sinks fire — but its
+            // return never replaces the dispatcher's own semantics. An
+            // apply_filters() joined only by prefix still voids escaping and
+            // still hands back its own argument, because anything else could
+            // also be hooked on the name the scan could not fold.
+            $prefixed = array_map(
+                static fn (CallTarget $target): CallTarget => $target->returningTo(CallResultMode::Discard),
+                $prefixed,
+            );
+        } else {
+            $dispatched = $this->dispatched($direct, $dispatcher, $context, $types);
+        }
 
         if ($dispatched === []) {
             // A hook with nothing registered on it returns the value it was
             // handed, and that is a *known* answer rather than a failure to
             // resolve — the catalogue's own propagator entry states it. Falling
             // through to the dynamic case would turn every dispatch on a hook
-            // this scan happens not to see into an unresolved call.
+            // this scan happens not to see into an unresolved call. The
+            // prefix-joined callbacks ride along for their sinks.
             if ($dispatcher->hook) {
-                return [$direct];
+                return [$direct, ...$prefixed];
             }
 
             // For everything else an empty set means the callable could not be
@@ -156,7 +173,9 @@ final class CallResolver
 
         // `array_filter()` and friends still need their own entry to run: it is
         // what puts the input array's taint on the result.
-        return $dispatcher->returns === DispatchReturn::Own ? [$direct, ...$targets] : $targets;
+        return $dispatcher->returns === DispatchReturn::Own
+            ? [$direct, ...$targets, ...$prefixed]
+            : [...$targets, ...$prefixed];
     }
 
     /**
@@ -168,27 +187,37 @@ final class CallResolver
      * value the engine believed was clean; an action's arguments never reached
      * the sinks inside its callbacks.
      *
-     * @return list<CallTarget>
+     * Two lists come back: the exact matches, and the prefix joins — a literal
+     * dispatch reaching a `"save_{$type}"` registration, or a dynamic dispatch
+     * whose folded head reaches literal registrations. The caller treats the
+     * second list as the bounded guess it is.
+     *
+     * @return array{0: list<CallTarget>, 1: list<CallTarget>}
      */
     private function dispatchedByHook(CallTarget $call, Dispatcher $dispatcher): array
     {
         if ($this->hooks === null) {
-            return [];
+            return [[], []];
         }
 
         $name = $call->argument($dispatcher->callable);
 
         if ($name === null) {
-            return [];
+            return [[], []];
         }
 
         $arguments = $this->calleeArguments($call, $dispatcher);
-        $targets = [];
+        $exact = [];
+        $prefixed = [];
         $names = $this->values->strings($name);
 
         foreach ($names as $hook) {
             foreach ($this->hooks->targetsFor($hook) as $target) {
-                $targets[] = $target->withArguments($arguments);
+                $exact[] = $target->withArguments($arguments);
+            }
+
+            foreach ($this->hooks->prefixTargetsFor($hook) as $target) {
+                $prefixed[] = $target->withArguments($arguments);
             }
         }
 
@@ -198,12 +227,12 @@ final class CallResolver
         if ($names === []) {
             foreach ($this->values->prefixes($name) as $prefix) {
                 foreach ($this->hooks->targetsMatchingPrefix($prefix) as $target) {
-                    $targets[] = $target->withArguments($arguments);
+                    $prefixed[] = $target->withArguments($arguments);
                 }
             }
         }
 
-        return $targets;
+        return [$exact, $prefixed];
     }
 
     /**
