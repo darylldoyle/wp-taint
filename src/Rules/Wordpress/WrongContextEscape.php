@@ -11,6 +11,7 @@ use Enshrined\WpTaint\Registry\Registry;
 use Enshrined\WpTaint\Rules\AstHelper;
 use Enshrined\WpTaint\Rules\RuleContext;
 use Enshrined\WpTaint\Rules\StructuralRule;
+use Enshrined\WpTaint\Taint\TaintKind;
 use PhpParser\Node;
 
 /**
@@ -73,6 +74,20 @@ final class WrongContextEscape implements StructuralRule
      */
     private const HTML_ESCAPERS = ['esc_html', 'esc_html__', 'esc_html_e', 'esc_html_x', 'wp_kses', 'wp_kses_post'];
 
+    /**
+     * The subset of HTML escapers that run `_wp_specialchars( $string, ENT_QUOTES )`.
+     *
+     * These encode both `"` and `'`, so a value they escape cannot break out of
+     * a quoted attribute — `<div data-x="<?php echo esc_html( $v ); ?>">` is not
+     * a breakout, and reporting it as one accuses correct code. `wp_kses` and
+     * `wp_kses_post` are deliberately excluded: they pass markup through and can
+     * emit quotes inside the value, so they are not attribute-safe.
+     */
+    private const QUOTE_ENCODING_ESCAPERS = ['esc_html', 'esc_html__', 'esc_html_e', 'esc_html_x'];
+
+    /** Escapers that reduce their argument to an integer, which no context can break out of. */
+    private const INTEGER_ESCAPERS = ['absint', 'intval'];
+
     private const ATTR_ESCAPERS = [
         'esc_attr', 'esc_attr__', 'esc_attr_e', 'esc_attr_x',
         'sanitize_html_class', 'sanitize_key', 'sanitize_title', 'absint', 'intval',
@@ -120,6 +135,7 @@ final class WrongContextEscape implements StructuralRule
                     $wanted,
                 ),
                 $escaper,
+                TaintKind::Html,
             );
         }
 
@@ -129,7 +145,7 @@ final class WrongContextEscape implements StructuralRule
     /**
      * Output statements, decomposed into literal text and escaper calls in order.
      *
-     * @return list<array{0: Node, 1: list<array{text: ?string, escaper: ?string}>}>
+     * @return list<array{0: Node, 1: list<array{text: ?string, escaper: ?string, literal: bool}>}>
      */
     private function outputs(ParsedFile $file): array
     {
@@ -173,7 +189,7 @@ final class WrongContextEscape implements StructuralRule
     /**
      * A concatenation, flattened left to right into text and escaper calls.
      *
-     * @return list<array{text: ?string, escaper: ?string}>
+     * @return list<array{text: ?string, escaper: ?string, literal: bool}>
      */
     private function flatten(Node\Expr $expr): array
     {
@@ -182,7 +198,7 @@ final class WrongContextEscape implements StructuralRule
         }
 
         if ($expr instanceof Node\Scalar\String_) {
-            return [['text' => $expr->value, 'escaper' => null]];
+            return [['text' => $expr->value, 'escaper' => null, 'literal' => false]];
         }
 
         if ($expr instanceof Node\Scalar\InterpolatedString) {
@@ -191,7 +207,7 @@ final class WrongContextEscape implements StructuralRule
             foreach ($expr->parts as $part) {
                 $parts = [...$parts, ...(
                     $part instanceof Node\InterpolatedStringPart
-                        ? [['text' => $part->value, 'escaper' => null]]
+                        ? [['text' => $part->value, 'escaper' => null, 'literal' => false]]
                         : $this->flatten($part)
                 )];
             }
@@ -201,7 +217,7 @@ final class WrongContextEscape implements StructuralRule
 
         $escaper = $expr instanceof Node\Expr\FuncCall ? AstHelper::functionName($expr) : null;
 
-        return [['text' => null, 'escaper' => $escaper]];
+        return [['text' => null, 'escaper' => $escaper, 'literal' => $this->wrapsSafeLiteral($expr)]];
     }
 
     /**
@@ -212,7 +228,7 @@ final class WrongContextEscape implements StructuralRule
      * carry a breakout, and `%1$s`-style ordering is left alone rather than
      * guessed at.
      *
-     * @return list<array{text: ?string, escaper: ?string}>
+     * @return list<array{text: ?string, escaper: ?string, literal: bool}>
      */
     private function fromFormat(Node\Expr\FuncCall $call): array
     {
@@ -234,7 +250,7 @@ final class WrongContextEscape implements StructuralRule
 
         foreach ($chunks === false ? [] : $chunks as $chunk) {
             if ($chunk !== '%s') {
-                $parts[] = ['text' => $chunk, 'escaper' => null];
+                $parts[] = ['text' => $chunk, 'escaper' => null, 'literal' => false];
 
                 continue;
             }
@@ -244,6 +260,7 @@ final class WrongContextEscape implements StructuralRule
             $parts[] = [
                 'text' => null,
                 'escaper' => $argument instanceof Node\Expr\FuncCall ? AstHelper::functionName($argument) : null,
+                'literal' => $argument instanceof Node\Expr && $this->wrapsSafeLiteral($argument),
             ];
         }
 
@@ -253,7 +270,7 @@ final class WrongContextEscape implements StructuralRule
     /**
      * The first escaper that does not suit the context it was dropped into.
      *
-     * @param list<array{text: ?string, escaper: ?string}> $parts
+     * @param list<array{text: ?string, escaper: ?string, literal: bool}> $parts
      *
      * @return array{0: string, 1: string, 2: string}|null
      */
@@ -275,6 +292,16 @@ final class WrongContextEscape implements StructuralRule
             // as the wrong escaper for its context both misnames the problem and
             // duplicates the ordinary output rule, which already has it.
             if ($escaper === null || ! $this->isEscaper($escaper)) {
+                $text .= 'x';
+
+                continue;
+            }
+
+            // A hardcoded literal argument — `esc_html__( 'Open Date Picker' )` —
+            // is developer-authored text, not attacker input, and this rule
+            // reports attacker-controlled breakouts. If the constant carries no
+            // context-breaking character it cannot break out of anything.
+            if ($part['literal']) {
                 $text .= 'x';
 
                 continue;
@@ -316,6 +343,13 @@ final class WrongContextEscape implements StructuralRule
      */
     private function mismatch(string $before, string $escaper): ?array
     {
+        // absint()/intval() yield an integer, which cannot carry a breakout in
+        // any context — quoted or unquoted attribute, URL scheme, or script
+        // body. Never a mismatch, wherever it lands.
+        if (in_array($escaper, self::INTEGER_ESCAPERS, true)) {
+            return null;
+        }
+
         if ($this->inScript($before)) {
             return in_array($escaper, self::JS_ESCAPERS, true)
                 ? null
@@ -354,7 +388,11 @@ final class WrongContextEscape implements StructuralRule
                 : ['an event handler is JavaScript, not markup', sprintf('in the %s handler', $name)];
         }
 
-        return in_array($escaper, [...self::ATTR_ESCAPERS, ...self::URL_ESCAPERS, ...self::JS_ESCAPERS], true)
+        return in_array(
+            $escaper,
+            [...self::ATTR_ESCAPERS, ...self::URL_ESCAPERS, ...self::JS_ESCAPERS, ...self::QUOTE_ENCODING_ESCAPERS],
+            true,
+        )
             ? null
             : ['esc_attr() is what protects an attribute', 'in a quoted attribute'];
     }
@@ -483,5 +521,41 @@ final class WrongContextEscape implements StructuralRule
     private function isEventHandler(string $name): bool
     {
         return str_starts_with($name, 'on') && strlen($name) > 2;
+    }
+
+    /**
+     * Does this escaper call wrap a constant string with nothing that could
+     * break out of any output context?
+     *
+     * The argument to inspect is the first — `esc_html__( $text, $domain )` puts
+     * the text first — so a literal there is developer-authored and cannot be
+     * attacker input.
+     */
+    private function wrapsSafeLiteral(Node\Expr $call): bool
+    {
+        if (! $call instanceof Node\Expr\FuncCall) {
+            return false;
+        }
+
+        $argument = $call->getArgs()[0]->value ?? null;
+
+        return $argument instanceof Node\Expr && $this->isSafeLiteral($argument);
+    }
+
+    /**
+     * A compile-time string constant that carries no character able to open a
+     * new context: no angle bracket, quote, backslash, backtick or newline.
+     */
+    private function isSafeLiteral(Node\Expr $node): bool
+    {
+        if ($node instanceof Node\Scalar\String_) {
+            return preg_match('/[<>"\'\\\\`\r\n]/', $node->value) !== 1;
+        }
+
+        if ($node instanceof Node\Expr\BinaryOp\Concat) {
+            return $this->isSafeLiteral($node->left) && $this->isSafeLiteral($node->right);
+        }
+
+        return false;
     }
 }

@@ -3,7 +3,7 @@
     "findings": [
         {
             "ruleId": "wp.xss.wrong-context-escape",
-            "kind": "authz",
+            "kind": "html",
             "line": 10
         }
     ]

@@ -7,5 +7,5 @@
 
 function acme_render_config($value)
 {
-    echo '<script>var x = "' . esc_html($value) . '";</script>'; // wp-taint-expect wp.xss.wrong-context-escape authz
+    echo '<script>var x = "' . esc_html($value) . '";</script>'; // wp-taint-expect wp.xss.wrong-context-escape html
 }

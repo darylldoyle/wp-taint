@@ -2499,7 +2499,7 @@ final class FunctionAnalysis
             $formatArgument = $call->argument($sanitizer->requiresLiteralArgument);
 
             if ($formatArgument !== null && $this->formatStringIsUnsafe($formatArgument)) {
-                return $this->reportNonLiteralSanitizer($op, $call, $sanitizer, $matcher, $formatArgument, $incoming);
+                return $this->reportNonLiteralSanitizer($op, $call, $sanitizer, $matcher, $formatArgument);
             }
         }
 
@@ -2837,7 +2837,6 @@ final class FunctionAnalysis
         Sanitizer $sanitizer,
         Matcher $matcher,
         Operand $formatArgument,
-        TaintSet $incoming,
     ): bool {
         $ruleId = $sanitizer->literalViolationRuleId;
 
@@ -2877,14 +2876,26 @@ final class FunctionAnalysis
             );
         }
 
+        // A non-literal format string is the injection surface, and the result
+        // carries its taint. The *placeholder arguments* are a different matter:
+        // prepare() still substitutes and escapes every `%s`/`%d`/`%i` argument
+        // whether or not the template was literal, so a value bound to a
+        // placeholder does not reach the query as raw SQL. Passing the union of
+        // all arguments through — as an earlier version did — laundered the
+        // template's failure onto its bound arguments and reported the outer
+        // `$wpdb->query()` as an unprepared-query sink on a value that prepare()
+        // had in fact escaped (`$wpdb->query( $wpdb->prepare( "… {$table} …
+        // source_url = %s", $source_url ) )`). The template's own taint is what
+        // survives; the arguments' taint does not.
         return $this->writeResult(
             $op->result,
-            $incoming,
+            $this->state->taintOf($formatArgument),
             new Provenance(
                 TraceVerb::Propagate,
                 $op,
                 sprintf(
-                    '%s was called with a non-literal format string, so it escapes nothing.',
+                    '%s was called with a non-literal format string, so it escapes nothing. Its placeholder '
+                        . 'arguments are still bound and escaped; the format string itself is not.',
                     $matcher->describe(),
                 ),
                 $call->arguments,
