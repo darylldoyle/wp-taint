@@ -56,7 +56,7 @@ the resolver whose job that sub-question is, never reimplement it.** A value
 question goes to `ValueResolver`; a type question goes to `ReceiverResolver` or
 `DeclaredTypes`. The layering already expresses this; new code should follow it.
 
-## `DeclaredTypes`, the shared index
+## `DeclaredTypes` and `ClassHierarchy`, the shared indexes
 
 `DeclaredTypes` is not a resolver — it is a project-wide table of what the code
 declares about itself (return types, property types, promoted parameters,
@@ -65,6 +65,18 @@ declares about itself (return types, property types, promoted parameters,
 declared in one file is known in another. When a resolution question is
 "what type is this, across the whole scan", the answer lives here rather than in
 any one resolver.
+
+`ClassHierarchy` is the same shape of thing for inheritance: who extends whom
+and who uses which trait, built on the same walk. `lookupOrder()` answers
+"where would PHP find this member?" in PHP's own precedence order — the class,
+its traits, the parent, the parent's traits, and up — and everything that used
+to do a flat `Class::method` or `class::property` lookup walks it instead:
+`UserFunctionTable::resolveMethodKey()` (which `CallResolver` and
+`CallableResolver` resolve through), `DeclaredTypes::propertyClassOf()`,
+`OriginClassifier`'s property-taint check, and the structural rules via
+`RuleContext::canonicalCallbackKey()`. The same delegation rule applies: a
+"who defines this member" question goes to the hierarchy, never to a
+reimplemented walk.
 
 ## If these are ever merged
 

@@ -326,32 +326,39 @@ composer cve:fetch
 composer cve:check
 ```
 
-**9 attributed · 18 reported but not attributable · 20 silent.**
+**2 confirmed · 4 attributed · 19 reported · 21 silent**, across the 46 pairs
+close enough to score (one CVE's vulnerable and fixed releases are five major
+versions apart, and a diff across that says nothing).
 
-Three outcomes rather than two, because plenty of real fixes do not remove the
-flow. CVE-2022-2593 in Better Search Replace is SQL injection through
-unvalidated table names; we report `'DESCRIBE ' . $table` in both releases, and
-the fix is `array_map( 'trim', ... )`. Scoring that a miss understates the
-engine as badly as scoring it a hit would flatter it — so it is counted apart
-and never added to the headline.
+Four outcomes rather than two, because plenty of real fixes do not remove the
+flow. **Confirmed** means the findings vanish at the fix *and* the fixed
+release comes back clean; **attributed** means findings vanish while others
+remain, which a refactor in the fix release also produces. **Reported** is a
+finding on the vulnerable release that survives the fix — CVE-2022-2593 in
+Better Search Replace is SQL injection through unvalidated table names; we
+report `'DESCRIBE ' . $table` in both releases, and the fix is
+`array_map( 'trim', ... )`. Scoring that a miss understates the engine as
+badly as scoring it a hit would flatter it — so it is counted apart and never
+added to the headline.
 
 Where it fails, by class:
 
-| | attributed | reported | silent |
-| --- | --- | --- | --- |
-| Code injection (CWE-94) | 0 | 1 | **4** |
-| Deserialization (CWE-502) | 1 | 0 | 2 |
-| Open redirect (CWE-601) | 0 | 0 | **3** |
-| XSS (CWE-79) | 3 | 6 | 3 |
-| Authorization (CWE-862/863) | 2 | 5 | 5 |
-| Path traversal (CWE-22) | 1 | 4 | 0 |
-| SQL injection (CWE-89) | 1 | 2 | 2 |
-| SSRF (CWE-918) | 1 | 0 | 1 |
+| | confirmed | attributed | reported | silent |
+| --- | --- | --- | --- | --- |
+| Code injection (CWE-94) | 0 | 0 | 1 | **4** |
+| Deserialization (CWE-502) | 1 | 0 | 0 | 2 |
+| Open redirect (CWE-601) | 0 | 0 | 0 | **3** |
+| XSS (CWE-79) | 0 | 2 | 7 | 3 |
+| Authorization (CWE-862/863) | 0 | 2 | 5 | 5 |
+| Path traversal (CWE-22) | 0 | 0 | 3 | 1 |
+| SQL injection (CWE-89) | 1 | 0 | 2 | 2 |
+| SSRF (CWE-918) | 0 | 0 | 1 | 1 |
 
 Deserialization was a zero until this benchmark said so: stored data did not
 carry object-injection taint, on reasoning that holds for filesystem and URL
 sinks and not for this one. Fixing it caught CVE-2023-1196 in Advanced Custom
-Fields.
+Fields — now a confirmed hit, because the false positives that used to linger
+on the fixed release were themselves fixed and the release came back clean.
 
 The CWE-94 cases are plugins whose purpose is executing admin-supplied code, so
 those CVEs are privilege-boundary bugs wearing a code-injection label, and the
