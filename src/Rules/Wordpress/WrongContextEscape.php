@@ -11,6 +11,7 @@ use Enshrined\WpTaint\Registry\Registry;
 use Enshrined\WpTaint\Rules\AstHelper;
 use Enshrined\WpTaint\Rules\RuleContext;
 use Enshrined\WpTaint\Rules\StructuralRule;
+use Enshrined\WpTaint\Taint\MarkupPosition;
 use Enshrined\WpTaint\Taint\TaintKind;
 use PhpParser\Node;
 
@@ -471,13 +472,13 @@ final class WrongContextEscape implements StructuralRule
             return null;
         }
 
-        if ($this->inScript($before)) {
+        if (MarkupPosition::inScript($before)) {
             return in_array($escaper, self::JS_ESCAPERS, true)
                 ? null
                 : ['only JSON encoding or esc_js() neutralises a string breakout', 'inside a <script> block'];
         }
 
-        $attribute = $this->openAttribute($before);
+        $attribute = MarkupPosition::openAttribute($before);
 
         if ($attribute === null) {
             // HTML text, when the statement shows it: completed markup before
@@ -489,7 +490,7 @@ final class WrongContextEscape implements StructuralRule
             if (
                 in_array($escaper, self::JSON_ENCODERS, true)
                 && str_contains($before, '>')
-                && ! $this->insideTag($before)
+                && ! MarkupPosition::insideTag($before)
             ) {
                 return [
                     'json_encode() leaves < intact — esc_html() around it, or a <script> block',
@@ -500,13 +501,22 @@ final class WrongContextEscape implements StructuralRule
             return null;
         }
 
-        [$name, $quote] = $attribute;
+        [$name, $quote, $valueSoFar] = $attribute;
 
         if ($quote === null) {
-            return ['an unquoted attribute can be escaped out of with a space', 'in an unquoted attribute'];
+            // esc_url()'s character filter strips the space, `>` and quotes
+            // that could end an unquoted value, so nothing in its output can
+            // terminate the attribute. Every other escaper leaves the space.
+            return in_array($escaper, [...self::URL_ESCAPERS, 'esc_url_raw'], true)
+                ? null
+                : ['an unquoted attribute can be escaped out of with a space', 'in an unquoted attribute'];
         }
 
-        if (in_array($name, self::URL_ATTRIBUTES, true)) {
+        // A value that already carries a scheme-terminating character cannot
+        // have its scheme chosen by the hole: `href="#…"` is a fragment and
+        // `href="/…"` is a path wherever the rest of the value goes, so
+        // attribute rules apply, not URL rules.
+        if (in_array($name, self::URL_ATTRIBUTES, true) && preg_match('~[#/?:]~', $valueSoFar) !== 1) {
             if (in_array($escaper, self::URL_ESCAPERS, true)) {
                 return null;
             }
@@ -544,143 +554,9 @@ final class WrongContextEscape implements StructuralRule
             : ['esc_attr() is what protects an attribute', 'in a quoted attribute'];
     }
 
-    /**
-     * Are we inside a `<script>` element, counting only complete tags?
-     */
-    private function inScript(string $before): bool
-    {
-        // The tag has to be *closed* to have opened a script body. A value
-        // landing between `<script` and its `>` is in an attribute, and
-        // attribute rules apply to it:
-        //
-        //     sprintf(
-        //         '<script id="%s" src="%s"></script>',
-        //         esc_attr( $id ),
-        //         esc_url( $src )
-        //     );
-        //
-        // Counting the bare `<script` called both of those wrong and asked for
-        // JavaScript escaping on an id and a URL, which would be wrong in turn.
-        $opens = preg_match_all('/<script\b[^>]*>/i', $before);
-        $closes = preg_match_all('#</script\s*>#i', $before);
-
-        return $opens > $closes;
-    }
-
-    /**
-     * The attribute the next value lands in, and whether it is quoted.
-     *
-     * A forward scan rather than a regex on the tail, because a value often
-     * lands part-way through an attribute rather than immediately after the
-     * quote:
-     *
-     *     <button onclick='doThing("   <- still inside onclick
-     *
-     * Matching `name="` at the end of the text answers no there, and that is
-     * the case the rule most wants: JavaScript inside an event handler.
-     *
-     * @return array{0: string, 1: string|null}|null the attribute name, and the
-     *                                                quote character holding its
-     *                                                value, or null if unquoted
-     */
-    private function openAttribute(string $before): ?array
-    {
-        $inTag = false;
-        $name = '';
-        $collecting = false;
-        $attribute = null;
-        $quote = null;
-        $openName = null;
-        $length = strlen($before);
-
-        for ($index = 0; $index < $length; $index++) {
-            $character = $before[$index];
-
-            if ($quote !== null) {
-                if ($character === $quote) {
-                    $quote = null;
-                    $attribute = null;
-                }
-
-                continue;
-            }
-
-            if (! $inTag) {
-                if ($character === '<') {
-                    $inTag = true;
-                    $name = '';
-                    $collecting = true;
-                    $attribute = null;
-                }
-
-                continue;
-            }
-
-            if ($character === '>') {
-                $inTag = false;
-                $attribute = null;
-
-                continue;
-            }
-
-            if ($character === '=') {
-                $attribute = strtolower($name);
-                $name = '';
-                $collecting = false;
-
-                continue;
-            }
-
-            if ($character === '"' || $character === "'") {
-                if ($attribute !== null) {
-                    $quote = $character;
-                    $openName = $attribute;
-                }
-
-                continue;
-            }
-
-            if (ctype_space($character)) {
-                // Whitespace ends an unquoted value, and starts the next name.
-                $attribute = null;
-                $name = '';
-                $collecting = true;
-
-                continue;
-            }
-
-            if ($collecting) {
-                $name .= $character;
-            }
-        }
-
-        // The quote is still open, so the value lands inside it — whatever else
-        // is in there. `onclick='doThing("` is still the onclick attribute, and
-        // re-deriving the name with a regex over the tail loses exactly that
-        // case, because the tail contains the other quote character.
-        if ($quote !== null && $openName !== null) {
-            return [$openName, $quote];
-        }
-
-        return $inTag && $attribute !== null ? [$attribute, null] : null;
-    }
-
     private function isEventHandler(string $name): bool
     {
         return str_starts_with($name, 'on') && strlen($name) > 2;
-    }
-
-    /**
-     * Does the text end inside a tag — a `<` opened and not yet closed by `>`?
-     *
-     * `'<div '` is tag interior, not body text, and the unquoted-attribute
-     * branch owns what happens there.
-     */
-    private function insideTag(string $before): bool
-    {
-        $open = strrpos($before, '<');
-
-        return $open !== false && strpos($before, '>', $open) === false;
     }
 
     /**

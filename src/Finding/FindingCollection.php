@@ -112,27 +112,36 @@ final class FindingCollection implements IteratorAggregate, Countable
     public function withRulePrecedence(array $precedence): self
     {
         $anchors = [];
+        $byLine = [];
 
         foreach ($this->findings as $finding) {
             $anchors[$finding->file . ':' . $finding->line . ':' . $finding->kind->value][$finding->ruleId] = true;
+            $byLine[$finding->file . ':' . $finding->line][$finding->ruleId] = true;
         }
 
-        return $this->filter(static function (Finding $finding) use ($precedence, $anchors): bool {
+        return $this->filter(static function (Finding $finding) use ($precedence, $anchors, $byLine): bool {
             $supersededBy = $precedence[$finding->ruleId] ?? null;
 
             if ($supersededBy === null) {
                 return true;
             }
 
-            $atLocation = $anchors[$finding->file . ':' . $finding->line . ':' . $finding->kind->value] ?? [];
-            unset($atLocation[$finding->ruleId]);
-
+            // The wildcard — "any other finding here supersedes this one" —
+            // stays scoped to the kind, so an html finding at the same line
+            // cannot silence an sql one. A rule *named* as superseding matches
+            // across kinds: the pairs in the map are pairs because they say
+            // the same thing about the same line, whatever kind each carries.
             if ($supersededBy === []) {
+                $atLocation = $anchors[$finding->file . ':' . $finding->line . ':' . $finding->kind->value] ?? [];
+                unset($atLocation[$finding->ruleId]);
+
                 return $atLocation === [];
             }
 
+            $atLine = $byLine[$finding->file . ':' . $finding->line] ?? [];
+
             foreach ($supersededBy as $ruleId) {
-                if (isset($atLocation[$ruleId])) {
+                if (isset($atLine[$ruleId])) {
                     return false;
                 }
             }

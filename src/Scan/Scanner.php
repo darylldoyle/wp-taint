@@ -62,6 +62,9 @@ final class Scanner
     private const RULE_PRECEDENCE = [
         'wp.sqli.unprepared-query' => [],
         'wp.sqli.wpdb-query' => ['wp.sqli.prepare-non-literal'],
+        // Both say "this escaper does not protect this attribute"; the traced
+        // finding also says where the value came from, so it wins the line.
+        'wp.xss.wrong-context-escape' => ['wp.xss.unescaped-attribute'],
     ];
 
     public function __construct(

@@ -317,11 +317,25 @@ into a text context is among the most common correct lines in WordPress, and
 reporting all of them buys nothing a reviewer can act on: the value provably
 cannot carry a tag.
 
-It is not the looser reading in an *attribute*, where the quotes and ampersands
-`sanitize_text_field()` leaves do matter. That is the wrong-context rule's job
-and it fires there.
+It is not the looser reading in an *attribute*, where the quotes
+`sanitize_text_field()` leaves do matter — `" onmouseover=… x="` ends the value
+and starts new attributes. That case has its own kind and its own sink:
+tag-stripping sanitisers clear `html` and no longer clear `html_attr`, and
+`wp.xss.unescaped-attribute` fires when a component carrying it lands inside a
+quoted attribute, read off the literal fragments the way the SQL shape check
+reads quote position. `esc_attr()` and the `esc_html()` family clear it (both
+run ENT_QUOTES); `wp_kses_post()` does not, because kses passes markup and its
+quotes through.
 
-**Direction:** under-approximating, deliberately.
+**What is still missed there.** An *unquoted* attribute — `value=<?php … ?>` —
+where the space `sanitize_text_field()` also leaves is the breakout; the
+structural rule reports it when an escaper is visible, but the dataflow sink
+fires only for the quoted shape. And an output whose markup context is not
+built where the echo is: a bare `echo $safe` may sit inside an attribute a
+previous statement opened, and the statement in front of it shows nothing.
+
+**Direction:** under-approximating at text contexts, deliberately; the quoted
+attribute is now reported.
 
 ### Escaping must survive to the point of output
 

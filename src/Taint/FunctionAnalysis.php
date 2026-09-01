@@ -2907,7 +2907,14 @@ final class FunctionAnalysis
             return false;
         }
 
-        $taint = $this->state->taintOf($value);
+        // Content kinds cross the store; the escaping ledger does not. Whether
+        // the value was escaped before storage says nothing about the context
+        // it will eventually land in — WordPress's own convention is escape at
+        // output whatever was done at input — and carrying `escaped` through
+        // made every read through the filterable get_option() re-report the
+        // write's escaping as voided, on a line the output rule already owns.
+        $taint = $this->state->taintOf($value)
+            ->without(TaintSet::of(TaintKind::Escaped, TaintKind::EscapeVoided));
         $changed = false;
 
         foreach ($names as $name) {
@@ -3733,6 +3740,14 @@ final class FunctionAnalysis
             Sink::UNANCHORED => ! $this->anchors->has($operand),
             Sink::UNSERIALIZE_ALLOWS_OBJECTS => $this->sinkCall === null || ! $this->forbidsClasses($this->sinkCall),
             Sink::ESCAPED_THEN_VOIDED => $this->state->effectiveTaintOf($operand)->has(TaintKind::Escaped),
+            // A component whose tags were stripped and whose quotes were not,
+            // landing inside a quoted attribute. `html` is excluded so a raw
+            // value is reported once, by the html sink, not twice.
+            Sink::QUOTED_ATTRIBUTE => $this->queryShapes->quotedAttributeComponent(
+                $operand,
+                fn (Operand $component): bool => $this->state->effectiveTaintOf($component)->has(TaintKind::HtmlAttr)
+                    && ! $this->state->effectiveTaintOf($component)->has(TaintKind::Html),
+            ) !== null,
             default => true,
         };
     }

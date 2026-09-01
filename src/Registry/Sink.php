@@ -49,7 +49,22 @@ final class Sink
      */
     public const ESCAPED_THEN_VOIDED = 'escaped_then_voided';
 
-    public const STRATEGIES = [self::UNANCHORED, self::UNSERIALIZE_ALLOWS_OBJECTS, self::ESCAPED_THEN_VOIDED];
+    /**
+     * Fires only when a component of the built output lands inside a quoted
+     * HTML attribute — read from the literal fragments around it, the way the
+     * SQL shape check reads quote position. This is what makes `html_attr` a
+     * kind with a sink: a value that survived sanitize_text_field() has no
+     * tags left and both quote characters intact, which is nothing in HTML
+     * text and a breakout in `value="…"`.
+     */
+    public const QUOTED_ATTRIBUTE = 'quoted_attribute';
+
+    public const STRATEGIES = [
+        self::UNANCHORED,
+        self::UNSERIALIZE_ALLOWS_OBJECTS,
+        self::ESCAPED_THEN_VOIDED,
+        self::QUOTED_ATTRIBUTE,
+    ];
 
     public function __construct(
         public readonly Matcher $matcher,

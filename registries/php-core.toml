@@ -356,6 +356,16 @@ kind = "html"
 severity = "high"
 rule_id = "wp.xss.unescaped-output"
 
+# Fires only when a component of the built output lands inside a quoted
+# attribute: the tags-stripped, quotes-intact case sanitize_text_field()
+# leaves behind. `applies_by` reads the position off the literal fragments.
+[[sinks]]
+construct = "echo"
+kind = "html_attr"
+severity = "high"
+rule_id = "wp.xss.unescaped-attribute"
+applies_by = "quoted_attribute"
+
 [[sinks]]
 construct = "print"
 kind = "unknown"
@@ -374,6 +384,13 @@ construct = "print"
 kind = "html"
 severity = "high"
 rule_id = "wp.xss.unescaped-output"
+
+[[sinks]]
+construct = "print"
+kind = "html_attr"
+severity = "high"
+rule_id = "wp.xss.unescaped-attribute"
+applies_by = "quoted_attribute"
 
 [[sinks]]
 construct = "eval"
@@ -792,6 +809,14 @@ as_container = true
 function = "sscanf"
 writes = 2
 from = [0]
+
+[[rules]]
+id = "wp.xss.unescaped-attribute"
+title = "Sanitised input reaches a quoted attribute that its quotes can end"
+description = "A value whose tags were stripped — sanitize_text_field() and its relatives — still carries both quote characters, and it lands inside a quoted HTML attribute. The quote ends the attribute and the rest of the payload becomes new attributes: onmouseover, onfocus, anything."
+remediation = "Escape at output for the context: esc_attr() inside a quoted attribute. Sanitising at input is about storing clean data, not about where it will land."
+cwe = "CWE-79"
+message = "Sanitised input reaches a quoted attribute whose quotes it can end."
 
 [[rules]]
 id = "wp.xss.unescaped-output"

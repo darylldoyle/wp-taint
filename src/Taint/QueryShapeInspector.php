@@ -144,6 +144,61 @@ final class QueryShapeInspector
     }
 
     /**
+     * The first component landing inside a quoted HTML attribute, which the
+     * html-text escapers do not protect.
+     *
+     * The markup twin of {@see unquotedComponent}: literal fragments carry the
+     * position, a fragment folding to exactly one string counts as its text,
+     * and the caller decides which components are at risk — a value carrying
+     * {@see TaintKind::HtmlAttr} without {@see TaintKind::Html}, meaning its
+     * tags were stripped and its quotes were not.
+     *
+     * ```php
+     * $safe = sanitize_text_field( $_GET['title'] );
+     * echo '<input value="' . $safe . '">';   // " onmouseover=… x=" gets out
+     * echo '<p>' . $safe . '</p>';            // nothing to get out of
+     * ```
+     *
+     * A hole that is not the risky component still advances the scan as
+     * unknown text, and a position inside a <script> block is left to the
+     * script rules.
+     */
+    /**
+     * @param callable(Operand): bool $atRisk
+     */
+    public function quotedAttributeComponent(Operand $output, callable $atRisk): ?Operand
+    {
+        $components = $this->components($output);
+
+        if ($components === null) {
+            return null;
+        }
+
+        $before = '';
+
+        foreach ($components as $component) {
+            if ($component instanceof Operand\Literal && is_string($component->value)) {
+                $before .= $component->value;
+
+                continue;
+            }
+
+            if ($atRisk($component) && ! MarkupPosition::inScript($before)) {
+                $attribute = MarkupPosition::openAttribute($before);
+
+                if ($attribute !== null && $attribute[1] !== null) {
+                    return $component;
+                }
+            }
+
+            $folded = $this->values?->strings($component) ?? [];
+            $before .= count($folded) === 1 ? $folded[0] : 'x';
+        }
+
+        return null;
+    }
+
+    /**
      * Whether a run of SQL text leaves us inside a string literal.
      *
      * Only single and double quotes, and only unescaped ones. Backticks quote
