@@ -126,6 +126,105 @@ final class FunctionSummary
     }
 
     /**
+     * The worst of two bodies sharing one name.
+     *
+     * A tree that declares the same function twice — a conditionally-defined
+     * shim, a vendored copy — used to have one copy speak for both, and it
+     * could be the harmless one. Every taint-carrying field unions, `clears`
+     * intersects (a parameter is only cleared if *every* body clears it), and
+     * `returnAnchored` holds only when both bodies anchor — the caller sees
+     * whichever behaviour is more dangerous, whichever file it came from.
+     */
+    public function union(self $other): self
+    {
+        $indexes = array_unique([...array_keys($this->paramToReturn), ...array_keys($other->paramToReturn)]);
+        $paramToReturn = [];
+        $clears = [];
+
+        foreach ($indexes as $index) {
+            $paramToReturn[$index] = $this->returnTaintFor($index)->union($other->returnTaintFor($index));
+            $clears[$index] = $this->clearsFor($index)->intersect($other->clearsFor($index));
+        }
+
+        $paramToSink = [];
+
+        foreach (array_unique([...array_keys($this->paramToSink), ...array_keys($other->paramToSink)]) as $index) {
+            $merged = [];
+
+            foreach ([...$this->sinksFor($index), ...$other->sinksFor($index)] as $sink) {
+                $merged[$sink->identityKey()] ??= $sink;
+            }
+
+            ksort($merged);
+            $paramToSink[$index] = array_values($merged);
+        }
+
+        $paramToParam = [];
+
+        foreach (array_unique([...array_keys($this->paramToParam), ...array_keys($other->paramToParam)]) as $src) {
+            $targets = array_unique([
+                ...array_keys($this->paramToParam[$src] ?? []),
+                ...array_keys($other->paramToParam[$src] ?? []),
+            ]);
+
+            foreach ($targets as $target) {
+                $paramToParam[$src][$target] = $this->byRefTaintFrom($src, $target)
+                    ->union($other->byRefTaintFrom($src, $target));
+            }
+        }
+
+        $sourcesToParam = [];
+
+        foreach (
+            array_unique([...array_keys($this->sourcesToParam), ...array_keys($other->sourcesToParam)]) as $target
+        ) {
+            $sourcesToParam[$target] = $this->byRefIntroduces($target)->union($other->byRefIntroduces($target));
+        }
+
+        return new self(
+            $this->key,
+            $this->displayName,
+            $paramToReturn,
+            $paramToSink,
+            $clears,
+            $this->introduces()->union($other->introduces()),
+            $this->imprecise || $other->imprecise,
+            $paramToParam,
+            $sourcesToParam,
+            $this->returnAnchored && $other->returnAnchored,
+            self::mergeReferences($this->paramToProperty, $other->paramToProperty, self::propertyKey(...)),
+            self::mergeReferences($this->paramToCapture, $other->paramToCapture, self::captureKey(...)),
+        );
+    }
+
+    /**
+     * @template T of array<int, string|null>
+     *
+     * @param array<int, list<T>> $mine
+     * @param array<int, list<T>> $theirs
+     * @param callable(T): string $identity
+     *
+     * @return array<int, list<T>>
+     */
+    private static function mergeReferences(array $mine, array $theirs, callable $identity): array
+    {
+        $result = [];
+
+        foreach (array_unique([...array_keys($mine), ...array_keys($theirs)]) as $index) {
+            $merged = [];
+
+            foreach ([...($mine[$index] ?? []), ...($theirs[$index] ?? [])] as $reference) {
+                $merged[$identity($reference)] ??= $reference;
+            }
+
+            ksort($merged);
+            $result[$index] = array_values($merged);
+        }
+
+        return $result;
+    }
+
+    /**
      * Kinds this function introduces regardless of its arguments, e.g. a
      * wrapper around get_option().
      */

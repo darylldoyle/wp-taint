@@ -67,7 +67,7 @@ output rather than in the findings.
 | --- | --- |
 | [`eval`'d and generated code](#evald-and-generated-code-is-not-analysed) | Misses |
 | [Code outside the scan path](#analysis-is-whole-program-and-a-plugin-is-the-natural-unit) | Misses |
-| [A function declared twice: first wins](#duplicate-function-declarations-first-wins) | Either |
+| [A function declared twice: the union of both bodies](#duplicate-function-declarations-the-worst-of-both-wins) | Over-reports |
 | [Six constructs are rewritten before analysis](#six-modern-constructs-are-lowered-before-analysis) | Neither |
 | [No result cache](#there-is-no-result-cache) | Neither |
 | [`--jobs` needs `pcntl`](#--jobs-needs-pcntl) | Neither |
@@ -1174,11 +1174,16 @@ theme at a time.
 Cross-file flows within the scan path are followed. Flows into code outside it
 are not.
 
-### Duplicate function declarations: first wins
+### Duplicate function declarations: the worst of both wins
 
 If the scanned tree declares the same function twice — a conditionally-defined
-shim, a vendored copy — the first in sorted file order is the one summarised.
-Deterministic, but it may be the wrong one.
+shim, a vendored copy — every body is analysed and the caller sees the union: a
+parameter is only credited as cleared when *every* body clears it, and a sink
+any body reaches is reported. Which copy PHP would actually load depends on
+runtime conditions the scan cannot evaluate, so the union is the answer that
+never picks the harmless copy by accident. Call-site *resolution* — which body
+a trace steps into, what the call graph walks — still uses the first
+declaration in sorted file order, deterministically.
 
 ### There is no result cache
 
