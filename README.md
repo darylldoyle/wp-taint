@@ -326,7 +326,7 @@ composer cve:fetch
 composer cve:check
 ```
 
-**2 confirmed · 4 attributed · 19 reported · 21 silent**, across the 46 pairs
+**2 confirmed · 4 attributed · 20 reported · 20 silent**, across the 46 pairs
 close enough to score (one CVE's vulnerable and fixed releases are five major
 versions apart, and a diff across that says nothing).
 
@@ -347,7 +347,7 @@ Where it fails, by class:
 | --- | --- | --- | --- | --- |
 | Code injection (CWE-94) | 0 | 0 | 1 | **4** |
 | Deserialization (CWE-502) | 1 | 0 | 0 | 2 |
-| Open redirect (CWE-601) | 0 | 0 | 0 | **3** |
+| Open redirect (CWE-601) | 0 | 0 | 1 | 2 |
 | XSS (CWE-79) | 0 | 2 | 7 | 3 |
 | Authorization (CWE-862/863) | 0 | 2 | 5 | 5 |
 | Path traversal (CWE-22) | 0 | 0 | 3 | 1 |
@@ -361,9 +361,10 @@ Fields — now a confirmed hit, because the false positives that used to linger
 on the fixed release were themselves fixed and the release came back clean.
 
 The CWE-94 cases are plugins whose purpose is executing admin-supplied code, so
-those CVEs are privilege-boundary bugs wearing a code-injection label, and the
-open-redirect three turned out not to be `wp_redirect()` flows at all. Both are
-worth knowing before reading the column as a verdict on the rules.
+those CVEs are privilege-boundary bugs wearing a code-injection label. Two of
+the three open redirects still are not `wp_redirect()` flows the analysis can
+see; the third is now reported. Both are worth knowing before reading the
+column as a verdict on the rules.
 
 **"Attributed" is evidence, not proof.** A finding can vanish because the fix
 refactored the line rather than because it was the bug. This is the sharpest
