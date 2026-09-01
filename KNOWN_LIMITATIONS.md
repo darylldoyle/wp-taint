@@ -74,8 +74,8 @@ output rather than in the findings.
 
 **Not implemented**
 
-[Second-order flows through a specific option key](#not-implemented), and an
-HTML reporter.
+[Second-order flows through a specific post- or user-meta key](#not-implemented),
+and an HTML reporter. Option keys connect per key.
 
 ---
 
@@ -534,9 +534,16 @@ not: an attacker who can write arbitrary options already has the access those
 sinks would give them. Modelling it that way produced several hundred findings
 on the corpus with no plausible attack behind any of them.
 
-**Direction:** under-approximating, deliberately. If a codebase really does let
-a low-privilege user write a path into an option, add a project-local
-`[[sources]]` entry with `kinds = ["path"]`.
+The exception is a key the scan watched being written: `update_option(
+'acme_tpl', $request )` makes `get_option( 'acme_tpl' )` carry the write's
+*full* kinds — path and url included — with the write in the trace. That is
+not an assumption about what an option might hold; it is the flow, both ends
+visible.
+
+**Direction:** under-approximating, deliberately, at keys the scan never saw
+written. If a codebase really does let a low-privilege user write a path into
+an option outside the scanned tree, add a project-local `[[sources]]` entry
+with `kinds = ["path"]`.
 
 ### Dynamic calls are followed as far as the value can be traced
 
@@ -1232,6 +1239,9 @@ than a linear one.
 
 - **HTML reporter.** Deferred post-v1; the deployment context is a developer
   machine, where console, JSON and SARIF cover it.
-- **Second-order flows through the database.** `update_option()` writing tainted
-  data and `get_option()` reading it are both modelled, but as independent
-  source and sink, not as a connected flow through a specific option key.
+- **Second-order flows through post meta and user meta keys.** Options connect:
+  `update_option( 'acme_x', $request )` and `get_option( 'acme_x' )` are one
+  flow, per key, with the write in the read's trace — and the read carries the
+  write's full kinds, so a stored path reaching `include` is provable even
+  though stored sources deliberately carry no `path` taint. The meta tables do
+  not connect per key yet; their reads keep the stored baseline only.

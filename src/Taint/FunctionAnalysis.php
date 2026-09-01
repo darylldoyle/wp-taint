@@ -2362,9 +2362,11 @@ final class FunctionAnalysis
         $voided = $this->voidEscaping($taint);
 
         // Say where. A step describing the propagation is the wrong answer to
-        // "filtered where?", and it was the only one in the trace.
+        // "filtered where?", and it was the only one in the trace. The prefix
+        // survives the substitution: a stored read's trace still starts at the
+        // write that stored the value, voided or not.
         if (! $voided->equals($taint)) {
-            $provenance = $this->voidProvenance($voided) ?? $provenance;
+            $provenance = $this->voidProvenance($voided, $provenance->prefix ?? []) ?? $provenance;
         }
 
         $taint = $voided;
@@ -2411,6 +2413,7 @@ final class FunctionAnalysis
 
         $changed = $matcher === null ? false : $this->applyByRefEffect($op, $call, $matcher);
         $changed = ($matcher === null ? false : $this->joinTemplateScope($op, $call, $matcher)) || $changed;
+        $changed = ($matcher === null ? false : $this->recordOptionWrite($op, $call, $matcher)) || $changed;
 
         if ($matcher !== null) {
             $sinks = $this->registry->sinksFor($matcher);
@@ -2428,9 +2431,15 @@ final class FunctionAnalysis
             $source = $this->registry->source($matcher);
 
             if ($source !== null && $this->sourceApplies($source, $call)) {
+                // A read of a key the scan watched being written carries the
+                // write's taint and trace on top of the stored baseline — the
+                // proven second-order flow, at the severity of what actually
+                // went in, rather than the assumption that something might have.
+                [$storedTaint, $storedOrigin] = $this->optionStoreTaint($matcher, $call);
+
                 return $this->writeResult(
                     $op->result,
-                    $source->kinds,
+                    $source->kinds->union($storedTaint),
                     new Provenance(
                         TraceVerb::Source,
                         $op,
@@ -2439,6 +2448,7 @@ final class FunctionAnalysis
                             $matcher->describe(),
                             $source->stored ? 'stored, user-supplied' : 'user-supplied',
                         ),
+                        prefix: $storedOrigin,
                     ),
                 ) || $changed;
             }
@@ -2759,7 +2769,7 @@ final class FunctionAnalysis
                 $class,
                 $property,
                 $argumentTaint,
-                $this->propertyWriteTrace($op, $argument, $argumentTaint, $summary, $property),
+                $this->propertyWriteTrace($op, $argument, $argumentTaint, $summary, $property, $class),
             ) || $changed;
 
             // The anchor is the caller's to settle. Inside the callee the value
@@ -2843,6 +2853,133 @@ final class FunctionAnalysis
     }
 
     /**
+     * The options table as one more property owner.
+     *
+     * `update_option( 'acme_x', $request )` then `get_option( 'acme_x' )` in
+     * another function is a second-order flow with both ends visible, and the
+     * stored-source baseline flattened it into "an option might hold anything".
+     * Tracking the write per key — in the same map property writes use, under
+     * an owner no class name can collide with — lets the read carry what
+     * actually went in, with the write in the trace. The `#` is the collision
+     * guard: not a character a PHP class name can start with.
+     */
+    private const OPTION_STORE = '#options';
+
+    /** Option writers: matcher key => [key argument, value argument]. */
+    private const OPTION_WRITERS = [
+        'function:update_option' => [0, 1],
+        'function:add_option' => [0, 1],
+        'function:update_site_option' => [0, 1],
+    ];
+
+    /** Option readers: matcher key => key argument. */
+    private const OPTION_READERS = [
+        'function:get_option' => 0,
+        'function:get_site_option' => 0,
+    ];
+
+    /**
+     * Record what an option write put under its key, when the key folds.
+     *
+     * The probe run records the reach instead of performing the write — the
+     * same split every property write uses — so a helper wrapping
+     * update_option() carries its caller's taint into the store through
+     * paramToProperty, with no machinery of its own.
+     */
+    private function recordOptionWrite(Op\Expr $op, CallTarget $call, Matcher $matcher): bool
+    {
+        $spec = self::OPTION_WRITERS[$matcher->key()] ?? null;
+
+        if ($spec === null) {
+            return false;
+        }
+
+        $key = $call->argument($spec[0]);
+        $value = $call->argument($spec[1]);
+
+        if ($key === null || $value === null) {
+            return false;
+        }
+
+        $names = $this->resolver->values()->strings($key);
+
+        if ($names === [] || count($names) > 4) {
+            return false;
+        }
+
+        $taint = $this->state->taintOf($value);
+        $changed = false;
+
+        foreach ($names as $name) {
+            if (! $taint->isEmpty()) {
+                $this->recordPropertyReference(self::OPTION_STORE, $name);
+            }
+
+            $changed = $this->properties->add(
+                self::OPTION_STORE,
+                $name,
+                $taint,
+                $this->optionWriteTrace($op, $value, $taint, $name),
+            ) || $changed;
+        }
+
+        return $changed;
+    }
+
+    /**
+     * What the store holds under the keys a read can name, and the trace of
+     * the write that put it there.
+     *
+     * A key that will not fold reads nothing extra: the stored baseline
+     * already covers "an option whose name we cannot pin down".
+     *
+     * @return array{0: TaintSet, 1: list<TraceStep>}
+     */
+    private function optionStoreTaint(Matcher $matcher, CallTarget $call): array
+    {
+        $index = self::OPTION_READERS[$matcher->key()] ?? null;
+        $key = $index === null ? null : $call->argument($index);
+
+        if ($key === null) {
+            return [TaintSet::empty(), []];
+        }
+
+        $taint = TaintSet::empty();
+        $origin = [];
+
+        foreach ($this->resolver->values()->strings($key) as $name) {
+            $stored = $this->properties->get(self::OPTION_STORE, $name);
+
+            if ($origin === [] && ! $stored->isEmpty()) {
+                $origin = $this->properties->originOf(self::OPTION_STORE, $name);
+            }
+
+            $taint = $taint->union($stored);
+        }
+
+        return [$taint, $origin];
+    }
+
+    /**
+     * @return list<TraceStep>
+     */
+    private function optionWriteTrace(Op\Expr $op, Operand $value, TaintSet $taint, string $name): array
+    {
+        $kind = $taint->kinds()[0] ?? null;
+
+        if ($kind === null || $this->seedParameterIndex !== null) {
+            return [];
+        }
+
+        return $this->traces->build($value, $kind, $this->traces->step(
+            TraceVerb::Propagate,
+            $op,
+            $taint,
+            sprintf("Written to the option '%s'.", $name),
+        ));
+    }
+
+    /**
      * The trace of a property write that happened inside a callee.
      *
      * @return list<TraceStep>
@@ -2853,6 +2990,7 @@ final class FunctionAnalysis
         TaintSet $taint,
         FunctionSummary $summary,
         string $property,
+        ?string $class = null,
     ): array {
         $kind = $taint->kinds()[0] ?? null;
 
@@ -2864,7 +3002,9 @@ final class FunctionAnalysis
             TraceVerb::Propagate,
             $op,
             $taint,
-            sprintf('Passed to %s(), which writes it into $%s.', $summary->displayName, $property),
+            $class === self::OPTION_STORE
+                ? sprintf("Passed to %s(), which stores it in the option '%s'.", $summary->displayName, $property)
+                : sprintf('Passed to %s(), which writes it into $%s.', $summary->displayName, $property),
         ));
     }
 
@@ -3548,7 +3688,10 @@ final class FunctionAnalysis
      * work, and being told "this value was escaped and then filtered" with no
      * indication of which call did the filtering is not enough to act on.
      */
-    private function voidProvenance(TaintSet $taint): ?Provenance
+    /**
+     * @param list<TraceStep> $prefix
+     */
+    private function voidProvenance(TaintSet $taint, array $prefix = []): ?Provenance
     {
         $call = $this->voidingCall;
         $op = $this->voidingOp;
@@ -3570,6 +3713,7 @@ final class FunctionAnalysis
             $call->arguments,
             callee: $name,
             imprecise: $taint->has(TaintKind::Unknown),
+            prefix: $prefix,
         );
     }
 
