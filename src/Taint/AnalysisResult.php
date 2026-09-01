@@ -52,6 +52,16 @@ final class AnalysisResult
          *                                             unresolved) and property
          */
         public readonly array $propertiesReached = [],
+        /**
+         * Closure captures the seeded parameter reached.
+         *
+         * The capture half of the same idea: closure scopes are published by
+         * the run that seeds nothing, so a probe run records which captures
+         * the seed reached and the caller publishes its actual taint.
+         *
+         * @var list<array{0: string, 1: string}> closure key and captured name
+         */
+        public readonly array $capturesReached = [],
     ) {
     }
 }

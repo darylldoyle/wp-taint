@@ -45,7 +45,7 @@ output rather than in the findings.
 | [`remove_filter()` is not modelled](#hook-callbacks-are-followed-unless-the-hook-name-is-dynamic) | Over-reports |
 | [An unmodelled function returns clean](#an-unmodelled-function-returns-clean) | Misses |
 | [A by-reference call cannot clear its argument](#references-are-followed-and-never-cleared) | Over-reports |
-| [A capture of the enclosing function's own parameter](#a-closure-capture-crosses-in-both-directions) | Misses |
+| [A closure capture](#a-closure-capture-crosses-in-both-directions) | Neither |
 | [What a REST callback returns is not treated as output](#a-rest-callbacks-return-is-not-output) | Misses |
 | [`wp_json_encode()` is treated as clearing `html`](#wp_json_encode-context-sensitivity-is-approximated) | Misses |
 | [Loops are not unrolled](#loops-are-analysed-to-a-fixed-point-not-unrolled) | Over-reports |
@@ -828,12 +828,14 @@ By-value captures are left alone, because `use ( $x )` copies and a write inside
 the closure is invisible outside it. That difference is the whole point of the
 two spellings.
 
-**What is missed.** A capture whose value comes from the enclosing function's
-own parameter is only seen once a caller supplies it, for the same reason a
-property is: the run that publishes is the one that seeds nothing.
+A capture whose value is the enclosing function's own parameter is carried the
+way a property write is: the probe run records "parameter reaches capture
+`$msg` of this closure" in the summary, and each call site publishes the taint
+it actually passed — through helper chains, since a probe applying a callee's
+summary re-records the capture into its own. The run that publishes directly
+is still the one that seeds nothing.
 
-**Direction:** under-approximating, at a capture the enclosing function was
-handed rather than made.
+**Direction:** was under-approximating at a parameter-fed capture; now carried.
 
 ### A printed return: shortcode handlers and block renderers
 

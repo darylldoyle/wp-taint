@@ -52,6 +52,19 @@ final class FunctionSummary
          * @var array<int, list<array{0: string|null, 1: string}>>
          */
         public readonly array $paramToProperty = [],
+        /**
+         * Closure captures each parameter reaches.
+         *
+         * The capture counterpart to {@see $paramToProperty}. A closure's
+         * captured scope is published by the run that seeds nothing, so a
+         * capture whose value is the enclosing function's own parameter was
+         * published clean whatever the caller passed. The probe run records
+         * "parameter reaches capture `$name` of closure `key`" here, and the
+         * call site publishes the caller's actual taint into the scope table.
+         *
+         * @var array<int, list<array{0: string, 1: string}>>
+         */
+        public readonly array $paramToCapture = [],
     ) {
     }
 
@@ -61,6 +74,14 @@ final class FunctionSummary
     public function propertiesFor(int $parameterIndex): array
     {
         return $this->paramToProperty[$parameterIndex] ?? [];
+    }
+
+    /**
+     * @return list<array{0: string, 1: string}> closure key, captured name
+     */
+    public function capturesFor(int $parameterIndex): array
+    {
+        return $this->paramToCapture[$parameterIndex] ?? [];
     }
 
     /**
@@ -205,6 +226,24 @@ final class FunctionSummary
             }
         }
 
+        // And the captures, for the same reason again: a summary still
+        // discovering which closures a parameter reaches is not settled.
+        if (array_keys($this->paramToCapture) !== array_keys($other->paramToCapture)) {
+            return false;
+        }
+
+        foreach ($this->paramToCapture as $index => $captures) {
+            $mine = array_map(self::captureKey(...), $captures);
+            $theirs = array_map(self::captureKey(...), $other->paramToCapture[$index] ?? []);
+
+            sort($mine);
+            sort($theirs);
+
+            if ($mine !== $theirs) {
+                return false;
+            }
+        }
+
         return count($this->paramToSink) === count($other->paramToSink);
     }
 
@@ -214,6 +253,14 @@ final class FunctionSummary
     private static function propertyKey(array $property): string
     {
         return strtolower($property[0] ?? '?') . '::' . $property[1];
+    }
+
+    /**
+     * @param array{0: string, 1: string} $capture
+     */
+    private static function captureKey(array $capture): string
+    {
+        return $capture[0] . '::' . $capture[1];
     }
 
     /**

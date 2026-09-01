@@ -49,6 +49,14 @@ final class FunctionAnalysis
      */
     private array $propertiesReached = [];
 
+    /**
+     * Closure captures the seeded parameter reached, keyed so a loop or a
+     * later round records each once. See {@see AnalysisResult::$capturesReached}.
+     *
+     * @var array<string, array{0: string, 1: string}>
+     */
+    private array $capturesReached = [];
+
     private TaintState $state;
 
     private ClassTypeMap $types;
@@ -278,6 +286,7 @@ final class FunctionAnalysis
             $this->state,
             $this->returnAnchored ?? false,
             array_values($this->propertiesReached),
+            array_values($this->capturesReached),
         );
     }
 
@@ -2053,7 +2062,16 @@ final class FunctionAnalysis
         // shares makes the seed an assertion, which is the same mistake the
         // property map made and the same fix: the baseline run, which seeds
         // nothing and reads the body as written, is the one that publishes.
+        //
+        // What the probe run does instead is *record* which captures the seed
+        // reached, exactly as it records property writes: the summary carries
+        // "parameter reaches capture $name of closure key", and the call site
+        // publishes the caller's actual taint. Without that, a capture whose
+        // value is the enclosing function's own parameter was published clean
+        // whatever the caller passed.
         if ($this->seedParameterIndex !== null) {
+            $this->recordCaptureReferences($op);
+
             return $this->state->set($op->result, TaintSet::empty());
         }
 
@@ -2088,6 +2106,36 @@ final class FunctionAnalysis
 
         // The closure value itself is a callable, not the captured data.
         return $this->state->set($op->result, TaintSet::empty()) || $changed;
+    }
+
+    /**
+     * A probe run reached a closure creation with the seeded parameter's taint
+     * on a captured name. Recorded, not published — see {@see transferClosure}.
+     */
+    private function recordCaptureReferences(Op\Expr\Closure $op): void
+    {
+        $key = FunctionContext::keyFor($op->func, $this->context->file);
+        $enclosing = $this->namedScopeWithOrigins();
+
+        foreach ($op->useVars as $captured) {
+            if (! $captured instanceof Operand) {
+                continue;
+            }
+
+            $name = OperandHelper::variableName($captured);
+
+            if ($name === null) {
+                continue;
+            }
+
+            $taint = $enclosing['taint'][$name] ?? null;
+
+            if ($taint === null || $taint->isEmpty()) {
+                continue;
+            }
+
+            $this->capturesReached[$key . '::' . $name] = [$key, $name];
+        }
     }
 
     private function transferPassThrough(Op\Expr $op, Operand $input, string $description): bool
@@ -2727,6 +2775,73 @@ final class FunctionAnalysis
     }
 
     /**
+     * The captures a callee's parameter reaches, fed with what this caller
+     * actually passed.
+     *
+     * A probe run must not publish — its seed is a question — so it re-records
+     * instead, which is what carries a capture through a helper chain: A's
+     * probe applying B's summary learns that A's parameter reaches B's
+     * closure, and A's own summary says so to A's callers.
+     */
+    private function applySummaryCaptures(
+        Op\Expr $op,
+        FunctionSummary $summary,
+        int $index,
+        Operand $argument,
+        TaintSet $argumentTaint,
+    ): bool {
+        if ($argumentTaint->isEmpty() || $summary->capturesFor($index) === []) {
+            return false;
+        }
+
+        if ($this->seedParameterIndex !== null) {
+            foreach ($summary->capturesFor($index) as [$closureKey, $name]) {
+                $this->capturesReached[$closureKey . '::' . $name] = [$closureKey, $name];
+            }
+
+            return false;
+        }
+
+        $changed = false;
+
+        foreach ($summary->capturesFor($index) as [$closureKey, $name]) {
+            $changed = $this->scopes->addInto(
+                $closureKey,
+                [$name => $argumentTaint],
+                [$name => $this->captureWriteTrace($op, $argument, $argumentTaint, $summary, $name)],
+            ) || $changed;
+        }
+
+        return $changed;
+    }
+
+    /**
+     * The trace of a capture that happened inside a callee.
+     *
+     * @return list<TraceStep>
+     */
+    private function captureWriteTrace(
+        Op\Expr $op,
+        Operand $argument,
+        TaintSet $taint,
+        FunctionSummary $summary,
+        string $name,
+    ): array {
+        $kind = $taint->kinds()[0] ?? null;
+
+        if ($kind === null) {
+            return [];
+        }
+
+        return $this->traces->build($argument, $kind, $this->traces->step(
+            TraceVerb::Propagate,
+            $op,
+            $taint,
+            sprintf('Passed to %s(), where a closure captures it as $%s.', $summary->displayName, $name),
+        ));
+    }
+
+    /**
      * The trace of a property write that happened inside a callee.
      *
      * @return list<TraceStep>
@@ -3105,6 +3220,8 @@ final class FunctionAnalysis
 
             $this->reportSummarySinks($op, $call, $summary, $index, $argument, $argumentTaint);
             $changed = $this->applySummaryProperties($op, $summary, $index, $argument, $argumentTaint)
+                || $changed;
+            $changed = $this->applySummaryCaptures($op, $summary, $index, $argument, $argumentTaint)
                 || $changed;
         }
 
