@@ -90,7 +90,67 @@ final class CallableResolver
             $targets[] = $invokable->withArguments($arguments);
         }
 
+        $stored = $this->propertyCallableBehind($callable, $arguments, $context, $types, $receivers);
+
+        if ($stored !== null) {
+            $targets[] = $stored;
+        }
+
         return self::unique($targets);
+    }
+
+    /**
+     * A callable read from a property whose every readable write agrees.
+     *
+     * `call_user_func( $this->handler, $value )` where the constructor set
+     * `$this->handler = array( $this, 'render' )` — the operand is a property
+     * fetch nothing in this body defines, and the cross-method answer lives in
+     * the {@see DeclaredTypes} callable index, inheritance included.
+     *
+     * @param list<Operand> $arguments
+     */
+    private function propertyCallableBehind(
+        Operand $operand,
+        array $arguments,
+        FunctionContext $context,
+        ClassTypeMap $types,
+        ReceiverResolver $receivers,
+    ): ?CallTarget {
+        $definition = $this->definitionThroughAssignments($operand);
+
+        if (! $definition instanceof Op\Expr\PropertyFetch) {
+            return null;
+        }
+
+        $property = OperandHelper::literalString($definition->name);
+
+        if ($property === null) {
+            return null;
+        }
+
+        $owner = $receivers->classOf($definition->var, $context, $types);
+        $spec = $this->functions->declaredTypes()->propertyCallableOf($owner, $property);
+
+        return $spec === null ? null : $this->fromString($spec, $arguments);
+    }
+
+    /**
+     * The op behind an operand, seen through plain assignments — the same walk
+     * {@see closureBehind} does, for definitions that are not callable ops.
+     */
+    private function definitionThroughAssignments(Operand $operand, int $depth = 0): ?Op
+    {
+        if ($depth > 8) {
+            return null;
+        }
+
+        $definition = OperandHelper::definingOp($operand);
+
+        if ($definition instanceof Op\Expr\Assign) {
+            return $this->definitionThroughAssignments($definition->expr, $depth + 1);
+        }
+
+        return $definition;
     }
 
     /**

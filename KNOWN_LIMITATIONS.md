@@ -552,10 +552,16 @@ lives under `[[dispatchers]]` in the catalogue, so a project can add its own.
 A callable that resolves to several names reaches all of them and the effects
 are unioned, because picking one would be a guess.
 
-What does not: a callable arriving as a parameter, read from a property, or
-returned by a call the engine cannot see into. A name that resolves to a
-function nobody can find a body for also counts as unresolved, rather than
-resolving to nothing and reporting clean.
+A callable read from a property resolves when every readable write to that
+property agrees — `$this->handler = 'acme_render'` in the constructor,
+`call_user_func( $this->handler, … )` in another method, inheritance included.
+A property whose writes disagree, or hold anything but a literal string or
+`array( $this|'Class', 'method' )` pair, stays unresolved.
+
+What does not: a callable arriving as a parameter, or returned by a call the
+engine cannot see into. A name that resolves to a function nobody can find a
+body for also counts as unresolved, rather than resolving to nothing and
+reporting clean.
 
 **Direction:** configurable, because there is no correct answer — only a choice
 about which way to be wrong.
