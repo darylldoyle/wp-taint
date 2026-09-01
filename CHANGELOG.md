@@ -28,6 +28,50 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A `[[capabilities]]` registry section classifying core capabilities as
   `object`, `site` or `role`, so the scope decision is data rather than code. A
   capability the catalogue does not know is treated as site-scoped.
+- Inherited-method call resolution. Method lookup was flat — `Class::method`
+  exactly as written — so a method inherited from a parent or brought in by a
+  trait never resolved, and everything it returned was unaccounted for. A new
+  project-wide `ClassHierarchy` index records who extends whom and who uses
+  which trait, and lookup now follows PHP's own precedence: the class, its
+  traits, the parent, the parent's traits, and on up. `parent::` starts one
+  level up instead of collapsing to the calling class, so it dispatches past
+  an override to the body PHP would actually run. Static calls, instance
+  calls, constructors, callables (`'Class::method'`, `array( $this, 'method' )`),
+  `__invoke`, hook callbacks and the structural rules' call-graph walks all
+  resolve through it. Gravity Forms is the everyday case: `RGFormsModel
+  extends GFFormsModel` with the table-name helpers on the parent meant every
+  `RGFormsModel::get_lead_meta_table_name()` interpolation was reported as a
+  query built from a value the engine could not see; it now resolves to
+  `$wpdb->prefix . 'rg_lead_meta'` and is accounted for. Trait `insteadof`
+  conflict resolution is not modelled, and a parent outside the scan still
+  ends the walk unresolved rather than guessed at.
+
+### Fixed
+
+Four precision fixes from adjudicating every finding of a Gravity Forms scan
+(92 findings: 0 exploitable, 75 correct catches, 17 false positives — the fixes
+below remove 10 of the 17).
+
+- `wp.xss.wrong-context-escape` findings now carry `kind: html`, not
+  `kind: authz`. The rule shared a structural-finding helper built for the
+  authorization rules and inherited its kind.
+- A non-literal `$wpdb->prepare()` format string no longer launders the
+  template's failure onto its bound arguments. prepare() substitutes and
+  escapes every `%s`/`%d`/`%i` argument whether or not the template was
+  literal, so a request value bound to a placeholder no longer re-reports the
+  outer `$wpdb->query()` as an unprepared sink. The non-literal template is
+  still reported as `wp.sqli.prepare-non-literal`.
+- `wp.xss.wrong-context-escape` no longer reports three escapes that cannot
+  break out of any context:
+  - `absint()`/`intval()` anywhere — an integer carries no breakout, including
+    in a URL attribute where `esc_url()` would otherwise be required;
+  - `esc_html()` and its i18n variants in a *quoted* attribute — they run
+    `_wp_specialchars()` with `ENT_QUOTES`, so both quote characters are
+    encoded (`wp_kses()` stays reportable: it passes markup through);
+  - an escaper wrapping a hardcoded literal with no context-breaking
+    character, e.g. `esc_html__( 'Open Date Picker' )` inside a script block.
+  `esc_html()` in an *unquoted* attribute is still reported: it does not
+  encode the space that ends an unquoted value.
 
 ## [0.1.0] - 2026-08-30
 

@@ -39,6 +39,7 @@ output rather than in the findings.
 | [A CSV formula prefix spelled any other way](#the-csv-neutraliser-the-rule-asks-for-is-recognised) | Over-reports |
 | [Stored sources carry no `path` or `url` taint](#stored-sources-carry-html-and-sql-taint-only-not-path-or-url) | Misses |
 | [A callable that cannot be traced to a name](#dynamic-calls-are-followed-as-far-as-the-value-can-be-traced) | Configurable |
+| [Trait `insteadof` conflict resolution; a parent outside the scan](#inherited-methods-resolve-insteadof-and-out-of-scan-parents-do-not) | Over-reports |
 | [A genuinely dynamic include path](#include-and-require-are-followed-unless-the-path-is-computed) | Misses |
 | [A hook registration whose name will not resolve](#hook-callbacks-are-followed-unless-the-hook-name-is-dynamic) | Misses |
 | [`remove_filter()` is not modelled](#hook-callbacks-are-followed-unless-the-hook-name-is-dynamic) | Over-reports |
@@ -558,7 +559,30 @@ when auditing the auditor. Every finding produced under an assumption is marked
 `--assume-dynamic-tainted` is the old spelling of `--dynamic-calls=tainted` and
 still works.
 
-### `include` and `require` are followed, unless the path is computed
+### Inherited methods resolve; `insteadof` and out-of-scan parents do not
+
+```php
+class Acme_Child extends Acme_Parent {}
+
+Acme_Child::table_name();   // resolved: PHP's lookup order — the class, its
+                            // traits, the parent, the parent's traits, and up
+parent::render();           // resolved one level up, past the override
+```
+
+Method lookup follows the `extends` chain and expands `use`d traits, in PHP's
+own precedence order, so the Gravity Forms shape — `RGFormsModel extends
+GFFormsModel` with every table-name helper on the parent — resolves to the body
+that actually runs. Two edges deliberately do not:
+
+- **`use T { m as n; insteadof }`**: aliasing and conflict resolution are not
+  modelled. The first trait declaring the method wins, in declaration order,
+  which matches PHP whenever no `insteadof` says otherwise. A project leaning
+  on `insteadof` can see a method resolve to the other trait's body.
+- **A parent outside the scan**: `extends WP_List_Table` ends the walk. The
+  call stays unresolved — conservative, never guessed — and the shape rules
+  report its return as unaccounted for, which is the reviewable kind of
+  finding rather than a proven flow. `--include-path` at WordPress core is the
+  existing remedy when the parent is core's.
 
 ```php
 $title = $_GET['title'];

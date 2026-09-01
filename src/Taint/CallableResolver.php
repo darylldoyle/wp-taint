@@ -159,13 +159,32 @@ final class CallableResolver
      */
     private function target(array $arguments, Matcher $matcher, string $key, string $display): ?CallTarget
     {
-        $known = $this->functions->has($key);
+        $userKey = $this->userKeyFor($key);
 
-        if (! $known && ! $this->registry->knows($matcher)) {
+        if ($userKey === null && ! $this->registry->knows($matcher)) {
             return null;
         }
 
-        return CallTarget::resolved($arguments, $matcher, $known ? strtolower($key) : null, $display);
+        return CallTarget::resolved($arguments, $matcher, $userKey, $display);
+    }
+
+    /**
+     * The body a callable key names, following inheritance for a method key.
+     *
+     * `array( $this, 'render' )` where `render()` lives on the parent class or
+     * comes in through a trait is the everyday WordPress hook-callback shape —
+     * an admin page class extending a shared base and registering the base's
+     * handler.
+     */
+    private function userKeyFor(string $key): ?string
+    {
+        $parts = explode('::', $key, 2);
+
+        if (count($parts) === 2 && $parts[0] !== '' && $parts[1] !== '') {
+            return $this->functions->resolveMethodKey($parts[0], $parts[1]);
+        }
+
+        return $this->functions->has($key) ? strtolower($key) : null;
     }
 
     /**
@@ -200,7 +219,12 @@ final class CallableResolver
             }
 
             if (in_array(strtolower($class), ['self', 'static', 'parent'], true)) {
-                $class = $context->className;
+                // `parent` starts one level up when the parent is known — see
+                // the static-call resolver for why — and falls back to the
+                // calling class when it is not.
+                $class = strtolower($class) === 'parent' && $context->className !== null
+                    ? ($this->functions->classHierarchy()->parentOf($context->className) ?? $context->className)
+                    : $context->className;
 
                 if ($class === null) {
                     continue;
@@ -257,15 +281,16 @@ final class CallableResolver
         ReceiverResolver $receivers,
     ): ?CallTarget {
         $class = $receivers->classOf($operand, $context, $types);
+        $key = $class === null ? null : $this->functions->resolveMethodKey($class, '__invoke');
 
-        if ($class === null || ! $this->functions->has($class . '::__invoke')) {
+        if ($class === null || $key === null) {
             return null;
         }
 
         return CallTarget::resolved(
             [],
             Matcher::method($class, '__invoke'),
-            strtolower($class . '::__invoke'),
+            $key,
             $class . '::__invoke()',
         );
     }
