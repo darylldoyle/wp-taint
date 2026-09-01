@@ -190,7 +190,7 @@ final class FunctionAnalysis
         $this->types = new ClassTypeMap();
         $this->queryShapes = new QueryShapeInspector(
             $literals,
-            new OriginClassifier($registry, $resolver, $properties, $receivers),
+            new OriginClassifier($registry, $resolver, $properties, $receivers, $functions->classHierarchy()),
         );
         $this->anchors = new LiteralAnchor(
             $summaries,
@@ -1636,7 +1636,7 @@ final class FunctionAnalysis
             return $this->state->set($op->result, TaintSet::empty());
         }
 
-        $stored = $this->properties->get($owner, $property);
+        $stored = $this->storedPropertyTaint($owner, $property);
         $taint = $stored->union($this->state->taintOf($op->var));
 
         if ($taint->isEmpty()) {
@@ -1651,9 +1651,51 @@ final class FunctionAnalysis
                 $op,
                 sprintf('Read from property $%s.', $property),
                 [$op->var],
-                prefix: $this->properties->originOf($owner, $property),
+                prefix: $this->storedPropertyOrigin($owner, $property),
             ),
         );
+    }
+
+    /**
+     * The stored taint of a property, unioned across the class hierarchy.
+     *
+     * A write lands under the class whose method performed it: the parent's
+     * constructor writes under the parent, an override under the child. The
+     * property is one storage slot on the instance regardless, so a read has
+     * to see every ancestor's writes or a flow through an inherited property
+     * disappears — `$this->value = $_GET['x']` in a base-class constructor,
+     * echoed by a subclass method, was invisible under flat keys.
+     */
+    private function storedPropertyTaint(?string $owner, string $property): TaintSet
+    {
+        if ($owner === null) {
+            return $this->properties->get(null, $property);
+        }
+
+        $taint = TaintSet::empty();
+
+        foreach ($this->functions->classHierarchy()->lookupOrder($owner) as $candidate) {
+            $taint = $taint->union($this->properties->get($candidate, $property));
+        }
+
+        return $taint;
+    }
+
+    /**
+     * The recorded origin of the nearest class in the hierarchy that tracked
+     * the property, so the trace still says where the value was written.
+     *
+     * @return list<TraceStep>
+     */
+    private function storedPropertyOrigin(?string $owner, string $property): array
+    {
+        foreach ($owner === null ? [null] : $this->functions->classHierarchy()->lookupOrder($owner) as $candidate) {
+            if ($this->properties->isTracked($candidate, $property)) {
+                return $this->properties->originOf($candidate, $property);
+            }
+        }
+
+        return [];
     }
 
     /**
@@ -1671,7 +1713,11 @@ final class FunctionAnalysis
         }
 
         $owner = $this->staticOwnerClass($op);
-        $taint = $this->properties->get($owner, $property);
+        // A static property not redeclared by the subclass is the parent's one
+        // slot, so `Child::$option` and `Base::$option` are the same storage —
+        // the union across the hierarchy applies exactly as it does to
+        // instance properties.
+        $taint = $this->storedPropertyTaint($owner, $property);
 
         if ($taint->isEmpty()) {
             return $this->state->set($op->result, $taint);
@@ -1684,7 +1730,7 @@ final class FunctionAnalysis
                 TraceVerb::Propagate,
                 $op,
                 sprintf('Read from static property $%s.', $property),
-                prefix: $this->properties->originOf($owner, $property),
+                prefix: $this->storedPropertyOrigin($owner, $property),
             ),
         );
     }

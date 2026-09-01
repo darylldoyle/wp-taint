@@ -49,6 +49,10 @@ use PhpParser\NodeFinder;
  */
 final class DeclaredTypes
 {
+    public function __construct(private readonly ClassHierarchy $hierarchy = new ClassHierarchy())
+    {
+    }
+
     /** @var array<string, string> function key => declared return class */
     private array $returns = [];
 
@@ -84,7 +88,7 @@ final class DeclaredTypes
             $owner = $class->namespacedName->toString();
 
             foreach ($class->getProperties() as $property) {
-                $name = self::className($property->type);
+                $name = $this->classNameFor($property->type, $owner);
 
                 if ($name === null) {
                     continue;
@@ -107,7 +111,7 @@ final class DeclaredTypes
             $this->observeConstructions($class, $owner);
 
             foreach ($constructor->params as $param) {
-                $name = self::className($param->type);
+                $name = $this->classNameFor($param->type, $owner);
 
                 if ($name === null || $param->flags === 0 || ! $param->var instanceof Node\Expr\Variable) {
                     continue;
@@ -145,9 +149,9 @@ final class DeclaredTypes
             }
 
             $key = self::key($owner, $assign->var->name->toString());
-            $class_ = $assign->expr->class->toString();
+            $class_ = $this->resolveOwnReference($assign->expr->class->toString(), $owner);
 
-            if (isset($this->ambiguous[$key])) {
+            if ($class_ === null || isset($this->ambiguous[$key])) {
                 continue;
             }
 
@@ -179,31 +183,65 @@ final class DeclaredTypes
         return $this->returns[strtolower($functionKey)] ?? null;
     }
 
+    /**
+     * The declared class of a property, following inheritance.
+     *
+     * A `protected DB $db` declared on a base class is read through the
+     * subclass everywhere the loader pattern appears, and a flat lookup under
+     * the subclass's name missed it. The walk tries the owner, its traits,
+     * then the parents, in PHP's own precedence order.
+     */
     public function propertyClassOf(?string $ownerClass, string $property): ?string
     {
         if ($ownerClass === null) {
             return null;
         }
 
-        return $this->properties[self::key($ownerClass, $property)] ?? null;
+        foreach ($this->hierarchy->lookupOrder($ownerClass) as $candidate) {
+            $declared = $this->properties[strtolower($candidate) . '::' . $property] ?? null;
+
+            if ($declared !== null) {
+                return $declared;
+            }
+        }
+
+        return null;
     }
 
-    private static function className(?Node $type): ?string
+    private function classNameFor(?Node $type, string $owner): ?string
     {
         if ($type instanceof Node\NullableType) {
-            return self::className($type->type);
+            return $this->classNameFor($type->type, $owner);
         }
 
         if (! $type instanceof Node\Name) {
             return null;
         }
 
-        $name = $type->toString();
+        return $this->resolveOwnReference($type->toString(), $owner);
+    }
 
-        // `self`, `static` and `parent` are relative to a class this index does
-        // not resolve, and a scalar is not a class at all. php-parser spells
-        // both as a Name once a type is written without a leading backslash.
-        return in_array(strtolower($name), self::NOT_A_CLASS, true) ? null : $name;
+    /**
+     * `self` is the declaring class and `parent` is one up the hierarchy —
+     * `private static ?self $instance` is how every singleton in the ecosystem
+     * spells its own type. `static` stays unresolved: as a type it is only
+     * legal on returns, where php-cfg handles it. A scalar is not a class at
+     * all. php-parser spells all of these as a Name once a type is written
+     * without a leading backslash.
+     */
+    private function resolveOwnReference(string $name, string $owner): ?string
+    {
+        $lowered = strtolower($name);
+
+        if ($lowered === 'self') {
+            return $owner;
+        }
+
+        if ($lowered === 'parent') {
+            return $this->hierarchy->parentOf($owner);
+        }
+
+        return in_array($lowered, self::NOT_A_CLASS, true) ? null : $name;
     }
 
     private const NOT_A_CLASS = [

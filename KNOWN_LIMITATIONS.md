@@ -108,6 +108,12 @@ the fallback.
 `Foo::$value` is one slot. Taint written to `$this->value` in any instance of
 `Foo` is visible from every read of `$value` on any `Foo`.
 
+Inheritance is followed: a write in the base class's constructor lands under
+the base class's key, and a read through the subclass unions the whole chain —
+the property is one storage slot on the instance whichever class's method
+touched it. What stays approximate is the *instance* dimension, not the class
+one.
+
 The trace does reach back to the source: the map records the trace of the write
 that tainted a property, and a read splices it in ahead of its own step. Without
 that, roughly a fifth of corpus findings had traces that began "read from
@@ -572,17 +578,23 @@ parent::render();           // resolved one level up, past the override
 Method lookup follows the `extends` chain and expands `use`d traits, in PHP's
 own precedence order, so the Gravity Forms shape — `RGFormsModel extends
 GFFormsModel` with every table-name helper on the parent — resolves to the body
-that actually runs. Two edges deliberately do not:
+that actually runs. Properties follow the same walk: a `protected Acme_DB $db`
+declared on the base class resolves through the subclass, a `self`-typed
+property resolves to its declaring class, and stored property taint is unioned
+across the chain, so a value written by the parent's constructor is visible to
+the subclass's read. The walk also continues into a referenced tree, so
+`--include-path` pointed at WordPress core makes `extends WP_List_Table`
+resolve to core's body. Two edges deliberately do not:
 
 - **`use T { m as n; insteadof }`**: aliasing and conflict resolution are not
   modelled. The first trait declaring the method wins, in declaration order,
   which matches PHP whenever no `insteadof` says otherwise. A project leaning
   on `insteadof` can see a method resolve to the other trait's body.
-- **A parent outside the scan**: `extends WP_List_Table` ends the walk. The
-  call stays unresolved — conservative, never guessed — and the shape rules
-  report its return as unaccounted for, which is the reviewable kind of
-  finding rather than a proven flow. `--include-path` at WordPress core is the
-  existing remedy when the parent is core's.
+- **A parent that is neither scanned nor referenced**: `extends WP_List_Table`
+  with no core include-path ends the walk. The call stays unresolved —
+  conservative, never guessed — and the shape rules report its return as
+  unaccounted for, which is the reviewable kind of finding rather than a
+  proven flow.
 
 ```php
 $title = $_GET['title'];

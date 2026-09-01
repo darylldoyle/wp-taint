@@ -43,8 +43,22 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `RGFormsModel::get_lead_meta_table_name()` interpolation was reported as a
   query built from a value the engine could not see; it now resolves to
   `$wpdb->prefix . 'rg_lead_meta'` and is accounted for. Trait `insteadof`
-  conflict resolution is not modelled, and a parent outside the scan still
-  ends the walk unresolved rather than guessed at.
+  conflict resolution is not modelled, and a parent that is neither scanned
+  nor referenced still ends the walk unresolved rather than guessed at.
+- Properties follow the same hierarchy. A typed or constructor-assigned
+  property declared on the base class resolves through the subclass
+  (`protected Acme_DB $db` on the parent, `$this->db->table_name()` in the
+  child), a `self`-typed property — and `$this->x = new self()` — resolves to
+  its declaring class, and stored property taint is unioned across the chain,
+  because the property is one storage slot on the instance whichever class's
+  method wrote it. That last one fixes a false negative: `$this->value =
+  $_GET['x']` in a base-class constructor, echoed by a subclass method, was
+  invisible under flat per-class keys.
+- The hierarchy walk continues into a referenced tree, so `--include-path`
+  pointed at WordPress core now makes `extends WP_List_Table` (and every other
+  core base class) resolve to core's body — inherited helpers are accounted
+  for, and taint through an inherited core method still lands as a finding in
+  the scanned file.
 
 ### Fixed
 

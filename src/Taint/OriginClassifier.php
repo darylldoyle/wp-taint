@@ -39,6 +39,7 @@ final class OriginClassifier
         private readonly CallResolver $resolver,
         private readonly PropertyTaintMap $properties,
         private readonly ReceiverResolver $receivers,
+        private readonly ClassHierarchy $hierarchy = new ClassHierarchy(),
     ) {
     }
 
@@ -213,13 +214,19 @@ final class OriginClassifier
 
         $owner = $this->propertyOwner($fetch, $context, $types);
 
-        if ($this->properties->isTracked($owner, $property)) {
-            return $this->properties->get($owner, $property)->isEmpty();
+        // The nearest class in the hierarchy that tracked the property answers.
+        // A `protected $table` written in the base class's constructor and read
+        // through the subclass lands under the base class's key, and the flat
+        // lookup used to miss it.
+        foreach ($owner === null ? [null] : $this->hierarchy->lookupOrder($owner) as $candidate) {
+            if ($this->properties->isTracked($candidate, $property)) {
+                return $this->properties->get($candidate, $property)->isEmpty();
+            }
         }
 
-        // Not tracked under this class. That is usually a trait: the read is in
-        // the trait's method, the write is in the class that uses it, and the
-        // two have different keys.
+        // Not tracked under this class or any ancestor. That is usually a
+        // trait boundary the CFG keys differently: the read is in the trait's
+        // method, the write is in the class that uses it.
         return $this->properties->isCleanEverywhere($property);
     }
 

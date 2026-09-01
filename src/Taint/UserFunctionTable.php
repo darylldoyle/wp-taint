@@ -39,8 +39,8 @@ final class UserFunctionTable
     public function __construct()
     {
         $this->byFunc = new SplObjectStorage();
-        $this->declared = new DeclaredTypes();
         $this->hierarchy = new ClassHierarchy();
+        $this->declared = new DeclaredTypes($this->hierarchy);
     }
 
     /**
