@@ -571,6 +571,104 @@ final class ValueResolver
     }
 
     /**
+     * The literal head of a string whose tail will not fold.
+     *
+     * `"save_{$type}"` is no string {@see strings} can answer, and treating
+     * the prefix as the whole name would resolve to the wrong thing — but the
+     * prefix *is* an honest answer to a different question: "what must this
+     * name start with?" The hook graph uses it to join a dynamic dispatch to
+     * the literal registrations it can reach, and the dynamic registration to
+     * the literal dispatches that can reach it.
+     *
+     * Empty when the operand folds completely (ask {@see strings}), when
+     * nothing at its head folds, or when it is not a built string at all.
+     *
+     * @return list<string>
+     */
+    public function prefixes(Operand $operand, int $depth = 0): array
+    {
+        if ($depth > self::MAX_DEPTH) {
+            return [];
+        }
+
+        $definition = OperandHelper::definingOp($operand);
+
+        if ($definition instanceof Op\Expr\Assign) {
+            return $this->prefixes($definition->expr, $depth + 1);
+        }
+
+        $parts = match (true) {
+            $definition instanceof Op\Expr\BinaryOp\Concat => [$definition->left, $definition->right],
+            $definition instanceof Op\Expr\ConcatList => $definition->list,
+            default => null,
+        };
+
+        if ($parts === null) {
+            return [];
+        }
+
+        $combinations = [''];
+        $stopped = false;
+
+        foreach ($parts as $part) {
+            if (! $part instanceof Operand) {
+                $stopped = true;
+
+                break;
+            }
+
+            $options = $this->strings($part, $depth + 1);
+
+            if ($options === []) {
+                $stopped = true;
+
+                // The head of this part may itself fold partially — a nested
+                // concat whose own tail is the dynamic bit.
+                $options = $this->prefixes($part, $depth + 1);
+
+                if ($options !== []) {
+                    $combinations = self::combine($combinations, $options);
+                }
+
+                break;
+            }
+
+            $combinations = self::combine($combinations, $options);
+
+            if ($combinations === []) {
+                return [];
+            }
+        }
+
+        // A string that folded completely is not a prefix — it is an answer to
+        // the question {@see strings} asks, and the caller should ask it there.
+        if (! $stopped) {
+            return [];
+        }
+
+        return array_values(array_filter(array_unique($combinations), static fn (string $p): bool => $p !== ''));
+    }
+
+    /**
+     * @param list<string> $prefixes
+     * @param list<string> $options
+     *
+     * @return list<string>
+     */
+    private static function combine(array $prefixes, array $options): array
+    {
+        $next = [];
+
+        foreach ($prefixes as $prefix) {
+            foreach ($options as $option) {
+                $next[] = $prefix . $option;
+            }
+        }
+
+        return count($next) > self::MAX_VALUES ? [] : $next;
+    }
+
+    /**
      * A concatenation resolves only if every part does.
      *
      * One unresolvable part means the whole string is unknown — `'render_' .

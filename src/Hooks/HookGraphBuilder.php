@@ -173,6 +173,31 @@ final class HookGraphBuilder
             return;
         }
 
+        // A name that will not fold completely may still fold to its head:
+        // `add_action( "save_{$type}", $cb )` is registered under the prefix
+        // `save_`, which literal dispatches join against. Only for real hooks —
+        // a shortcode tag is matched exactly by core, never by prefix.
+        if ($names === [] && ! $shortcode) {
+            $placed = false;
+
+            foreach ($this->values->prefixes($arguments[0]) as $prefix) {
+                foreach ($callbacks as $callback) {
+                    $placed = $graph->addPrefix(new HookRegistration(
+                        $prefix,
+                        $callback,
+                        $context->file->relativePath,
+                        $op->getLine(),
+                        $priority,
+                        $accepted,
+                    )) || $placed;
+                }
+            }
+
+            if ($placed) {
+                return;
+            }
+        }
+
         // An empty name is the wildcard: the registration exists but we cannot
         // say which hook it is on, so every dispatch has to consider it.
         foreach ($names === [] ? [''] : $names as $hook) {

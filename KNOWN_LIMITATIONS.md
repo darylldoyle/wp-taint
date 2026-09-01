@@ -690,14 +690,25 @@ Which dispatchers are followed is data, under `[[dispatchers]]` with
 `hook = true`. `apply_filters`, `apply_filters_ref_array`, `do_action` and
 `do_action_ref_array` ship; a project with its own dispatcher adds it there.
 
-**What is still missed.** A registration whose hook *name* will not resolve is
-not connected to anything. It is listed in the unresolved-hook count rather than
-unioned into every dispatch — that would be the sound choice and it is the wrong
-one, because a plugin with 22 unplaced registrations against 201 hooks would gain
-22 spurious callees on every dispatch. `remove_filter()` is not modelled either,
-so a callback removed at runtime is still analysed.
+A name that will not fold completely may still fold to its literal head, and
+the head joins: `do_action( "acme_render_{$section}", … )` dispatches to every
+registration on a literal hook starting with `acme_render_`, and
+`add_action( "acme_save_{$type}", $cb )` is reachable from a literal
+`do_action( 'acme_save_post' )`. A head shorter than four characters joins
+nothing — `wp_` would connect a dynamic name to half a namespace, and a join
+that wide is a guess wearing a prefix's clothes.
 
-**Direction:** under-approximating, at the unresolved names.
+**What is still missed.** A registration whose hook name has no foldable head
+at all — a bare variable — is not connected to anything. It is listed in the
+unresolved-hook count rather than unioned into every dispatch — that would be
+the sound choice and it is the wrong one, because a plugin with 22 unplaced
+registrations against 201 hooks would gain 22 spurious callees on every
+dispatch. `remove_filter()` is not modelled either, so a callback removed at
+runtime is still analysed.
+
+**Direction:** under-approximating, at the names with no foldable head; the
+prefix join itself over-approximates within its namespace, which is the safe
+side for a callback that might receive taint.
 
 ### A callback that will not resolve is counted, not guessed at
 

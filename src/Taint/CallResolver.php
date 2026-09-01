@@ -174,10 +174,22 @@ final class CallResolver
 
         $arguments = $this->calleeArguments($call, $dispatcher);
         $targets = [];
+        $names = $this->values->strings($name);
 
-        foreach ($this->values->strings($name) as $hook) {
+        foreach ($names as $hook) {
             foreach ($this->hooks->targetsFor($hook) as $target) {
                 $targets[] = $target->withArguments($arguments);
+            }
+        }
+
+        // `do_action( "save_{$type}" )`: the name will not fold, but its head
+        // will, and the registrations on any literal hook starting with that
+        // head are the ones this dispatch can run.
+        if ($names === []) {
+            foreach ($this->values->prefixes($name) as $prefix) {
+                foreach ($this->hooks->targetsMatchingPrefix($prefix) as $target) {
+                    $targets[] = $target->withArguments($arguments);
+                }
             }
         }
 

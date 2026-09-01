@@ -50,6 +50,21 @@ final class HookGraph
      */
     private array $unplaced = [];
 
+    /**
+     * Registrations whose hook name folds only to a literal head —
+     * `add_action( "save_{$type}", $cb )` — keyed by that prefix.
+     *
+     * @var array<string, list<HookRegistration>>
+     */
+    private array $byPrefix = [];
+
+    /**
+     * A prefix shorter than this joins nothing: `wp_` would connect a dynamic
+     * name to half of core's hook namespace, and a join that wide is a guess
+     * wearing a prefix's clothes.
+     */
+    public const MIN_PREFIX = 4;
+
     /** @var array<string, true> */
     private array $seen = [];
 
@@ -76,7 +91,37 @@ final class HookGraph
     }
 
     /**
+     * A registration whose hook name folded only to its literal head.
+     *
+     * The registration's `hook` field holds the prefix. Too short a prefix is
+     * refused and the caller should fall back to treating the registration as
+     * unplaced.
+     */
+    public function addPrefix(HookRegistration $registration): bool
+    {
+        if (strlen($registration->hook) < self::MIN_PREFIX) {
+            return false;
+        }
+
+        $identity = 'prefix:' . $registration->sortKey();
+
+        if (isset($this->seen[$identity])) {
+            return true;
+        }
+
+        $this->seen[$identity] = true;
+        $this->byPrefix[$registration->hook][] = $registration;
+
+        return true;
+    }
+
+    /**
      * Every callback registered on a hook.
+     *
+     * A literal dispatch also reaches the dynamic registrations whose prefix
+     * it starts with: `do_action( 'save_post' )` runs whatever
+     * `add_action( "save_{$type}", $cb )` registered, for the `$type` values
+     * the scan could not fold.
      *
      * @return list<HookRegistration>
      */
@@ -84,12 +129,62 @@ final class HookGraph
     {
         $registrations = $this->byHook[$hook] ?? [];
 
+        foreach ($this->byPrefix as $prefix => $prefixed) {
+            if (str_starts_with($hook, $prefix)) {
+                $registrations = [...$registrations, ...$prefixed];
+            }
+        }
+
         usort(
             $registrations,
             static fn (HookRegistration $a, HookRegistration $b): int => $a->sortKey() <=> $b->sortKey(),
         );
 
         return $registrations;
+    }
+
+    /**
+     * Every callback a dynamically-named dispatch could reach, by its folded
+     * head: `do_action( "save_{$type}" )` runs whatever is registered on any
+     * literal hook starting with `save_`, and whatever dynamic registration
+     * shares a compatible prefix.
+     *
+     * @return list<CallTarget>
+     */
+    public function targetsMatchingPrefix(string $needle): array
+    {
+        if (strlen($needle) < self::MIN_PREFIX) {
+            return [];
+        }
+
+        $matched = [];
+
+        foreach ($this->byHook as $hook => $registrations) {
+            // Synthetic entries — shortcode and block callbacks — are not
+            // hooks a do_action() can reach.
+            if (str_starts_with($hook, HookGraphBuilder::SHORTCODE_PREFIX)) {
+                continue;
+            }
+
+            if (str_starts_with($hook, $needle)) {
+                $matched = [...$matched, ...$registrations];
+            }
+        }
+
+        // Two dynamic names whose known heads are compatible — one extends
+        // the other — can be the same hook at runtime.
+        foreach ($this->byPrefix as $prefix => $registrations) {
+            if (str_starts_with($prefix, $needle) || str_starts_with($needle, $prefix)) {
+                $matched = [...$matched, ...$registrations];
+            }
+        }
+
+        usort(
+            $matched,
+            static fn (HookRegistration $a, HookRegistration $b): int => $a->sortKey() <=> $b->sortKey(),
+        );
+
+        return array_map(static fn (HookRegistration $r): CallTarget => $r->callback, $matched);
     }
 
     /**
