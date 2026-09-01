@@ -43,6 +43,16 @@ final class CallResolver
     }
 
     /**
+     * The value resolver this resolver folds names through, for components
+     * that need the same folding outside a call position — the query-shape
+     * inspector reads quote state from fragments only it can fold.
+     */
+    public function values(): ValueResolver
+    {
+        return $this->values;
+    }
+
+    /**
      * Every callee a call op can reach.
      *
      * Usually one. Several when a callable variable holds a different name on

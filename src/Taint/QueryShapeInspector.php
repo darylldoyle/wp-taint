@@ -43,6 +43,7 @@ final class QueryShapeInspector
     public function __construct(
         private readonly LiteralAnalyzer $literals,
         private readonly OriginClassifier $origins,
+        private readonly ?ValueResolver $values = null,
     ) {
     }
 
@@ -122,11 +123,21 @@ final class QueryShapeInspector
                 continue;
             }
 
-            if ($inQuotes || ! $atRisk($component)) {
-                continue;
+            if (! $inQuotes && $atRisk($component)) {
+                return $component;
             }
 
-            return $component;
+            // A fragment that is not written as a literal may still *be* one —
+            // a helper returning a constant clause, `"WHERE name = '"` built a
+            // call away. Its text carries quote state like any other fragment,
+            // and skipping it read the escaped value that follows as unquoted.
+            // Only a fragment folding to exactly one string counts: two
+            // possible texts could disagree about the state they leave behind.
+            $folded = $this->values?->strings($component) ?? [];
+
+            if (count($folded) === 1) {
+                $inQuotes = self::quoteStateAfter($folded[0], $inQuotes);
+            }
         }
 
         return null;

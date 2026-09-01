@@ -199,6 +199,7 @@ final class FunctionAnalysis
         $this->queryShapes = new QueryShapeInspector(
             $literals,
             new OriginClassifier($registry, $resolver, $properties, $receivers, $functions->classHierarchy()),
+            $resolver->values(),
         );
         $this->anchors = new LiteralAnchor(
             $summaries,

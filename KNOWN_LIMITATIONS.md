@@ -474,14 +474,18 @@ to escape and `1 OR 1=1` reaches the database whole. So they do not clear `sql`;
 they trade it for `sql_unquoted`, which the sink reports only when the value
 lands in an unquoted position.
 
-Quote state is read from the literal fragments of the query string, counting
-unescaped `'` and `"`. Backticks quote identifiers rather than values and offer
-a value no protection, so they deliberately do not count as being in quotes.
+Quote state is read from the fragments of the query string, counting unescaped
+`'` and `"`. A fragment that is not written as a literal still counts when it
+folds to exactly one string — a helper returning a constant `"WHERE name = '"`
+carries its quote into the position after it, a call away from the sink.
+Backticks quote identifiers rather than values and offer a value no protection,
+so they deliberately do not count as being in quotes.
 
-**What is missed.** A query whose quoting is itself computed, and any case where
-the string is not built where the sink is — the value has to reach a sink whose
-query is a concatenation or an interpolation for the position to be readable at
-all.
+**What is missed.** A fragment that folds to two possible texts, which could
+disagree about the state they leave behind; a query whose quoting is itself
+computed; and any case where the string is not built where the sink is — the
+value has to reach a sink whose query is a concatenation or an interpolation
+for the position to be readable at all.
 
 ### `$_FILES` sub-keys are PHP's or the client's, not all one thing
 
