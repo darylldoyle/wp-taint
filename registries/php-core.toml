@@ -16,19 +16,19 @@ safe_database_identifiers = []
 
 [[sources]]
 superglobal = "_GET"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "csv", "storage"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "object_id", "csv", "storage"]
 
 [[sources]]
 superglobal = "_POST"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "csv", "storage"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "object_id", "csv", "storage"]
 
 [[sources]]
 superglobal = "_REQUEST"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "csv", "storage"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "object_id", "csv", "storage"]
 
 [[sources]]
 superglobal = "_COOKIE"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "csv", "storage"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "object_id", "csv", "storage"]
 
 [[sources]]
 superglobal = "_FILES"

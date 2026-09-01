@@ -40,6 +40,9 @@ final class RegistryAccumulator
     /** @var array<string, string> identity => "entitlement" or "intent" */
     private array $authorization = [];
 
+    /** @var array<string, CapabilityScope> capability name => what a passing check proves */
+    private array $capabilities = [];
+
     /** @var array<string, list<int>> lowercased name => parameter indices the filtered return comes from */
     private array $filterable = [];
 
@@ -111,6 +114,11 @@ final class RegistryAccumulator
         $this->authorization[$matcher->identity()] = $proves;
     }
 
+    public function addCapability(string $name, CapabilityScope $scope): void
+    {
+        $this->capabilities[strtolower($name)] = $scope;
+    }
+
     /**
      * @param array<array-key, int> $params
      */
@@ -149,6 +157,7 @@ final class RegistryAccumulator
         ksort($this->byRef);
         ksort($this->templates);
         ksort($this->authorization);
+        ksort($this->capabilities);
         ksort($this->filterable);
         ksort($this->rules);
 
@@ -166,6 +175,7 @@ final class RegistryAccumulator
             $this->byRef,
             $this->templates,
             $this->authorization,
+            $this->capabilities,
             $this->filterable,
             $this->rules,
             $identifiers,

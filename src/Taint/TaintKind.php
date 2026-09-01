@@ -44,6 +44,25 @@ enum TaintKind: string
     case Identifier = 'identifier';
 
     /**
+     * An object identifier chosen by the request.
+     *
+     * The sibling of {@see self::Identifier}, for rows instead of names:
+     * `wp_delete_post( $_POST['id'] )` deletes whichever post the request
+     * names, and whether the caller was *allowed to name that post* is an
+     * authorization question, not an escaping one.
+     *
+     * Its own kind because nothing that cleans a value settles it. The kinds
+     * above describe payloads — a quote, a tag, a traversal — and `absint()`
+     * genuinely ends all of them, which is why it clears `*`. An object id has
+     * no payload to remove: `7` is a perfectly-formed attack when post 7
+     * belongs to someone else. So this kind survives `absint()`, `intval()`,
+     * `(int)` casts and `is_numeric()` guards, and is discharged only by an
+     * object-scoped capability check dominating the sink — which is
+     * {@see CapabilityGuard}'s question, asked where the sink fires.
+     */
+    case ObjectId = 'object_id';
+
+    /**
      * Escaped for a quoted SQL context, and only for a quoted one.
      *
      * `esc_sql()` escapes quotes and backslashes. Inside quotes that is a real
@@ -208,6 +227,7 @@ enum TaintKind: string
             self::Ldap => 1 << 9,
             self::Xpath => 1 << 10,
             self::Identifier => 1 << 12,
+            self::ObjectId => 1 << 20,
             self::SqlUnquoted => 1 << 13,
             self::UnserializeStored => 1 << 14,
             self::Escaped => 1 << 15,
@@ -280,6 +300,7 @@ enum TaintKind: string
             self::Ldap => 'LDAP filter',
             self::Xpath => 'XPath expression',
             self::Identifier => 'privileged identifier',
+            self::ObjectId => 'request-chosen object id',
             self::SqlUnquoted => 'SQL outside quotes',
             self::UnserializeStored => 'stored serialised payload',
             self::Escaped => 'escaped',

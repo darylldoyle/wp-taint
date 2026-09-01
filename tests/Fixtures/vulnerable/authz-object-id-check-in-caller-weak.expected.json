@@ -1,0 +1,10 @@
+{
+    "expectation": "vulnerable",
+    "findings": [
+        {
+            "ruleId": "wp.authz.object-id-from-request",
+            "kind": "object_id",
+            "line": 27
+        }
+    ]
+}

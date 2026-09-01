@@ -198,6 +198,8 @@ after `--` is required.
 | `wp.authz.rest-permission-callback-no-check` | A `permission_callback` that checks nothing |
 | `wp.authz.rest-public-write` | A public REST route that writes |
 | `wp.authz.arbitrary-option-write` | The option name comes from the request |
+| `wp.authz.object-id-from-request` | A request-chosen post, comment, term or user id reaches an object operation with no object-scoped capability check |
+| `wp.authz.meta-cap-without-object` | A meta capability (`edit_post`, `delete_user`) checked with no object id |
 | `wp.authz.guard-without-exit` | A failed check that falls through |
 | `wp.csrf.nonce-without-action` | A nonce with no action, which any valid nonce satisfies |
 | `wp.csrf.bypassable-nonce-check` | A nonce check an attacker skips by omitting the nonce |

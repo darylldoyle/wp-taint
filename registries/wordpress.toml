@@ -585,6 +585,113 @@ severity = "high"
 rule_id = "wp.authz.arbitrary-option-write"
 applies_by = "unanchored"
 
+# The object ID taken from the request. The sibling of the option-name rule
+# for rows instead of names: wp_delete_post( $_POST['id'] ) deletes whichever
+# post the request names, and the finding stands until a dominating check
+# entitles the caller to that object — an object-scoped meta capability with
+# the id in hand, or a site-wide grant. A role capability (edit_posts) does
+# not discharge it; that is the classic WordPress IDOR. See CapabilityGuard.
+[[sinks]]
+function = "wp_delete_post"
+args = [0]
+kind = "object_id"
+severity = "high"
+rule_id = "wp.authz.object-id-from-request"
+
+[[sinks]]
+function = "wp_trash_post"
+args = [0]
+kind = "object_id"
+severity = "high"
+rule_id = "wp.authz.object-id-from-request"
+
+[[sinks]]
+function = "wp_untrash_post"
+args = [0]
+kind = "object_id"
+severity = "high"
+rule_id = "wp.authz.object-id-from-request"
+
+[[sinks]]
+function = "wp_delete_attachment"
+args = [0]
+kind = "object_id"
+severity = "high"
+rule_id = "wp.authz.object-id-from-request"
+
+[[sinks]]
+function = "wp_delete_user"
+args = [0]
+kind = "object_id"
+severity = "high"
+rule_id = "wp.authz.object-id-from-request"
+
+# Whose password is being set is the object question in its sharpest form.
+[[sinks]]
+function = "wp_set_password"
+args = [1]
+kind = "object_id"
+severity = "critical"
+rule_id = "wp.authz.object-id-from-request"
+
+[[sinks]]
+function = "wp_delete_comment"
+args = [0]
+kind = "object_id"
+severity = "high"
+rule_id = "wp.authz.object-id-from-request"
+
+[[sinks]]
+function = "wp_trash_comment"
+args = [0]
+kind = "object_id"
+severity = "high"
+rule_id = "wp.authz.object-id-from-request"
+
+[[sinks]]
+function = "wp_spam_comment"
+args = [0]
+kind = "object_id"
+severity = "high"
+rule_id = "wp.authz.object-id-from-request"
+
+[[sinks]]
+function = "wp_delete_term"
+args = [0]
+kind = "object_id"
+severity = "high"
+rule_id = "wp.authz.object-id-from-request"
+
+# The post/user the meta hangs off, not the meta value: writing another
+# user's wp_capabilities row is the canonical escalation.
+[[sinks]]
+function = "update_post_meta"
+args = [0]
+kind = "object_id"
+severity = "high"
+rule_id = "wp.authz.object-id-from-request"
+
+[[sinks]]
+function = "delete_post_meta"
+args = [0]
+kind = "object_id"
+severity = "high"
+rule_id = "wp.authz.object-id-from-request"
+
+[[sinks]]
+function = "update_user_meta"
+args = [0]
+kind = "object_id"
+severity = "high"
+rule_id = "wp.authz.object-id-from-request"
+
+[[sinks]]
+function = "delete_user_meta"
+args = [0]
+kind = "object_id"
+severity = "high"
+rule_id = "wp.authz.object-id-from-request"
+
 # Stored-taint writes. Off unless --stored-taint-writes is passed.
 [[sinks]]
 function = "update_option"
@@ -746,6 +853,347 @@ function = "wp_validate_auth_cookie"
 [[authorization]]
 class = "WP_User"
 method = "has_cap"
+
+# ---------------------------------------------------------------------------
+# Capabilities, by what a passing check proves about the object at hand.
+#
+# object — a meta capability: map_meta_cap() resolves it against a specific
+#          row, so it discharges wp.authz.object-id-from-request when the id
+#          is passed and checks nothing about any row when it is not (which is
+#          wp.authz.meta-cap-without-object).
+# site   — a site-wide administrative grant; entitles cross-object action.
+# role   — proves the caller has a role, and nothing about whose row a
+#          request-supplied id names.
+#
+# The core sets, from map_meta_cap() and the default roles. A capability not
+# listed here — a plugin's own — is treated as site-scoped by CapabilityGuard:
+# the documented false negative beats guessing a stranger's capability model.
+# ---------------------------------------------------------------------------
+
+[[capabilities]]
+name = "edit_post"
+scope = "object"
+
+[[capabilities]]
+name = "read_post"
+scope = "object"
+
+[[capabilities]]
+name = "delete_post"
+scope = "object"
+
+[[capabilities]]
+name = "publish_post"
+scope = "object"
+
+[[capabilities]]
+name = "edit_page"
+scope = "object"
+
+[[capabilities]]
+name = "read_page"
+scope = "object"
+
+[[capabilities]]
+name = "delete_page"
+scope = "object"
+
+[[capabilities]]
+name = "edit_comment"
+scope = "object"
+
+[[capabilities]]
+name = "edit_term"
+scope = "object"
+
+[[capabilities]]
+name = "delete_term"
+scope = "object"
+
+[[capabilities]]
+name = "assign_term"
+scope = "object"
+
+[[capabilities]]
+name = "edit_user"
+scope = "object"
+
+[[capabilities]]
+name = "delete_user"
+scope = "object"
+
+[[capabilities]]
+name = "promote_user"
+scope = "object"
+
+[[capabilities]]
+name = "remove_user"
+scope = "object"
+
+[[capabilities]]
+name = "add_post_meta"
+scope = "object"
+
+[[capabilities]]
+name = "edit_post_meta"
+scope = "object"
+
+[[capabilities]]
+name = "delete_post_meta"
+scope = "object"
+
+[[capabilities]]
+name = "add_comment_meta"
+scope = "object"
+
+[[capabilities]]
+name = "edit_comment_meta"
+scope = "object"
+
+[[capabilities]]
+name = "delete_comment_meta"
+scope = "object"
+
+[[capabilities]]
+name = "add_term_meta"
+scope = "object"
+
+[[capabilities]]
+name = "edit_term_meta"
+scope = "object"
+
+[[capabilities]]
+name = "delete_term_meta"
+scope = "object"
+
+[[capabilities]]
+name = "add_user_meta"
+scope = "object"
+
+[[capabilities]]
+name = "edit_user_meta"
+scope = "object"
+
+[[capabilities]]
+name = "delete_user_meta"
+scope = "object"
+
+# Role-scoped: having the role says nothing about the row. These are the
+# capabilities the broken pattern reaches for, so this list is the one that
+# has to be curated tightly — everything else suppresses.
+
+[[capabilities]]
+name = "read"
+scope = "role"
+
+[[capabilities]]
+name = "exist"
+scope = "role"
+
+[[capabilities]]
+name = "upload_files"
+scope = "role"
+
+[[capabilities]]
+name = "edit_posts"
+scope = "role"
+
+[[capabilities]]
+name = "delete_posts"
+scope = "role"
+
+[[capabilities]]
+name = "publish_posts"
+scope = "role"
+
+[[capabilities]]
+name = "edit_pages"
+scope = "role"
+
+[[capabilities]]
+name = "delete_pages"
+scope = "role"
+
+[[capabilities]]
+name = "publish_pages"
+scope = "role"
+
+[[capabilities]]
+name = "edit_published_posts"
+scope = "role"
+
+[[capabilities]]
+name = "delete_published_posts"
+scope = "role"
+
+[[capabilities]]
+name = "edit_published_pages"
+scope = "role"
+
+[[capabilities]]
+name = "delete_published_pages"
+scope = "role"
+
+# Site-scoped grants. Explicit rather than left to the unknown-capability
+# fallback, so the decision is recorded where it can be argued with. The
+# *_others_* capabilities are editor-level and authorize cross-object action
+# on that post type, which is exactly what an object operation needs.
+
+[[capabilities]]
+name = "manage_options"
+scope = "site"
+
+[[capabilities]]
+name = "manage_network"
+scope = "site"
+
+[[capabilities]]
+name = "manage_network_options"
+scope = "site"
+
+[[capabilities]]
+name = "manage_sites"
+scope = "site"
+
+[[capabilities]]
+name = "manage_network_users"
+scope = "site"
+
+[[capabilities]]
+name = "manage_network_plugins"
+scope = "site"
+
+[[capabilities]]
+name = "manage_network_themes"
+scope = "site"
+
+[[capabilities]]
+name = "activate_plugins"
+scope = "site"
+
+[[capabilities]]
+name = "install_plugins"
+scope = "site"
+
+[[capabilities]]
+name = "update_plugins"
+scope = "site"
+
+[[capabilities]]
+name = "delete_plugins"
+scope = "site"
+
+[[capabilities]]
+name = "edit_plugins"
+scope = "site"
+
+[[capabilities]]
+name = "install_themes"
+scope = "site"
+
+[[capabilities]]
+name = "update_themes"
+scope = "site"
+
+[[capabilities]]
+name = "delete_themes"
+scope = "site"
+
+[[capabilities]]
+name = "edit_themes"
+scope = "site"
+
+[[capabilities]]
+name = "switch_themes"
+scope = "site"
+
+[[capabilities]]
+name = "edit_theme_options"
+scope = "site"
+
+[[capabilities]]
+name = "update_core"
+scope = "site"
+
+[[capabilities]]
+name = "setup_network"
+scope = "site"
+
+[[capabilities]]
+name = "import"
+scope = "site"
+
+[[capabilities]]
+name = "export"
+scope = "site"
+
+[[capabilities]]
+name = "manage_categories"
+scope = "site"
+
+[[capabilities]]
+name = "manage_links"
+scope = "site"
+
+[[capabilities]]
+name = "moderate_comments"
+scope = "site"
+
+[[capabilities]]
+name = "unfiltered_html"
+scope = "site"
+
+[[capabilities]]
+name = "unfiltered_upload"
+scope = "site"
+
+[[capabilities]]
+name = "edit_users"
+scope = "site"
+
+[[capabilities]]
+name = "delete_users"
+scope = "site"
+
+[[capabilities]]
+name = "create_users"
+scope = "site"
+
+[[capabilities]]
+name = "list_users"
+scope = "site"
+
+[[capabilities]]
+name = "promote_users"
+scope = "site"
+
+[[capabilities]]
+name = "remove_users"
+scope = "site"
+
+[[capabilities]]
+name = "edit_others_posts"
+scope = "site"
+
+[[capabilities]]
+name = "delete_others_posts"
+scope = "site"
+
+[[capabilities]]
+name = "edit_others_pages"
+scope = "site"
+
+[[capabilities]]
+name = "delete_others_pages"
+scope = "site"
+
+[[capabilities]]
+name = "edit_files"
+scope = "site"
+
+[[capabilities]]
+name = "edit_dashboard"
+scope = "site"
 
 # ---------------------------------------------------------------------------
 # Translation.
@@ -1018,6 +1466,22 @@ description = "The name of the option being written comes from user-controlled i
 remediation = "Never let the request choose the option. Keep an allowlist of the options this code owns and reject anything not on it; iterating $_POST and calling update_option( $name, $value ) hands the site over."
 cwe = "CWE-915"
 message = "The option being written is named by untrusted input, which is privilege escalation rather than stored data."
+
+[[rules]]
+id = "wp.authz.object-id-from-request"
+title = "Object ID taken from the request without an object-scoped capability check"
+description = "The ID of the post, comment, term or user being operated on comes from the request, and no check dominating the operation ties the caller to that object: any capability checks on the path are role-scoped (edit_posts proves a role, not whose post this is) or absent. Whoever can reach this code operates on whichever row they name — the classic WordPress IDOR (CWE-639). Integer casts and absint() do not help: 7 is a well-formed attack when post 7 is someone else's."
+remediation = "Check the object-scoped meta capability with the id in hand before the operation: current_user_can( 'delete_post', $id ) for posts, edit_comment / edit_user / delete_term for their kinds. A site-wide grant such as manage_options also discharges it. A nonce does not — it proves the request came from a form this site rendered, and any logged-in user holds a valid nonce for every form they can see."
+cwe = "CWE-639"
+message = "The object being operated on is chosen by the request, and nothing on the path checks the caller may touch that particular object."
+
+[[rules]]
+id = "wp.authz.meta-cap-without-object"
+title = "Meta capability checked without its object"
+description = "current_user_can() (or user_can / author_can) is called with an object-scoped meta capability — edit_post, delete_post, edit_user and their relatives — and no object id. map_meta_cap() resolves these against a specific row, so without the id the call checks nothing about the row the code is about to touch; WordPress 6.1 adds a _doing_it_wrong notice for exactly this shape. The check reads as object authorization and is not one."
+remediation = "Pass the object's id as the next argument: current_user_can( 'edit_post', $post_id ). If no specific object is at hand, the code wants a role or site capability instead — edit_posts to ask about the role, manage_options for administrative actions."
+cwe = "CWE-863"
+message = "This meta capability is checked without an object, so it says nothing about the row being operated on."
 
 [[rules]]
 id = "wp.csrf.nonce-without-action"
