@@ -10,7 +10,7 @@ source and classified.
 
 A REST route handling a write method (`POST`, `PUT`, `PATCH`, `DELETE`, or the
 `WP_REST_Server` constants for them) declared with `permission_callback =>
-'__return_true'` — a route that changes state and is callable by anyone,
+'__return_true'`, a route that changes state and is callable by anyone,
 authenticated or not.
 
 ## Method
@@ -18,8 +18,8 @@ authenticated or not.
 Each finding was dumped with fifteen lines of surrounding source and the
 resolved method and permission callback. A finding is a true positive when the
 route's methods include a write and its permission callback is `__return_true`
-(or resolves to always-allow). The audit ran on the pinned corpus at commit
-`28acc73`.
+(or resolves to always-allow). The audit ran on the full corpus at wp-taint
+commit `28acc73`.
 
 ## Findings
 
@@ -29,7 +29,7 @@ All 29 are the same shape: a write method and `__return_true`.
 |--------|------:|---------|------|
 | complianz-gdpr | 4 | POST | data-request and scan webhooks |
 | jetpack | 5 | CREATABLE / EDITABLE | AI, connection, WC-analytics proxies |
-| woocommerce | 4 | CREATABLE, `$methods` | mobile QR login, GraphQL — auth deferred to the handler |
+| woocommerce | 4 | CREATABLE, `$methods` | mobile QR login, GraphQL, auth deferred to the handler |
 | wordpress-seo | 4 | POST | AI-authorization JWT callbacks |
 | wpforms-lite | 3 | `$methods` = `['POST']` | PayPal / Stripe / Square webhooks |
 | hostinger-reach | 2 | POST | |
@@ -50,7 +50,7 @@ GET-only route mistaken for a write.
 Several of these are **webhooks and deferred-auth endpoints**: WooCommerce's
 GraphQL controller comments "Auth is handled per-query/mutation", and the
 payment webhooks verify a provider signature inside the callback rather than in
-the permission callback. The rule flags the *shape* — a public write route —
+the permission callback. The rule flags the *shape*, a public write route,
 which is accurate: the route is open at the WordPress layer, and whether the
 handler re-establishes trust is exactly what a reviewer should check. These are
 true positives that a reviewer may then accept, which is what the baseline is
@@ -61,4 +61,4 @@ claims the permission callback authorises nothing.
 
 The rule earns its severity. Nothing to change. The webhook nuance is worth a
 line in the rule's remediation so a reviewer knows that "the callback checks a
-signature" is a valid reason to baseline a finding — filed as a follow-up.
+signature" is a valid reason to baseline a finding, filed as a follow-up.

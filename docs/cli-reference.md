@@ -14,6 +14,31 @@ wp-taint <command> [options] [arguments]
 | `registry:dump` | Print the fully resolved catalogue |
 | `dump-cfg` | Print the SSA control flow graph for a file |
 
+## init
+
+```
+wp-taint init [options] [<root>]
+```
+
+`root` is the `wp-content` directory, or a project holding one. Defaults to the
+current directory. Detects the themes and plugins, then writes a `wp-taint.toml`.
+
+| Option | Effect |
+|--------|--------|
+| `--all` | Treat every detected directory as first-party. No prompt. |
+| `--force` | Overwrite an existing `wp-taint.toml` |
+
+What it writes depends on how it runs:
+
+| How it runs | Result |
+|-------------|--------|
+| Interactive terminal | Asks which directories you wrote, writes those as `[scan] paths` |
+| `--all` | Every detected directory becomes a scan path |
+| Non-interactive (CI, piped) | A template with every directory commented out |
+
+The template path is deliberate: a scan in CI writes the template rather than
+hanging on a prompt that has no terminal to answer it.
+
 ## scan
 
 ```
@@ -58,9 +83,8 @@ Severity levels are `low`, `medium`, `high` and `critical`.
 
 Output nothing vouches for is reported by default, at `low`, which is below the
 default `--fail-on` and so cannot fail a build on its own. WordPress's standard
-is escape on output wherever the value came from, and a reader can dismiss a
-`low` in a second if they know the value is safe — they cannot dismiss what was
-never shown to them. `--no-unknown-provenance` asks the narrower question, "can
+is escape on output wherever the value came from. A reader who knows the value
+is safe dismisses a `low` in a second; a reader who is never shown it cannot. `--no-unknown-provenance` asks the narrower question, "can
 I trace this to something dangerous". See [How it works](how-it-works.md).
 
 ### Output
@@ -106,6 +130,8 @@ expected to be flagged and was not.
 | `--scope=DIR` | none | Directory to analyse for cross-file flows |
 | `--kind=KIND` | all | Ask about one taint kind |
 | `--registry=NAME` | `wordpress` | Registry name or path |
+| `--no-follow-includes` | off | Do not join scopes across `include` and `require` |
+| `--dynamic-calls=MODE` | `propagate` | `clean`, `propagate` or `tainted` for an unresolvable callee |
 
 > **Important**
 > `--scope` is not optional in practice. Without it the file is analysed alone,
@@ -114,11 +140,22 @@ expected to be flagged and was not.
 ## registry:dump
 
 ```
-wp-taint registry:dump [--format=text|json] [--config=FILE]
+wp-taint registry:dump [--registry=NAME] [--config=FILE] [--format=text|json]
 ```
 
 Prints every source, sink, sanitizer, propagator and rule after all registries
 are merged. Use it to confirm a function is modelled the way you think.
+`--format` defaults to `text`.
+
+## dump-cfg
+
+```
+wp-taint dump-cfg <file> [--format=text|dot] [--show-lowering]
+```
+
+Prints the SSA control flow graph for one file, a debugging aid for the engine
+itself rather than part of a normal scan. `--show-lowering` lists the constructs
+rewritten before the graph is built.
 
 ## Project config
 
@@ -168,13 +205,14 @@ after `--` is required.
 
 ## Rules
 
-30 rules. The id is stable and is what you suppress or filter on.
+33 rules. The id is stable and is what you suppress or filter on.
 
 ### Output
 
 | Rule | Reports |
 |------|---------|
 | `wp.xss.unescaped-output` | Untrusted input reaches output unescaped |
+| `wp.xss.unescaped-attribute` | Sanitised input (tags stripped) reaches a quoted attribute; its quotes can end the attribute |
 | `wp.xss.escape-voided` | Escaped, then passed through a filter that can replace it |
 | `wp.xss.wrong-context-escape` | Escaped for the wrong context, e.g. `esc_html` in an `href` |
 | `wp.output.unescaped-unknown` | Output with nothing vouching for it |

@@ -48,7 +48,15 @@ code, and there is no threshold that avoids both.
 
 So `esc_html()` clears the HTML kind and leaves the rest. A value that has been
 through it is reported at a database sink and not at an echo, which is the
-correct answer to both questions.
+correct answer to both questions:
+
+```mermaid
+flowchart LR
+    V["$_GET['q']<br/>carries {html, sql, ...}"] --> E["esc_html()"]
+    E --> W["now carries {sql, ...}<br/><b>html cleared</b>"]
+    W --> Echo["echo $q"] --> OK([no finding:<br/>html was cleared])
+    W --> DB["$wpdb->query( $q )"] --> BUG([finding:<br/>sql still set])
+```
 
 ## Storing and printing are different obligations
 
@@ -123,8 +131,8 @@ the caller answers for it.
 reader who knows the value is safe dismisses it in a second; a reader who is
 never shown it cannot.
 
-`--no-unknown-provenance` asks the narrower question — **can I trace this value
-back to something dangerous?** — and reports only what has a path.
+`--no-unknown-provenance` asks the narrower question, **can I trace this value
+back to something dangerous?**, and reports only what has a path.
 
 ## Some functions are entry points
 

@@ -55,7 +55,7 @@ A referenced tree still contributes everything the engine needs. If
 traced and the finding is raised **in your theme**, where you can fix it.
 
 Inheritance crosses the boundary too. A class in your plugin that `extends`
-a class in the referenced tree — `WP_List_Table`, when core is referenced —
+a class in the referenced tree (`WP_List_Table`, when core is referenced)
 resolves its inherited methods to the parent's real body: helpers it returns
 are accounted for, and taint coming back through one still lands as a finding
 in your code.
@@ -81,7 +81,7 @@ own plugin from the reference.
 
 ## Define what the scan cannot see with a bootstrap file
 
-Some constants live outside anything you would scan — `ABSPATH` is defined in
+Some constants live outside anything you would scan: `ABSPATH` is defined in
 `wp-config.php`. A bootstrap file names them, the way PHPStan's does:
 
 ```php

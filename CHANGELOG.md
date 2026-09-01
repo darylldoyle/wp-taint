@@ -17,7 +17,7 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     check dominating the sink entitles the caller to that object. This is the
     classic WordPress IDOR (CWE-639): the check is present and correctly named,
     but scoped to a role rather than the row. A new `object_id` taint kind
-    carries the id and — unlike every payload kind — survives `absint()`,
+    carries the id and, unlike every payload kind, survives `absint()`,
     `intval()`, `(int)` and `is_numeric()`, because coercing an id to an integer
     proves nothing about whose row it names. The finding is discharged by an
     object-scoped meta capability with the id in hand, or a site-wide grant,
@@ -28,8 +28,32 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A `[[capabilities]]` registry section classifying core capabilities as
   `object`, `site` or `role`, so the scope decision is data rather than code. A
   capability the catalogue does not know is treated as site-scoped.
-- Inherited-method call resolution. Method lookup was flat — `Class::method`
-  exactly as written — so a method inherited from a parent or brought in by a
+- A sink for the `html_attr` taint kind, `wp.xss.unescaped-attribute`, closing
+  the biggest documented false-negative class. `sanitize_text_field()` strips
+  tags and leaves both quote characters, yet it used to clear `html` and
+  `html_attr` together and so was credited as an output escaper:
+  `value="<?php echo $sanitised ?>"` was silent while `" onmouseover=… x="`
+  walked straight out of the attribute. The catalogue now tells the truth per
+  function: the tag-strippers (`sanitize_text_field()`,
+  `sanitize_textarea_field()`) stop clearing `html_attr`; the `esc_html()`
+  family and `esc_textarea()` start, because `ENT_QUOTES` encodes both quotes;
+  the `wp_kses()` family keeps passing it through, since it passes markup and
+  its quotes with it. The new rule fires when a component carrying `html_attr`
+  without `html` lands inside a quoted attribute, read off the literal fragments
+  the way the SQL shape check reads quote position. Raw values stay the `html`
+  sink's, so nothing reports twice, and where this rule and the structural
+  context rule land on the same line the traced finding wins.
+- Second-order flow through option keys. `update_option( 'k', $_POST['x'] )` in
+  one function and `get_option( 'k' )` in another were modelled as independent (a
+  stored source here, a storage sink there), so the flow read only as "an option
+  might hold anything" and `include get_option( … )` was not reported at all. The
+  options table is now one more property owner: a read of a key the scan watched
+  being written unions the write's full kinds on top of the stored baseline and
+  splices the write into the trace, so a proven flow with both ends visible is
+  followed the whole way. Post meta and user meta stay unconnected per key, and
+  say so in KNOWN_LIMITATIONS.
+- Inherited-method call resolution. Method lookup was flat (`Class::method`
+  exactly as written), so a method inherited from a parent or brought in by a
   trait never resolved, and everything it returned was unaccounted for. A new
   project-wide `ClassHierarchy` index records who extends whom and who uses
   which trait, and lookup now follows PHP's own precedence: the class, its
@@ -48,7 +72,7 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Properties follow the same hierarchy. A typed or constructor-assigned
   property declared on the base class resolves through the subclass
   (`protected Acme_DB $db` on the parent, `$this->db->table_name()` in the
-  child), a `self`-typed property — and `$this->x = new self()` — resolves to
+  child), a `self`-typed property (and `$this->x = new self()`) resolves to
   its declaring class, and stored property taint is unioned across the chain,
   because the property is one storage slot on the instance whichever class's
   method wrote it. That last one fixes a false negative: `$this->value =
@@ -56,14 +80,14 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   invisible under flat per-class keys.
 - The hierarchy walk continues into a referenced tree, so `--include-path`
   pointed at WordPress core now makes `extends WP_List_Table` (and every other
-  core base class) resolve to core's body — inherited helpers are accounted
+  core base class) resolve to core's body: inherited helpers are accounted
   for, and taint through an inherited core method still lands as a finding in
   the scanned file.
 
 ### Fixed
 
 Four precision fixes from adjudicating every finding of a Gravity Forms scan
-(92 findings: 0 exploitable, 75 correct catches, 17 false positives — the fixes
+(92 findings: 0 exploitable, 75 correct catches, 17 false positives; the fixes
 below remove 10 of the 17).
 
 - `wp.xss.wrong-context-escape` findings now carry `kind: html`, not
@@ -77,15 +101,38 @@ below remove 10 of the 17).
   still reported as `wp.sqli.prepare-non-literal`.
 - `wp.xss.wrong-context-escape` no longer reports three escapes that cannot
   break out of any context:
-  - `absint()`/`intval()` anywhere — an integer carries no breakout, including
+  - `absint()`/`intval()` anywhere: an integer carries no breakout, including
     in a URL attribute where `esc_url()` would otherwise be required;
-  - `esc_html()` and its i18n variants in a *quoted* attribute — they run
+  - `esc_html()` and its i18n variants in a *quoted* attribute: they run
     `_wp_specialchars()` with `ENT_QUOTES`, so both quote characters are
     encoded (`wp_kses()` stays reportable: it passes markup through);
   - an escaper wrapping a hardcoded literal with no context-breaking
     character, e.g. `esc_html__( 'Open Date Picker' )` inside a script block.
   `esc_html()` in an *unquoted* attribute is still reported: it does not
   encode the space that ends an unquoted value.
+
+Further precision changes from corpus adjudication of the new attribute rule:
+
+- `wp.xss.wrong-context-escape` now judges a context held in a variable bound
+  exactly once in the file, so a template assembled a line above its `echo` is
+  read in both its `printf` and concat-then-echo forms. A name written more than
+  once stays unjudged rather than guessed, and positional `%2$s` specifiers are
+  mapped instead of ending the analysis.
+- `json_encode()` / `wp_json_encode()` is treated as escaping for a JavaScript
+  value position and nothing else: the rule reports it landing in HTML text, in a
+  quoted attribute (whose quotes the JSON's own quotes end) or in an event
+  handler, and credits `esc_attr( wp_json_encode( … ) )` and the pair inside a
+  `<script>` block.
+- A hook callback joined to a dispatcher only by a folded name prefix is analysed
+  for its sinks but no longer replaces `apply_filters()`'s own escape-voiding
+  semantics or its return, and a prefix matching more literal hooks than the
+  fanout cap joins nothing: it is a plugin's namespace, not a hook family.
+- `esc_sql()`'s quote check folds a non-literal query fragment (a `WHERE` clause
+  built one call away) to its single string, so the escaped value after it is
+  judged against the real quote state.
+- A `$_FILES` sub-key (`tmp_name`, PHP's own path) merged from branches is
+  followed back through the phi when every branch reaches a qualifying
+  superglobal, clearing a false traversal report on `fopen()`.
 
 ## [0.1.0] - 2026-08-30
 
@@ -126,7 +173,7 @@ The first tagged release. Everything below shipped in it.
 - Console, JSON and SARIF output.
 - Baselines and inline `wp-taint-ignore-next-line` suppressions.
 - `wp-taint.toml` project config with separate `paths`, `reference` and
-  `bootstrap` lists — the last for files whose `define()`s the scan should
+  `bootstrap` lists, the last for files whose `define()`s the scan should
   know, such as `ABSPATH`.
 - `get_template_directory()` and the constant chains themes hang off it fold to
   the theme a file is in, so a theme's own `require_once THEME_INC . '…'`
@@ -135,7 +182,7 @@ The first tagged release. Everything below shipped in it.
   `__DIR__ . "/views/$view"` called with a literal resolves the include.
 - `--include-path` for trees analysed for symbols but never reported on.
 - Output that nothing vouches for is reported by default, at `low`, seeded only
-  at entry points — a function nothing in the scan calls.
+  at entry points: a function nothing in the scan calls.
   `--no-unknown-provenance` asks the narrower "can I trace this to something
   dangerous" instead.
 - `--stored-taint-writes` to report unsanitised data written into options and

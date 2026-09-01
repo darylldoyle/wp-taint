@@ -2,7 +2,7 @@
 
 Written against **v0.8.1** (installed 2026-08-27). Every symbol below was verified
 by reading `vendor/ircmaxell/php-cfg/lib/PHPCfg/` and by running probe scripts
-against real PHP input. Do not trust the implementation plan's guessed names —
+against real PHP input. Do not trust the implementation plan's guessed names,
 trust this file, and re-verify it if the dependency is ever bumped.
 
 The plan predicted a `^0.2` constraint pulling `nikic/php-parser` v4. That is
@@ -19,7 +19,7 @@ $script    = $parser->parse($sourceCode, $fileName); // PHPCfg\Script
 
 `Parser::__construct` installs three AST visitors of its own (`NameResolver`,
 `LoopResolver`, `MagicStringResolver`). If you pass your own `NodeTraverser`,
-those are appended to it — so pass a traverser only when you want your visitors
+those are appended to it, so pass a traverser only when you want your visitors
 to run *before* php-cfg's name resolution.
 
 `Parser::parse()` throws `PhpParser\Error` on a syntax error. It never returns a
@@ -35,7 +35,7 @@ keep is the *name-resolved* one. That is what we want.
 | Symbol | Shape |
 | --- | --- |
 | `Script::$main` | `Func` for top-level code, named `{main}` |
-| `Script::$functions` | `list<Func>` — every function, method, closure and arrow function in the file, flat, integer-keyed |
+| `Script::$functions` | `list<Func>`, every function, method, closure and arrow function in the file, flat, integer-keyed |
 | `Func::$name` | short name for methods (`bar`), fully-qualified for functions (`My\Space\helper`), `{anonymous}#N` for closures |
 | `Func::$class` | `Operand\Literal` holding the FQCN, or `null` |
 | `Func::getScopedName()` | `Class::method` or the function name |
@@ -45,7 +45,7 @@ keep is the *name-resolved* one. That is what we want.
 | `Func::$callableOp` | the declaring `Op\Stmt\Function_` / `Op\Stmt\ClassMethod` / `Op\Expr\Closure` |
 | `Block::$children` | `list<Op>` in execution order |
 | `Block::$parents` | `list<Block>` predecessors |
-| `Block::$phi` | `list<Op\Phi>` — **phi nodes live on the block, not in `children`** |
+| `Block::$phi` | `list<Op\Phi>`, **phi nodes live on the block, not in `children`** |
 | `Block::$dead` | bool |
 
 ### `Func` carries no source position
@@ -69,7 +69,7 @@ so they are populated as a side effect of parsing. Propagation is a worklist ove
 `$usages`.
 
 `Op::isWriteVariable(string $propertyName)` reports whether a named property of an
-op is a write target — `Assign` returns true for `var` and `result`, most exprs
+op is a write target, `Assign` returns true for `var` and `result`, most exprs
 only for `result`.
 
 `Op::getVariableNames()` returns the property names holding operands, so an op's
@@ -84,7 +84,7 @@ After parsing, **almost every operand you meet is an `Operand\Temporary`.**
 | Class | Meaning |
 | --- | --- |
 | `Operand\Temporary` | An SSA value. `$original` is the `Operand\Variable` it was renamed from, or `null` for a pure intermediate |
-| `Operand\Variable` | `$name` is an `Operand` — a `Literal` for normal variables, something else for variable-variables |
+| `Operand\Variable` | `$name` is an `Operand`, a `Literal` for normal variables, something else for variable-variables |
 | `Operand\Literal` | `$value` is the PHP scalar |
 | `Operand\BoundVariable` | extends `Variable`; `global`/`static`/closure `use` bindings. `$byRef`, `$scope` (`SCOPE_*`) |
 | `Operand\NullOperand` | placeholder |
@@ -116,7 +116,7 @@ Block#4
 
 `Op\Phi::$vars` are the incoming operands, `Op\Phi::$result` the merged one. Phi
 nodes are **not** in `Block::$children`; iterate `Block::$phi` separately or they
-are silently skipped — which would be a silent false negative on every `if/else`.
+are silently skipped, which would be a silent false negative on every `if/else`.
 
 `Traverser` does not visit phi nodes at all. Our own block walk must.
 
@@ -165,7 +165,7 @@ $op->getFile();                       // filename, or 'unknown'
 $op->getAttribute('startFilePos');    // byte offset, or the default you pass
 ```
 
-Columns are **not** provided — derive them from `startFilePos` against the file
+Columns are **not** provided, derive them from `startFilePos` against the file
 source. Synthetic ops (the implicit `Terminal_Return` closing every function)
 have **no attributes at all**: `getLine()` is `-1` and `startFilePos` is absent.
 Always guard, and omit the caret line rather than guessing a column.
@@ -206,8 +206,8 @@ Collects `getClasses()`, `getInterfaces()`, `getTraits()`, `getMethods()`,
 ### `Visitor\CallFinder`
 
 `getFuncCalls()`, `getNsFuncCalls()`, `getMethodCalls()`, `getStaticCalls()`,
-`getNewCalls()`. Note the return shape is **`list<array{0: Op, 1: Func}>`** — a
-tuple of call op and enclosing function — despite the docblocks claiming
+`getNewCalls()`. Note the return shape is **`list<array{0: Op, 1: Func}>`**, a
+tuple of call op and enclosing function, despite the docblocks claiming
 `Op\Expr\FuncCall[]`. The docblocks are wrong; the code is right.
 
 ### `Printer\Text` and `Printer\GraphViz`
@@ -225,7 +225,7 @@ php-cfg requires, and emits dot source via `printScript()`.
 4. **`CallFinder` returns tuples**, not ops.
 5. **`Operand::$ops` is writers, `$usages` is readers.** The names read backwards
    the first time.
-6. **`use PhpCfg\Operand;`** — several op files import the namespace with the
+6. **`use PhpCfg\Operand;`**, several op files import the namespace with the
    wrong case (`PhpCfg` vs `PHPCfg`). It works because PHP namespaces are
    case-insensitive, but static analysers may flag it. It is upstream's bug, not
    ours.
@@ -242,7 +242,7 @@ false negative.
 | --- | --- |
 | `"a $b c"`, heredoc | `Op\Expr\ConcatList` |
 | `'a' . $b` | `Op\Expr\BinaryOp\Concat` |
-| `$a ?? $b` | `Op\Expr\BinaryOp\Coalesce` — a `BinaryOp`, so both sides propagate |
+| `$a ?? $b` | `Op\Expr\BinaryOp\Coalesce`, a `BinaryOp`, so both sides propagate |
 | `` `cmd $x` `` | a **`shell_exec()` `FuncCall`**, not a distinct backtick op |
 | `(int) $x` | `Op\Expr\Cast\Int_` |
 | `foreach ($a as $k => $v)` | `Iterator\Reset`, `Iterator\Valid`, `Iterator\Key`, `Iterator\Value`, each reading the same iterable operand |
@@ -254,7 +254,7 @@ result temporary, not the base operand**, and a later read of the same element
 produces a *different* temporary with no SSA link to the write. Element and
 property taint therefore have to be modelled explicitly:
 
-- Array writes propagate to the **base** operand — the whole array is tainted,
+- Array writes propagate to the **base** operand, the whole array is tainted,
   which is the over-approximation recorded in `KNOWN_LIMITATIONS.md`. This works
   because the base operand (`Var#19<$arr>`) is shared between the writing fetch
   and every later reading fetch.

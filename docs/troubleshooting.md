@@ -36,9 +36,12 @@ at something enormous. See
 **Symptom.**
 
 ```
-warning: Taint fixed point did not converge within 64 iterations.
+warning: Taint fixed point did not converge within 64 iterations. Results for this function may be incomplete.
   includes/classes/PostCardHelper.php  Acme\PostCardHelper::__construct()
 ```
+
+A scan-wide variant, `Interprocedural summaries did not converge within N
+rounds`, has the same cause and the same remedy.
 
 **Cause.** Two operations disagreeing about one value, so the analysis never
 settles. Results for that function are incomplete: a real finding inside it may
