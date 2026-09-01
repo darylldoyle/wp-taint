@@ -111,6 +111,7 @@ final class WrongContextEscape implements StructuralRule
     public function analyse(ParsedFile $file, Registry $registry, RuleContext $context): array
     {
         $findings = [];
+        $this->bindings = $this->singleBindings($file);
 
         foreach ($this->outputs($file) as [$node, $parts]) {
             $mismatch = $this->firstMismatch($parts);
@@ -187,14 +188,87 @@ final class WrongContextEscape implements StructuralRule
     }
 
     /**
+     * The one expression each variable name is bound to in this file, when it
+     * is bound exactly once.
+     *
+     * Any second write — another assignment, `.=`, a reference — or any other
+     * construct that binds the name (a parameter, a `foreach`, a closure
+     * `use`, destructuring, `global`, `static`, `catch`) drops the name from
+     * the map. File-wide rather than scope-aware on purpose: a name reused
+     * across two functions disqualifies itself, which only ever costs an
+     * opportunity, never invents a context that is not there.
+     *
+     * @var array<string, Node\Expr>
+     */
+    private array $bindings = [];
+
+    /**
+     * @return array<string, Node\Expr>
+     */
+    private function singleBindings(ParsedFile $file): array
+    {
+        $assigned = [];
+        $disqualified = [];
+
+        foreach (AstHelper::findAll($file->ast(), Node\Expr\Assign::class) as $assign) {
+            if (! $assign instanceof Node\Expr\Assign) {
+                continue;
+            }
+
+            if ($assign->var instanceof Node\Expr\Variable && is_string($assign->var->name)) {
+                $name = $assign->var->name;
+                isset($assigned[$name]) ? $disqualified[$name] = true : $assigned[$name] = $assign->expr;
+
+                continue;
+            }
+
+            // Destructuring binds every name inside it.
+            foreach (AstHelper::findAll([$assign->var], Node\Expr\Variable::class) as $variable) {
+                if ($variable instanceof Node\Expr\Variable && is_string($variable->name)) {
+                    $disqualified[$variable->name] = true;
+                }
+            }
+        }
+
+        foreach (
+            [
+            Node\Expr\AssignOp::class,
+            Node\Expr\AssignRef::class,
+            Node\Param::class,
+            Node\Stmt\Foreach_::class,
+            Node\ClosureUse::class,
+            Node\Stmt\Global_::class,
+            Node\Stmt\Static_::class,
+            Node\Stmt\Catch_::class,
+            ] as $construct
+        ) {
+            foreach (AstHelper::findAll($file->ast(), $construct) as $node) {
+                foreach (AstHelper::findAll([$node], Node\Expr\Variable::class) as $variable) {
+                    if ($variable instanceof Node\Expr\Variable && is_string($variable->name)) {
+                        $disqualified[$variable->name] = true;
+                    }
+                }
+            }
+        }
+
+        return array_diff_key($assigned, $disqualified);
+    }
+
+    /**
      * A concatenation, flattened left to right into text and escaper calls.
+     *
+     * A variable bound exactly once in the file folds to what it was bound to,
+     * so a context assembled a line earlier is still judged:
+     *
+     *     $html = '<a href="' . esc_attr( $url ) . '">go</a>';
+     *     echo $html;
      *
      * @return list<array{text: ?string, escaper: ?string, literal: bool}>
      */
-    private function flatten(Node\Expr $expr): array
+    private function flatten(Node\Expr $expr, int $depth = 0): array
     {
         if ($expr instanceof Node\Expr\BinaryOp\Concat) {
-            return [...$this->flatten($expr->left), ...$this->flatten($expr->right)];
+            return [...$this->flatten($expr->left, $depth), ...$this->flatten($expr->right, $depth)];
         }
 
         if ($expr instanceof Node\Scalar\String_) {
@@ -208,11 +282,19 @@ final class WrongContextEscape implements StructuralRule
                 $parts = [...$parts, ...(
                     $part instanceof Node\InterpolatedStringPart
                         ? [['text' => $part->value, 'escaper' => null, 'literal' => false]]
-                        : $this->flatten($part)
+                        : $this->flatten($part, $depth)
                 )];
             }
 
             return $parts;
+        }
+
+        if ($expr instanceof Node\Expr\Variable && is_string($expr->name) && $depth < 3) {
+            $bound = $this->bindings[$expr->name] ?? null;
+
+            if ($bound !== null) {
+                return $this->flatten($bound, $depth + 1);
+            }
         }
 
         $escaper = $expr instanceof Node\Expr\FuncCall ? AstHelper::functionName($expr) : null;
@@ -224,9 +306,12 @@ final class WrongContextEscape implements StructuralRule
      * `printf( '<a href="%s">', esc_attr( $url ) )`: the format supplies the
      * context and the arguments supply the escapers.
      *
-     * Only `%s` is mapped, positionally. A numeric or padded specifier cannot
-     * carry a breakout, and `%1$s`-style ordering is left alone rather than
-     * guessed at.
+     * Only string specifiers are mapped — a numeric or padded one cannot carry
+     * a breakout. `%s` maps sequentially and `%1$s` maps to its named
+     * argument; a format mixing the two spellings is left alone, because PHP's
+     * sequencing rules for the mix are not something to guess at. A format
+     * held in a once-bound variable folds first, so
+     * `$tpl = '<a href="%s">'; printf( $tpl, esc_attr( $u ) )` is judged.
      *
      * @return list<array{text: ?string, escaper: ?string, literal: bool}>
      */
@@ -235,28 +320,51 @@ final class WrongContextEscape implements StructuralRule
         $arguments = $call->getArgs();
         $format = ($arguments[0]->value ?? null);
 
+        if ($format instanceof Node\Expr\Variable && is_string($format->name)) {
+            $format = $this->bindings[$format->name] ?? null;
+        }
+
         if (! $format instanceof Node\Scalar\String_) {
             return [];
         }
 
-        if (str_contains($format->value, '%1$') || str_contains($format->value, '%2$')) {
+        $chunks = preg_split('/(%(?:\d+\$)?s)/', $format->value, -1, PREG_SPLIT_DELIM_CAPTURE);
+        $chunks = $chunks === false ? [] : $chunks;
+
+        $bare = false;
+        $positional = false;
+
+        foreach ($chunks as $chunk) {
+            if ($chunk === '%s') {
+                $bare = true;
+            } elseif (preg_match('/^%\d+\$s$/', $chunk) === 1) {
+                $positional = true;
+            }
+        }
+
+        if ($bare && $positional) {
             return [];
         }
 
         $parts = [];
         $index = 1;
 
-        $chunks = preg_split('/(%s)/', $format->value, -1, PREG_SPLIT_DELIM_CAPTURE);
+        foreach ($chunks as $chunk) {
+            $argumentIndex = null;
 
-        foreach ($chunks === false ? [] : $chunks as $chunk) {
-            if ($chunk !== '%s') {
+            if ($chunk === '%s') {
+                $argumentIndex = $index++;
+            } elseif (preg_match('/^%(\d+)\$s$/', $chunk, $match) === 1) {
+                $argumentIndex = (int) $match[1];
+            }
+
+            if ($argumentIndex === null) {
                 $parts[] = ['text' => $chunk, 'escaper' => null, 'literal' => false];
 
                 continue;
             }
 
-            $argument = $arguments[$index]->value ?? null;
-            $index++;
+            $argument = $arguments[$argumentIndex]->value ?? null;
             $parts[] = [
                 'text' => null,
                 'escaper' => $argument instanceof Node\Expr\FuncCall ? AstHelper::functionName($argument) : null,

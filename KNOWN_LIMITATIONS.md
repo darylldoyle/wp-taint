@@ -30,7 +30,7 @@ output rather than in the findings.
 | [Object properties are per class, not per instance](#object-properties-are-per-class-not-per-instance) | Over-reports |
 | [A guard on a container is not followed](#a-guard-clause-is-followed-a-guard-on-a-container-is-not) | Over-reports |
 | [A value of unknown origin, with `--no-unknown-provenance`](#unknown-provenance-is-reported-by-default) | Misses |
-| [A context built from a variable is not judged](#escaping-is-judged-against-its-context-but-not-a-computed-one) | Misses |
+| [A context in a rebound or parameter-fed variable is not judged](#escaping-is-judged-against-its-context-but-not-a-computed-one) | Misses |
 | [`wp_update_comment()` is listed as returning its filtered argument](#escaping-must-survive-to-the-point-of-output) | Over-reports |
 | [Stored `unserialize()` needs a precondition the engine cannot check](#stored-object-injection-is-a-separate-lower-severity) | Neither |
 | [`esc_sql()` outside a readable quote position](#esc_sql-is-only-credited-inside-quotes) | Misses |
@@ -248,10 +248,19 @@ body, and attribute rules apply to it. Counting the bare `<script` as opening a
 body asked for JavaScript escaping on an id and a URL, which would be wrong in
 turn — `esc_js()` on a URL does not stop `javascript:`.
 
-**What it will not judge.** A context built from a variable, a `printf` with
-positional `%1$s` specifiers, or a call it does not recognise as an escaper.
-`wp_get_referer()` is a source, and accusing it of being the wrong escaper both
-misnames the problem and duplicates the rule that already has it.
+**What it judges beyond the inline spelling.** A context held in a variable
+bound exactly once in the file folds to its binding, so `$tpl = '<a
+href="%s">'; printf( $tpl, esc_attr( $u ) )` and the concat-then-echo spelling
+are both judged. Positional `%1$s` specifiers map to their named argument —
+there is nothing to guess.
+
+**What it will not judge.** A variable bound more than once, or bound by
+anything other than a plain assignment (a parameter, a `foreach`, a closure
+`use`) — one name, one binding, or the rule stays quiet rather than pick. A
+format mixing bare `%s` with positional specifiers, whose sequencing is PHP
+trivia. And a call it does not recognise as an escaper: `wp_get_referer()` is
+a source, and accusing it of being the wrong escaper both misnames the problem
+and duplicates the rule that already has it.
 
 **`esc_url_raw()` is judged by the quote character.** Both it and `esc_url()`
 run the same filter; the whole difference is the display-context block that
