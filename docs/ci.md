@@ -22,6 +22,11 @@ name: wp-taint
 on:
   pull_request:
 
+# upload-sarif needs security-events: write to post findings on the PR.
+permissions:
+  contents: read
+  security-events: write
+
 jobs:
   taint:
     runs-on: ubuntu-latest
@@ -71,10 +76,11 @@ unnoticed.
 
 ## Choosing the threshold
 
-`--fail-on=high` fails on `high` and `critical`, and lets `medium` and `low`
-through as advisory — they still appear in the SARIF. That is the setting most
-teams want: the `low` band is mostly the escape-on-output obligation, which is
-worth seeing but not worth blocking a merge on.
+`--fail-on=high` (the default) fails on `high` and `critical`, and lets `medium`
+and `low` through as advisory: they still appear in the SARIF, because
+`--min-severity` defaults to `low`. That is the setting most teams want. The
+`low` band is mostly the escape-on-output obligation, worth seeing but not worth
+blocking a merge on.
 
 Use `--fail-on=critical` to block only on the most severe, or
 `--fail-on=medium` to hold a higher bar.
@@ -99,6 +105,6 @@ The paths, references, excludes and job count all come from the config.
 
 ## Related
 
-- [CLI reference](cli-reference.md) — every option
-- [Scanning a WordPress project](scanning-a-wordpress-project.md) — the config file
-- [Getting started](getting-started.md) — `init`, baselines, suppressions
+- [CLI reference](cli-reference.md): every option
+- [Scanning a WordPress project](scanning-a-wordpress-project.md): the config file
+- [Getting started](getting-started.md): `init`, baselines, suppressions

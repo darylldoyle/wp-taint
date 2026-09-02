@@ -168,18 +168,41 @@ final class InterproceduralResolver
             $visible->put($summary);
         }
 
-        foreach ($ordered as $index => $context) {
+        // Grouped by key, so a function declared twice — a conditional shim, a
+        // vendored copy — publishes one summary carrying the worst of both
+        // bodies, rather than whichever copy happened to be analysed last.
+        // First-occurrence order keeps the leaves-first ordering and the shard
+        // split deterministic.
+        $groups = [];
+
+        foreach ($ordered as $context) {
+            $groups[$context->key][] = $context;
+        }
+
+        $index = -1;
+
+        foreach ($groups as $group) {
+            $index++;
+
             if ($index % $shardCount !== $shard) {
                 continue;
             }
 
-            $summary = $this->extractor->extract($context, $visible, $roundProperties, $roundScopes);
+            $summary = null;
+
+            foreach ($group as $context) {
+                $extracted = $this->extractor->extract($context, $visible, $roundProperties, $roundScopes);
+                $summary = $summary === null ? $extracted : $summary->union($extracted);
+            }
+
             $visible->put($summary);
             $produced[] = $summary;
 
-            // A pass with no parameter seeded, purely so property writes in the
-            // body land in the map. Findings are discarded.
-            $this->analyzer->analyze($context, $visible, $roundProperties, $roundScopes, null, false);
+            foreach ($group as $context) {
+                // A pass with no parameter seeded, purely so property writes in
+                // the body land in the map. Findings are discarded.
+                $this->analyzer->analyze($context, $visible, $roundProperties, $roundScopes, null, false);
+            }
         }
 
         return ['summaries' => $produced, 'properties' => $roundProperties, 'scopes' => $roundScopes];

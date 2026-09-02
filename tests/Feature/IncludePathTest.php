@@ -140,3 +140,66 @@ it('reads a referenced tree even when it is called vendor', function (): void {
 
     expect($result->referenceFiles)->toBe(1);
 });
+
+it('resolves a method inherited from a class in the referenced tree', function (): void {
+    // The `extends WP_List_Table` shape: the parent lives in the referenced
+    // core, the subclass in the scanned plugin. The hierarchy walk continues
+    // into reference-parsed classes, so the inherited table helper resolves and
+    // its `$wpdb->prefix` return is accounted for — no unprepared-query noise.
+    $result = scanWithReferences([
+        'app/table.php' => <<<'PHP'
+            <?php
+            class Acme_Table extends Acme_Core_Table {
+            }
+
+            function acme_rows() {
+                global $wpdb;
+                $t = Acme_Table::table_name();
+                return $wpdb->get_results("SELECT * FROM {$t}");
+            }
+            PHP,
+        'core/class-core-table.php' => <<<'PHP'
+            <?php
+            class Acme_Core_Table {
+                public static function table_name() {
+                    global $wpdb;
+                    return $wpdb->prefix . 'core_rows';
+                }
+            }
+            PHP,
+    ], ['core']);
+
+    expect($result->findings)->toBeEmpty();
+});
+
+it('carries taint through a method inherited from the referenced tree', function (): void {
+    // The other direction: resolution into the reference tree must not become
+    // suppression. The parent's body returns request data, the subclass call in
+    // scanned code echoes it, and the finding lands in the scanned file.
+    $result = scanWithReferences([
+        'app/widget.php' => <<<'PHP'
+            <?php
+            class Acme_Widget extends Acme_Core_Widget {
+            }
+
+            function acme_show() {
+                $w = new Acme_Widget();
+                echo $w->raw_input();
+            }
+            PHP,
+        'core/class-core-widget.php' => <<<'PHP'
+            <?php
+            class Acme_Core_Widget {
+                public function raw_input() {
+                    return $_GET['q'];
+                }
+            }
+            PHP,
+    ], ['core']);
+
+    $findings = $result->findings->all();
+
+    expect($findings)->toHaveCount(1);
+    expect($findings[0]->ruleId)->toBe('wp.xss.unescaped-output');
+    expect($findings[0]->file)->toContain('widget.php');
+});

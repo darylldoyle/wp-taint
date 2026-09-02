@@ -90,7 +90,67 @@ final class CallableResolver
             $targets[] = $invokable->withArguments($arguments);
         }
 
+        $stored = $this->propertyCallableBehind($callable, $arguments, $context, $types, $receivers);
+
+        if ($stored !== null) {
+            $targets[] = $stored;
+        }
+
         return self::unique($targets);
+    }
+
+    /**
+     * A callable read from a property whose every readable write agrees.
+     *
+     * `call_user_func( $this->handler, $value )` where the constructor set
+     * `$this->handler = array( $this, 'render' )` — the operand is a property
+     * fetch nothing in this body defines, and the cross-method answer lives in
+     * the {@see DeclaredTypes} callable index, inheritance included.
+     *
+     * @param list<Operand> $arguments
+     */
+    private function propertyCallableBehind(
+        Operand $operand,
+        array $arguments,
+        FunctionContext $context,
+        ClassTypeMap $types,
+        ReceiverResolver $receivers,
+    ): ?CallTarget {
+        $definition = $this->definitionThroughAssignments($operand);
+
+        if (! $definition instanceof Op\Expr\PropertyFetch) {
+            return null;
+        }
+
+        $property = OperandHelper::literalString($definition->name);
+
+        if ($property === null) {
+            return null;
+        }
+
+        $owner = $receivers->classOf($definition->var, $context, $types);
+        $spec = $this->functions->declaredTypes()->propertyCallableOf($owner, $property);
+
+        return $spec === null ? null : $this->fromString($spec, $arguments);
+    }
+
+    /**
+     * The op behind an operand, seen through plain assignments — the same walk
+     * {@see closureBehind} does, for definitions that are not callable ops.
+     */
+    private function definitionThroughAssignments(Operand $operand, int $depth = 0): ?Op
+    {
+        if ($depth > 8) {
+            return null;
+        }
+
+        $definition = OperandHelper::definingOp($operand);
+
+        if ($definition instanceof Op\Expr\Assign) {
+            return $this->definitionThroughAssignments($definition->expr, $depth + 1);
+        }
+
+        return $definition;
     }
 
     /**
@@ -159,13 +219,32 @@ final class CallableResolver
      */
     private function target(array $arguments, Matcher $matcher, string $key, string $display): ?CallTarget
     {
-        $known = $this->functions->has($key);
+        $userKey = $this->userKeyFor($key);
 
-        if (! $known && ! $this->registry->knows($matcher)) {
+        if ($userKey === null && ! $this->registry->knows($matcher)) {
             return null;
         }
 
-        return CallTarget::resolved($arguments, $matcher, $known ? strtolower($key) : null, $display);
+        return CallTarget::resolved($arguments, $matcher, $userKey, $display);
+    }
+
+    /**
+     * The body a callable key names, following inheritance for a method key.
+     *
+     * `array( $this, 'render' )` where `render()` lives on the parent class or
+     * comes in through a trait is the everyday WordPress hook-callback shape —
+     * an admin page class extending a shared base and registering the base's
+     * handler.
+     */
+    private function userKeyFor(string $key): ?string
+    {
+        $parts = explode('::', $key, 2);
+
+        if (count($parts) === 2 && $parts[0] !== '' && $parts[1] !== '') {
+            return $this->functions->resolveMethodKey($parts[0], $parts[1]);
+        }
+
+        return $this->functions->has($key) ? strtolower($key) : null;
     }
 
     /**
@@ -200,7 +279,12 @@ final class CallableResolver
             }
 
             if (in_array(strtolower($class), ['self', 'static', 'parent'], true)) {
-                $class = $context->className;
+                // `parent` starts one level up when the parent is known — see
+                // the static-call resolver for why — and falls back to the
+                // calling class when it is not.
+                $class = strtolower($class) === 'parent' && $context->className !== null
+                    ? ($this->functions->classHierarchy()->parentOf($context->className) ?? $context->className)
+                    : $context->className;
 
                 if ($class === null) {
                     continue;
@@ -257,15 +341,16 @@ final class CallableResolver
         ReceiverResolver $receivers,
     ): ?CallTarget {
         $class = $receivers->classOf($operand, $context, $types);
+        $key = $class === null ? null : $this->functions->resolveMethodKey($class, '__invoke');
 
-        if ($class === null || ! $this->functions->has($class . '::__invoke')) {
+        if ($class === null || $key === null) {
             return null;
         }
 
         return CallTarget::resolved(
             [],
             Matcher::method($class, '__invoke'),
-            strtolower($class . '::__invoke'),
+            $key,
             $class . '::__invoke()',
         );
     }

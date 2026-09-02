@@ -12,6 +12,6 @@ declare(strict_types=1);
 namespace Acme\Fixtures;
 
 function acme_render_form( string $admin_url ): void {
-	echo "<form name='acme' action='" . esc_url_raw( $admin_url ) . "' method='post'>"; // wp-taint-expect wp.xss.wrong-context-escape authz
+	echo "<form name='acme' action='" . esc_url_raw( $admin_url ) . "' method='post'>"; // wp-taint-expect wp.xss.wrong-context-escape html
 	echo '</form>';
 }

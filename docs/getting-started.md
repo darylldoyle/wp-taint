@@ -16,15 +16,23 @@ works.
 
 ## Set up a WordPress project
 
-Point `init` at your `wp-content` and it detects the themes and plugins, asks
-which you wrote, and writes a `wp-taint.toml`:
+Point `init` at your `wp-content` and it detects the themes and plugins, then
+writes a `wp-taint.toml`. What it writes depends on how you run it:
+
+```mermaid
+flowchart TD
+    A["wp-taint init"] --> B{How is it run?}
+    B -->|Interactive terminal| C["Asks which directories you wrote,<br>writes those as scan paths"]
+    B -->|"--all"| D["Every detected directory a scan path"]
+    B -->|"Non-interactive (CI, piped)"| E["Template, every directory commented out"]
+```
 
 ```bash
 vendor/bin/wp-taint init /path/to/wp-content
 ```
 
-Run non-interactively (in CI, or piped) and it writes a template instead, with
-every directory commented out for you to choose. Then scan with no arguments:
+In CI or piped, it writes the template rather than hanging on the prompt.
+Uncomment the directories you wrote, then scan with no arguments:
 
 ```bash
 vendor/bin/wp-taint scan

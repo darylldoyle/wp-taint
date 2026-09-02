@@ -24,6 +24,7 @@
 | [How it works](how-it-works.md) | Sources, sinks, taint kinds, and the decisions behind them |
 | [Benchmark](benchmark.md) | Scored against Semgrep and Psalm on a shared suite |
 | [Tuning log](tuning.md) | Every false positive class found on real plugins, and what fixed it |
+| [Triage audit](triage/wp.authz.rest-public-write.md) | Per-rule false-positive verdicts on the corpus, one rule at a time |
 
 ## Contributing
 

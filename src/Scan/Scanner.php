@@ -62,6 +62,9 @@ final class Scanner
     private const RULE_PRECEDENCE = [
         'wp.sqli.unprepared-query' => [],
         'wp.sqli.wpdb-query' => ['wp.sqli.prepare-non-literal'],
+        // Both say "this escaper does not protect this attribute"; the traced
+        // finding also says where the value came from, so it wins the line.
+        'wp.xss.wrong-context-escape' => ['wp.xss.unescaped-attribute'],
     ];
 
     public function __construct(
@@ -223,7 +226,9 @@ final class Scanner
         $hooks = (new HookGraphBuilder($callables, $values, $receivers))->build($contexts);
         $callGraph = (new CallGraphBuilder($this->registry, $functions, $values, $receivers, $callables, $hooks))
             ->build($contexts);
-        $ruleContext = $ruleContext->withGraphs($callGraph, $hooks)->withDeclaredTypes($functions->declaredTypes());
+        $ruleContext = $ruleContext->withGraphs($callGraph, $hooks)
+            ->withDeclaredTypes($functions->declaredTypes())
+            ->withFunctionTable($functions);
 
         // A registration we could not place is a hook edge we know exists and
         // cannot draw. Counted next to the other coverage gaps rather than
@@ -299,7 +304,7 @@ final class Scanner
         // only now exists — gives the verdict. A callback the scan never
         // summarised drops the finding, because absence proves nothing.
         foreach ($ruleContext->deferredFindings() as $deferred) {
-            $summary = $resolution['summaries']->get($deferred['callbackKey']);
+            $summary = $resolution['summaries']->get($ruleContext->canonicalCallbackKey($deferred['callbackKey']));
 
             if ($summary === null) {
                 continue;

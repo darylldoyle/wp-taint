@@ -52,24 +52,27 @@ Every existing option fails on WordPress in a specific way.
 | PHPStan | No dataflow engine. Taint would have to be rebuilt on collectors, fighting per-file caching and parallelism. |
 | WPCS sniffs | Encode the right catalogue of escapers and sinks, but are token-based and intraprocedural, so they are noisy and miss anything crossing a function boundary. |
 
-wp-taint takes the SSA/CFG approach — which gives interprocedural taint cheaply
-— and the WPCS catalogue, which is the expensive, already-curated asset.
+wp-taint takes the SSA/CFG approach (which gives interprocedural taint cheaply)
+and the WPCS catalogue, which is the expensive, already-curated asset.
 
 ## What it finds
 
 **Injection**, via dataflow from source to sink:
 
 - Reflected and stored XSS, including across one or more function boundaries
-- Escaping undone before output — a value escaped and then passed through a
+- Escaping undone before output, a value escaped and then passed through a
   filter, or through one of the 569 core functions that return a filtered value
 - The wrong escaper for the context: `esc_html()` inside `<script>`, `esc_attr()`
   on an `href`, any escaper in an unquoted attribute
+- Input sanitising mistaken for output escaping: `sanitize_text_field()` strips
+  tags but leaves both quote characters, so a value it "cleaned" still ends a
+  quoted attribute and turns the rest of the payload into `onmouseover=`
 - CSV formula injection, where no HTML escaper helps and the fix is a prefix
 - SQL injection, including `$wpdb->prepare()` called with a non-literal format
   string, and `esc_sql()` used where there are no quotes for it to escape
 - Local file inclusion, arbitrary file read and write
 - Command injection and `eval()`
-- PHP object injection through `unserialize()`, including from stored data —
+- PHP object injection through `unserialize()`, including from stored data,
   reported separately, because that one needs an attacker who can write the
   option or meta first
 - Open redirects and HTTP header injection
@@ -79,7 +82,11 @@ Calls are followed through the value that names them: a callable in a variable,
 `add_filter()` that reads `$_GET` taints the filter's result at every
 `apply_filters()` site; one that escapes is credited.
 
-Writes that go back through an argument are followed too — `preg_match()` into
+Method calls resolve through the class hierarchy, so a method inherited from a
+parent or pulled in from a trait is followed to the body PHP would actually run,
+and `parent::` dispatches past the override to the parent's.
+
+Writes that go back through an argument are followed too, `preg_match()` into
 `$matches`, `parse_str()` into an array, a user function's `&$out` parameter, and
 the aliases created by `$a = &$b` and by-reference `foreach`.
 
@@ -95,12 +102,16 @@ structurally cannot find:
 - `permission_callback => '__return_true'` on a route that writes
 - `permission_callback` that resolves but reaches no authorization check
 - `wp_ajax_*` handlers with no capability check and no nonce check
-- `admin_post_*` handlers with no capability check — a nonce is not one
+- `admin_post_*` handlers with no capability check, a nonce is not one
 - A guard that redirects without `exit`, so the code it guards runs anyway
 - A nonce created or verified with no action, so it is the shared `-1` token
 - A nonce check behind `isset()` on the same parameter, which omitting it skips
 - `update_option()` whose option *name* comes from the request, which is
   privilege escalation rather than stored data
+- A request-chosen post, user, term or comment id reaching a delete or update
+  when the capability check guards the action but not the row: the classic
+  WordPress IDOR, where the check is present and correctly named but scoped to a
+  role rather than that object
 
 These walk the call graph rather than matching names, so a check delegated to a
 helper counts and a helper merely *named* like a check does not. A nonce is
@@ -188,7 +199,7 @@ includes/class-report-renderer.php:58
 ```
 
 The important case is the third one, where the engine says a path was
-*abandoned* — a call it could not resolve — rather than proved clean.
+*abandoned*, a call it could not resolve, rather than proved clean.
 `--dynamic-calls=tainted` then gives an upper bound on what might be missing,
 which is what you want when auditing the auditor. `--dynamic-calls=clean` is the
 other end: no assumptions, and a documented false negative wherever the engine
@@ -236,10 +247,15 @@ A project-local `wp-taint.toml` in the scan root is loaded last and can add or
 override anything. Unknown keys are a hard error, not a warning: a typo in a
 security catalogue silently creates false negatives.
 
-Stored sources — `get_option()`, `get_post_meta()` and friends — are on by
+Stored sources, `get_option()`, `get_post_meta()` and friends, are on by
 default, because stored XSS is most of the WordPress CVE population.
 `--no-stored-taint` turns them off if you want to triage reflected issues
 first.
+
+A value written to an option and read back from the same key connects, so a
+second-order flow with both ends in the scan (`update_option( 'k', $_POST['x'] )`
+here, `echo get_option( 'k' )` there) is followed the whole way rather than left
+at "an option might hold anything". Post and user meta stay unconnected per key.
 
 Read the resolved catalogue with `wp-taint registry:dump`.
 
@@ -310,8 +326,8 @@ variants, cross-file and cross-plugin. **Zero findings on all 36 safe variants**
 which is the strongest single result here: independent code, written correctly by
 someone else, and the tool says nothing about any of it.
 
-They cover semantics the other benchmarks do not — context correctness, escape
-invalidation, weak sanitisers posing as real ones — where the corpus covers
+They cover semantics the other benchmarks do not, context correctness, escape
+invalidation, weak sanitisers posing as real ones, where the corpus covers
 volume and the CVE set covers incidents.
 
 ## Scored against real CVEs, both sides of the fix
@@ -326,37 +342,45 @@ composer cve:fetch
 composer cve:check
 ```
 
-**9 attributed · 18 reported but not attributable · 20 silent.**
+**2 confirmed · 4 attributed · 20 reported · 20 silent**, across the 46 pairs
+close enough to score (one CVE's vulnerable and fixed releases are five major
+versions apart, and a diff across that says nothing).
 
-Three outcomes rather than two, because plenty of real fixes do not remove the
-flow. CVE-2022-2593 in Better Search Replace is SQL injection through
-unvalidated table names; we report `'DESCRIBE ' . $table` in both releases, and
-the fix is `array_map( 'trim', ... )`. Scoring that a miss understates the
-engine as badly as scoring it a hit would flatter it — so it is counted apart
-and never added to the headline.
+Four outcomes rather than two, because plenty of real fixes do not remove the
+flow. **Confirmed** means the findings vanish at the fix *and* the fixed
+release comes back clean; **attributed** means findings vanish while others
+remain, which a refactor in the fix release also produces. **Reported** is a
+finding on the vulnerable release that survives the fix, CVE-2022-2593 in
+Better Search Replace is SQL injection through unvalidated table names; we
+report `'DESCRIBE ' . $table` in both releases, and the fix is
+`array_map( 'trim', ... )`. Scoring that a miss understates the engine as
+badly as scoring it a hit would flatter it, so it is counted apart and never
+added to the headline.
 
 Where it fails, by class:
 
-| | attributed | reported | silent |
-| --- | --- | --- | --- |
-| Code injection (CWE-94) | 0 | 1 | **4** |
-| Deserialization (CWE-502) | 1 | 0 | 2 |
-| Open redirect (CWE-601) | 0 | 0 | **3** |
-| XSS (CWE-79) | 3 | 6 | 3 |
-| Authorization (CWE-862/863) | 2 | 5 | 5 |
-| Path traversal (CWE-22) | 1 | 4 | 0 |
-| SQL injection (CWE-89) | 1 | 2 | 2 |
-| SSRF (CWE-918) | 1 | 0 | 1 |
+| | confirmed | attributed | reported | silent |
+| --- | --- | --- | --- | --- |
+| Code injection (CWE-94) | 0 | 0 | 1 | **4** |
+| Deserialization (CWE-502) | 1 | 0 | 0 | 2 |
+| Open redirect (CWE-601) | 0 | 0 | 1 | 2 |
+| XSS (CWE-79) | 0 | 2 | 7 | 3 |
+| Authorization (CWE-862/863) | 0 | 2 | 5 | 5 |
+| Path traversal (CWE-22) | 0 | 0 | 3 | 1 |
+| SQL injection (CWE-89) | 1 | 0 | 2 | 2 |
+| SSRF (CWE-918) | 0 | 0 | 1 | 1 |
 
 Deserialization was a zero until this benchmark said so: stored data did not
 carry object-injection taint, on reasoning that holds for filesystem and URL
 sinks and not for this one. Fixing it caught CVE-2023-1196 in Advanced Custom
-Fields.
+Fields, now a confirmed hit, because the false positives that used to linger
+on the fixed release were themselves fixed and the release came back clean.
 
 The CWE-94 cases are plugins whose purpose is executing admin-supplied code, so
-those CVEs are privilege-boundary bugs wearing a code-injection label, and the
-open-redirect three turned out not to be `wp_redirect()` flows at all. Both are
-worth knowing before reading the column as a verdict on the rules.
+those CVEs are privilege-boundary bugs wearing a code-injection label. Two of
+the three open redirects still are not `wp_redirect()` flows the analysis can
+see; the third is now reported. Both are worth knowing before reading the
+column as a verdict on the rules.
 
 **"Attributed" is evidence, not proof.** A finding can vanish because the fix
 refactored the line rather than because it was the bug. This is the sharpest
@@ -375,7 +399,7 @@ in 2013 to teach plugin authors what their code does wrong, and a
 enumerating every flaw in it. Somebody else's test, somebody else's answer key,
 written for a purpose unrelated to this tool.
 
-**It finds all 12.** Three of them — the CSRF and control-flow bugs — the taint
+**It finds all 12.** Three of them (the CSRF and control-flow bugs) the taint
 engine cannot see at all, and are caught by structural rules; filing them under
 "not a dataflow problem" would have been the easy way out.
 
@@ -402,17 +426,17 @@ project-specific tuning for anyone:
 
 **Quote the second row, not the first.** 37 of these fixtures were added while
 fixing bugs the corpus exposed, and each pins a shape that work had just taught
-this engine to handle — dynamic calls, hook dispatch, include scope,
+this engine to handle: dynamic calls, hook dispatch, include scope,
 by-reference writes. Semgrep gets 3 of 23 on them because they are a catalogue
 of what its analysis model does not attempt. On the suite that predates the
 work, it finds 93% of the vulnerable fixtures. It is a capable tool.
 
 What separates them there is the safe half: 12 false positives against zero,
-clustered on values that *were* escaped by a route Semgrep cannot follow — an
+clustered on values that *were* escaped by a route Semgrep cannot follow: an
 escaper applied through `array_map()`, an allowlist regex, a `$wpdb` table
 identifier that is not data.
 
-Psalm is precise where it fires — zero false positives — and misses every SQL
+Psalm is precise where it fires (zero false positives) and misses every SQL
 injection because nothing tells it what `$wpdb` is, which is a catalogue gap a
 plugin would close, and every authorization bug because those have no source and
 no sink, which taint analysis structurally cannot find.
@@ -436,8 +460,8 @@ composer lint        # PHP_CodeSniffer, PSR-12 + Slevomat
 composer check       # all three
 ```
 
-The fixture suite in `tests/Fixtures/` is the regression net: 125 vulnerable
-files and 127 safe ones that are superficially similar. The safe half matters
+The fixture suite in `tests/Fixtures/` is the regression net: 145 vulnerable
+files and 149 safe ones that are superficially similar. The safe half matters
 more: a single false positive there fails the build.
 
 Expectations are written as inline `// wp-taint-expect <rule-id> <kind>`
@@ -451,7 +475,7 @@ vendor/bin/wp-taint scan tests/Fixtures/corpus --parse-report
 
 ## Requirements
 
-PHP 8.2 or newer. No WordPress installation needed — the tool analyses source,
+PHP 8.2 or newer. No WordPress installation needed, the tool analyses source,
 it does not run it.
 
 ## Licence

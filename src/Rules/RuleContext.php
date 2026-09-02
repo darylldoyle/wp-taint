@@ -9,6 +9,7 @@ use Enshrined\WpTaint\Hooks\HookGraph;
 use Enshrined\WpTaint\Taint\CallGraph;
 use Enshrined\WpTaint\Taint\DeclaredTypes;
 use Enshrined\WpTaint\Taint\TaintSet;
+use Enshrined\WpTaint\Taint\UserFunctionTable;
 
 /**
  * Shared state for structural rules across the whole scan.
@@ -78,12 +79,47 @@ final class RuleContext
      */
     private ?DeclaredTypes $declaredTypes = null;
 
+    private ?UserFunctionTable $functions = null;
+
     public function withDeclaredTypes(DeclaredTypes $types): self
     {
         $context = clone $this;
         $context->declaredTypes = $types;
 
         return $context;
+    }
+
+    public function withFunctionTable(UserFunctionTable $functions): self
+    {
+        $context = clone $this;
+        $context->functions = $functions;
+
+        return $context;
+    }
+
+    /**
+     * The key of the body a callback key actually names, following inheritance.
+     *
+     * A structural rule reads `array( $this, 'handle' )` off the AST and spells
+     * the key `child_class::handle` — but when `handle()` lives on the parent
+     * or comes in through a trait, the graph and the summary table know it
+     * under the *defining* class's key, and the literal spelling misses. The
+     * miss is conservative (the rule says "could not walk" rather than wrong),
+     * so a key nothing resolves comes back unchanged rather than null.
+     */
+    public function canonicalCallbackKey(string $key): string
+    {
+        if ($this->functions === null) {
+            return $key;
+        }
+
+        $parts = explode('::', $key, 2);
+
+        if (count($parts) !== 2 || $parts[0] === '' || $parts[1] === '') {
+            return $key;
+        }
+
+        return $this->functions->resolveMethodKey($parts[0], $parts[1]) ?? $key;
     }
 
     public function declaredTypes(): ?DeclaredTypes

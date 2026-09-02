@@ -257,17 +257,25 @@ final class MissingRestPermissionCallback implements StructuralRule
         $resolved = (new HookCallbackResolver($file->ast()))
             ->resolve($permission, $this->enclosingClass($file, $call));
 
-        if ($resolved === null || $resolved['key'] === null || ! $graph->knows($resolved['key'])) {
+        if ($resolved === null || $resolved['key'] === null) {
+            return null;
+        }
+
+        // Canonicalized, because the AST spells an inherited callback under the
+        // subclass's name and the graph knows it under the defining class's.
+        $key = $context->canonicalCallbackKey($resolved['key']);
+
+        if (! $graph->knows($key)) {
             return null;
         }
 
         $primitives = $registry->authorizationChecks();
 
-        if ($graph->reaches($resolved['key'], $primitives, self::MAX_DEPTH)) {
+        if ($graph->reaches($key, $primitives, self::MAX_DEPTH)) {
             return null;
         }
 
-        if (! $graph->walkWasComplete($resolved['key'], $primitives, self::MAX_DEPTH)) {
+        if (! $graph->walkWasComplete($key, $primitives, self::MAX_DEPTH)) {
             return null;
         }
 

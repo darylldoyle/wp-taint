@@ -49,6 +49,10 @@ use PhpParser\NodeFinder;
  */
 final class DeclaredTypes
 {
+    public function __construct(private readonly ClassHierarchy $hierarchy = new ClassHierarchy())
+    {
+    }
+
     /** @var array<string, string> function key => declared return class */
     private array $returns = [];
 
@@ -68,6 +72,30 @@ final class DeclaredTypes
     private array $ambiguous = [];
 
     /**
+     * Callables assigned to properties: `class::property` => a callable spec
+     * {@see CallableResolver::fromString} can read — `'acme_render'` or
+     * `'Acme_Handler::render'`.
+     *
+     * The handler-stashed-in-the-constructor shape:
+     *
+     * ```php
+     * public function __construct() { $this->handler = [ $this, 'render' ]; }
+     * public function run( $value ) { return call_user_func( $this->handler, $value ); }
+     * ```
+     *
+     * The call site's operand is a property fetch nothing intraprocedural can
+     * see through; this index is the cross-method answer, held to the same
+     * discipline as the class map: one readable value, and any second write —
+     * a different callable, or anything this cannot read — drops the key.
+     *
+     * @var array<string, string>
+     */
+    private array $callables = [];
+
+    /** @var array<string, true> */
+    private array $ambiguousCallables = [];
+
+    /**
      * Read every typed property declaration in a file.
      *
      * Must run while the AST is still held — {@see ParsedFile::releaseAst} is
@@ -84,7 +112,7 @@ final class DeclaredTypes
             $owner = $class->namespacedName->toString();
 
             foreach ($class->getProperties() as $property) {
-                $name = self::className($property->type);
+                $name = $this->classNameFor($property->type, $owner);
 
                 if ($name === null) {
                     continue;
@@ -94,6 +122,10 @@ final class DeclaredTypes
                     $this->properties[self::key($owner, $declared->name->toString())] = $name;
                 }
             }
+
+            // Anywhere in the class, not just the constructor: handlers get
+            // stashed in init() and register() methods as often as anywhere.
+            $this->observeCallableAssignments($class, $owner);
 
             // `public function __construct( private Cache $cache )` declares a
             // property in the parameter list, and it is the modern spelling of
@@ -107,7 +139,7 @@ final class DeclaredTypes
             $this->observeConstructions($class, $owner);
 
             foreach ($constructor->params as $param) {
-                $name = self::className($param->type);
+                $name = $this->classNameFor($param->type, $owner);
 
                 if ($name === null || $param->flags === 0 || ! $param->var instanceof Node\Expr\Variable) {
                     continue;
@@ -145,9 +177,9 @@ final class DeclaredTypes
             }
 
             $key = self::key($owner, $assign->var->name->toString());
-            $class_ = $assign->expr->class->toString();
+            $class_ = $this->resolveOwnReference($assign->expr->class->toString(), $owner);
 
-            if (isset($this->ambiguous[$key])) {
+            if ($class_ === null || isset($this->ambiguous[$key])) {
                 continue;
             }
 
@@ -160,6 +192,97 @@ final class DeclaredTypes
 
             $this->properties[$key] = $class_;
         }
+    }
+
+    /**
+     * Every property assignment in the class, read for a callable value.
+     *
+     * A write holding something this cannot read — a variable, a call result,
+     * a `new` — makes the property's value unknowable and drops the key: a
+     * property that is *sometimes* a known callable is not one this may speak
+     * for, because resolving the wrong body is worse than resolving none.
+     */
+    private function observeCallableAssignments(Node\Stmt\ClassLike $class, string $owner): void
+    {
+        foreach ((new NodeFinder())->findInstanceOf($class, Node\Expr\Assign::class) as $assign) {
+            if (
+                ! $assign instanceof Node\Expr\Assign
+                || ! $assign->var instanceof Node\Expr\PropertyFetch
+                || ! $assign->var->name instanceof Node\Identifier
+            ) {
+                continue;
+            }
+
+            $key = self::key($owner, $assign->var->name->toString());
+
+            if (isset($this->ambiguousCallables[$key])) {
+                continue;
+            }
+
+            $spec = $this->callableSpec($assign->expr, $owner);
+
+            if ($spec === null || (isset($this->callables[$key]) && $this->callables[$key] !== $spec)) {
+                unset($this->callables[$key]);
+                $this->ambiguousCallables[$key] = true;
+
+                continue;
+            }
+
+            $this->callables[$key] = $spec;
+        }
+    }
+
+    /**
+     * `'acme_render'`, `array( $this, 'render' )`, `array( 'Acme', 'render' )`
+     * — the literal callable spellings, normalised to the string form.
+     */
+    private function callableSpec(Node\Expr $expr, string $owner): ?string
+    {
+        if ($expr instanceof Node\Scalar\String_) {
+            return $expr->value === '' ? null : $expr->value;
+        }
+
+        if (! $expr instanceof Node\Expr\Array_ || count($expr->items) !== 2) {
+            return null;
+        }
+
+        $receiver = $expr->items[0]->value ?? null;
+        $method = $expr->items[1]->value ?? null;
+
+        if (! $method instanceof Node\Scalar\String_ || $method->value === '') {
+            return null;
+        }
+
+        if ($receiver instanceof Node\Expr\Variable && $receiver->name === 'this') {
+            return $owner . '::' . $method->value;
+        }
+
+        if ($receiver instanceof Node\Scalar\String_ && $receiver->value !== '') {
+            return $receiver->value . '::' . $method->value;
+        }
+
+        return null;
+    }
+
+    /**
+     * The callable a property holds, following inheritance like
+     * {@see propertyClassOf}.
+     */
+    public function propertyCallableOf(?string $ownerClass, string $property): ?string
+    {
+        if ($ownerClass === null) {
+            return null;
+        }
+
+        foreach ($this->hierarchy->lookupOrder($ownerClass) as $candidate) {
+            $spec = $this->callables[strtolower($candidate) . '::' . $property] ?? null;
+
+            if ($spec !== null) {
+                return $spec;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -179,31 +302,65 @@ final class DeclaredTypes
         return $this->returns[strtolower($functionKey)] ?? null;
     }
 
+    /**
+     * The declared class of a property, following inheritance.
+     *
+     * A `protected DB $db` declared on a base class is read through the
+     * subclass everywhere the loader pattern appears, and a flat lookup under
+     * the subclass's name missed it. The walk tries the owner, its traits,
+     * then the parents, in PHP's own precedence order.
+     */
     public function propertyClassOf(?string $ownerClass, string $property): ?string
     {
         if ($ownerClass === null) {
             return null;
         }
 
-        return $this->properties[self::key($ownerClass, $property)] ?? null;
+        foreach ($this->hierarchy->lookupOrder($ownerClass) as $candidate) {
+            $declared = $this->properties[strtolower($candidate) . '::' . $property] ?? null;
+
+            if ($declared !== null) {
+                return $declared;
+            }
+        }
+
+        return null;
     }
 
-    private static function className(?Node $type): ?string
+    private function classNameFor(?Node $type, string $owner): ?string
     {
         if ($type instanceof Node\NullableType) {
-            return self::className($type->type);
+            return $this->classNameFor($type->type, $owner);
         }
 
         if (! $type instanceof Node\Name) {
             return null;
         }
 
-        $name = $type->toString();
+        return $this->resolveOwnReference($type->toString(), $owner);
+    }
 
-        // `self`, `static` and `parent` are relative to a class this index does
-        // not resolve, and a scalar is not a class at all. php-parser spells
-        // both as a Name once a type is written without a leading backslash.
-        return in_array(strtolower($name), self::NOT_A_CLASS, true) ? null : $name;
+    /**
+     * `self` is the declaring class and `parent` is one up the hierarchy —
+     * `private static ?self $instance` is how every singleton in the ecosystem
+     * spells its own type. `static` stays unresolved: as a type it is only
+     * legal on returns, where php-cfg handles it. A scalar is not a class at
+     * all. php-parser spells all of these as a Name once a type is written
+     * without a leading backslash.
+     */
+    private function resolveOwnReference(string $name, string $owner): ?string
+    {
+        $lowered = strtolower($name);
+
+        if ($lowered === 'self') {
+            return $owner;
+        }
+
+        if ($lowered === 'parent') {
+            return $this->hierarchy->parentOf($owner);
+        }
+
+        return in_array($lowered, self::NOT_A_CLASS, true) ? null : $name;
     }
 
     private const NOT_A_CLASS = [

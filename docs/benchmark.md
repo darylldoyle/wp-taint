@@ -8,8 +8,9 @@ Run on macOS 15 (arm64), PHP 8.3.32, against Semgrep 1.174.0 and Psalm 6.16.1.
 
 > **Note**
 > This is a point-in-time comparison against the suite as it stood when the
-> three tools were run together. The regression suite has grown since (226
-> fixtures today) and these numbers are not re-measured on every change, because
+> three tools were run together. The regression suite has grown since (294
+> fixtures today: 145 vulnerable, 149 safe) and these numbers are not re-measured
+> on every change, because
 > doing so means re-running two external tools. The wp-taint half is covered
 > continuously by `composer test`; the comparison is a snapshot.
 
@@ -42,7 +43,7 @@ A tool that cries wolf gets muted and then deleted, at which point its true
 positives stop counting.
 
 On the original 147, Semgrep reports 12 false positives against wp-taint's 0.
-They cluster in one place — a value that *was* escaped, by a route Semgrep's
+They cluster in one place: a value that *was* escaped, by a route Semgrep's
 intra-file taint mode cannot follow:
 
 ```php
@@ -64,7 +65,7 @@ express: an escaper applied through `array_map()`, an allowlist regex, a
 Not all misses are the same kind of miss, and the distinction decides whether a
 gap is fixable by its maintainers or structural.
 
-### Semgrep — 64/69 on the original suite, 12 false positives
+### Semgrep: 64/69 on the original suite, 12 false positives
 
 **Its model is intra-file taint.** That is a deliberate design point in the OSS
 engine, and it is the whole explanation for the 37-fixture column: by-reference
@@ -77,7 +78,7 @@ same sources, sanitizers and sinks as `registries/wordpress.toml`. A commercial
 Semgrep WordPress pack may well do better; this measures what a competent
 engineer gets in an afternoon.
 
-### Psalm — 33/69 on the original suite, 0 false positives
+### Psalm: 33/69 on the original suite, 0 false positives
 
 Psalm has a real interprocedural taint engine and, where it fires, it is
 precise: zero false positives on the original 147. Two things stop it.
@@ -86,7 +87,7 @@ precise: zero false positives on the original 147. Two things stop it.
 `$wpdb` is. `php-stubs/wordpress-stubs` declares the class, but nothing marks
 `wpdb::query()` as a sink or `wpdb::prepare()` as a sanitizer, so every
 `$wpdb->query( "… {$_GET['x']} …" )` passes silently. **That is a catalogue gap,
-not an engine one** — a Psalm plugin nobody has written would close it.
+not an engine one** (a Psalm plugin nobody has written would close it).
 
 **It misses every authorization bug (11).** Expected, and not a criticism: a
 missing `permission_callback` has no source and no sink. Taint analysis
@@ -108,10 +109,19 @@ rather than blended away.
 self-scored is the corpus: 50 real plugins from WordPress.org, 21,148 files and
 4.1 million lines, currently 1,325 findings and zero convergence warnings across
 every one of them, with a dozen false
-positive classes found and fixed at the root — each one recorded in
+positive classes found and fixed at the root, each one recorded in
 [tuning.md](tuning.md) with the plugin that exposed it. Eight of those plugins
 are pinned by version and their counts are checked in CI, so a change that moves
 them has to say so.
+
+**Two labelled suites nobody here wrote score it too.** They have what the
+corpus lacks, an answer key stated independently of the engine, and they cover
+semantics the fixtures do not: context correctness, escape invalidation, weak
+sanitisers. On `wp-taint-fixtures` (Semgrep's grammar, scored by its own
+`score.py`): 60 true positives, 4 false negatives, 1 false positive, 43 true
+negatives. A second suite, `wp-taint-analyser-fixtures`, runs cross-file and
+cross-plugin. Both are scored in CI by `composer suite:check`, which fails if
+either score drops.
 
 **The corpus false-positive rate is being demonstrated one rule at a time.**
 The gate needs a finding-by-finding verdict on each finding, which is a slog, so
@@ -124,7 +134,7 @@ outstanding.
 Each fixture is analysed **on its own**. That matters: `acme_render` is defined
 in eight different fixtures, so analysing the suite as one program lets a safe
 fixture's helper bind to an unescaped definition in a vulnerable one. Scanned
-together, wp-taint scores 87/92 with 6 false positives — an artefact of the test
+together, wp-taint scores 87/92 with 6 false positives, an artefact of the test
 data, and one that penalises exactly the two tools with cross-file analysis.
 
 Fixtures are copied outside `tests/` before scanning, because Semgrep's default
@@ -134,7 +144,7 @@ skipped files. An earlier version of this document told you to run it against
 
 A tool is scored as catching a fixture if it reports **any** finding in a
 vulnerable file, and as a false positive if it reports any finding in a safe
-one. This is generous to the competition — it does not check that the finding is
+one. This is generous to the competition: it does not check that the finding is
 the right one, on the right line, of the right class.
 
 ## Reproducing
@@ -147,7 +157,7 @@ rm -f /tmp/bench/*/*.expected.json
 # wp-taint
 vendor/bin/wp-taint scan /tmp/bench --format=json --fail-on=never
 
-# Semgrep — --no-git-ignore is required, see Methodology
+# Semgrep: --no-git-ignore is required, see Methodology
 semgrep --config docs/benchmark-semgrep-rules.yml /tmp/bench --json --no-git-ignore
 
 # Psalm

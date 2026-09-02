@@ -41,6 +41,7 @@ final class SummaryExtractor
         $clears = [];
         $paramToParam = [];
         $paramToProperty = [];
+        $paramToCapture = [];
         $imprecise = $parameterCount > $analysed;
 
         for ($index = 0; $index < $analysed; $index++) {
@@ -64,6 +65,12 @@ final class SummaryExtractor
             // performed, and the call site applies what the caller passed.
             if ($result->propertiesReached !== []) {
                 $paramToProperty[$index] = $result->propertiesReached;
+            }
+
+            // And where it is captured by a closure, for the same reason:
+            // the probe run records, the call site publishes.
+            if ($result->capturesReached !== []) {
+                $paramToCapture[$index] = $result->capturesReached;
             }
         }
 
@@ -89,6 +96,7 @@ final class SummaryExtractor
             // property of the body and not of which parameter was seeded.
             $baseline->returnAnchored,
             $paramToProperty,
+            $paramToCapture,
         );
     }
 

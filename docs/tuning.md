@@ -5,13 +5,50 @@ result. This is the record of Phase 7.
 
 The corpus is 50 plugins; at the versions currently fetched, 21,148 PHP files
 and 4.1 million lines outside `vendor/`. It moves when upstream releases. It is not
-committed — it is third-party code under assorted licences that changes every
-time upstream releases — so `composer corpus:fetch` downloads it into
+committed, it is third-party code under assorted licences that changes every
+time upstream releases, so `composer corpus:fetch` downloads it into
 `tests/Fixtures/corpus/`, which is gitignored.
 
 Everything below was found by running that corpus, not by imagining what the
 engine might get wrong. Every fix has a fixture taken from the real plugin code
 that exposed it, so none of them can come back.
+
+## What's in this log
+
+Chronological, newest work last. Each row links to its section.
+
+| Section | What it found or changed |
+| --- | --- |
+| [Three engine bugs, all the same shape](#three-engine-bugs-all-the-same-shape) | Non-convergence traced to two ops writing one SSA operand: element taint, `isset()` assertions, static properties. |
+| [Following the value that names the call](#following-the-value-that-names-the-call) | Resolving callables held in variables; the `--dynamic-calls` default becomes `propagate`. |
+| [Making hooks part of the call graph](#making-hooks-part-of-the-call-graph) | `add_action`/`apply_filters` wired in so filter callbacks carry taint. |
+| [Authorization: reachability not names](#authorization-reachability-instead-of-names) | Auth rules walk the graph for a real primitive instead of matching names. |
+| [Following references](#following-references) | By-reference params, `preg_match`, `parse_str`; aliasing reconciled with SSA. |
+| [Following includes](#following-includes) | Include-path resolution, with the scope in/out split that stopped a cross-file leak. |
+| [Analysing WordPress core](#coverage-and-what-analysing-wordpress-core-breaks) | `--include-path`; core made `$wpdb->prefix` tainted and broke receiver resolution. |
+| [Per-key array taint](#per-key-array-taint) | Literal-keyed slots, so `echo $ctx['id']` is clean when `$ctx['title']` is tainted. |
+| [The corpus as a tracked number](#the-corpus-as-a-tracked-number) | Eight pinned plugins, serial scan, a CI baseline that fails on drift. |
+| [Determinism across `--jobs`](#determinism-across---jobs-again) | Lexicographically smallest trace signature, stable across worker counts. |
+| [Six false positive classes](#six-false-positive-classes) | The largest FP idioms and their root fixes, ordered by finding count. |
+| [Traces before and after](#what-the-traces-looked-like-before-and-after) | Property reads splice in the trace of the write that tainted them. |
+| [What was deliberately left alone](#what-was-deliberately-left-alone) | Real flows and author-suppressed lines that are not tool bugs. |
+| [Honest scoring](#honest-scoring) | What the corpus reduction proves, and what still needs hand triage. |
+| [Reproducing](#reproducing) | Commands to rerun the corpus. |
+| [Phase 8: the vulnerable plugin](#phase-8-scored-against-somebody-elses-answer-key) | Scored 5 of 12 to 12 of 12 on the review team's teaching plugin. |
+| [Phase 9: real CVEs](#phase-9-measured-against-real-cves-and-what-that-found) | 47 CVEs; an object-injection gap, and redirect/code-injection mislabels. |
+| [Phase 9b: loader-wrapped hooks](#phase-9b-hooks-nobody-was-registering) | Registrations made through a plugin's own loader, wired into the graph. |
+| [Phase 10: escape voiding](#phase-10-escaping-has-to-survive-to-the-sink) | Escaping counted void when the value crosses a filterable call. |
+| [Phase 11: two external suites](#phase-11-two-suites-nobody-here-wrote) | Wrong-context escaping and provenance; `--unknown-provenance` introduced. |
+| [Phase 12: path sensitivity](#phase-12-path-sensitivity-which-was-never-the-blocker-it-looked-like) | Assertions and dominance for guards, and the pass/fail polarity fix. |
+| [Triage pass, 1,610 to 1,078](#triage-pass-1610-findings-to-1078) | Nine cross-rule fixes: probe seeds, literal escaping, severity, header CWE. |
+| [Narrowing `--unknown-provenance`](#narrowing---unknown-provenance-to-entry-points) | Mark only parameters the scan cannot answer for itself. |
+| [Receiver through a singleton](#following-a-receiver-through-a-plugins-singleton) | A `DeclaredTypes` index for typed properties and plugin singletons. |
+| [Where SQL shape findings come from](#where-the-sql-shape-findings-actually-come-from) | Instrumented breakdown; the rule kept at `high`, honestly labelled. |
+| [Fixing named misses](#fixing-the-misses-an-answer-key-names) | The printf family, closure captures, shortcodes, `register_setting()`. |
+| [Unknown provenance on by default](#unknown-provenance-on-by-default) | Flipped on after measuring no overhead. |
+| [Reading the second suite's misses](#reading-the-second-suites-misses) | analyser-fixtures triage; the `render_callback` gap, then F16. |
+| [Four small misses](#four-small-misses-closed-in-one-pass) | Computed method names, loader components, pass-through sanitisers, `wp_text_diff()`. |
+| [Includes that would not fold](#includes-that-would-not-fold-measured-then-fixed) | Theme constant chains, templated returns, a bootstrap file, parent/child themes. |
 
 ## Three engine bugs, all the same shape
 
@@ -26,13 +63,13 @@ and the transfer functions stop being monotone.
 
 | Shape | What happened |
 | --- | --- |
-| `$out = array(); $out[$k] = $tainted;` | Both write the same operand — SSA does not re-version an array for an element write. The assignment set it empty, the element write set it tainted, forever. |
+| `$out = array(); $out[$k] = $tainted;` | Both write the same operand, SSA does not re-version an array for an element write. The assignment set it empty, the element write set it tainted, forever. |
 | `if ( isset( $_GET['x'] ) )` | php-cfg gives `Op\Expr\Assertion` an operand *already written* by the op producing the value. Falling through to the generic expression branch zeroed it, which both oscillated and laundered taint. |
 | `self::$option = array( … );` | The same two-writer shape on a static property. |
 
 The fixes: element taint moved to its own slot in `TaintState`, assertions
 became a pass-through, and rather than patching each op, `transfer()` now
-declines any expression whose result is an assignment target — the `Assign` owns
+declines any expression whose result is an assignment target, the `Assign` owns
 that operand.
 
 Nine regression tests in `tests/Feature/ConvergenceTest.php`, written from the
@@ -52,7 +89,7 @@ if ( is_callable( array( $this->post, $name ) ) ) { … }
 ```
 
 `Op\Expr\Array_` and `Op\Expr\Assertion` write the same operand. The array
-literal set its own slot from the keys alone — empty, for a list — while the
+literal set its own slot from the keys alone, empty, for a list, while the
 assertion over it set the same slot from the *union* of both slots, promoting
 the element taint into it. Each pass undid the other.
 
@@ -73,8 +110,8 @@ interesting flows were.
 What now resolves: a callable that traces back to a literal, a phi of literals,
 or a concatenation of resolvable parts; `array( $object, 'method' )` and
 `array( 'Class', 'method' )`; a closure; an object with `__invoke`; and
-`new $class()`. Dispatchers — `call_user_func()`, `array_map()`, `usort()` and
-the rest — resolve to their callee rather than to themselves, declared as data
+`new $class()`. Dispatchers, `call_user_func()`, `array_map()`, `usort()` and
+the rest, resolve to their callee rather than to themselves, declared as data
 under `[[dispatchers]]` so a project can add its own.
 
 Two decisions worth recording.
@@ -86,7 +123,7 @@ is reported and a flow is proved safe only when *every* callee escapes it.
 **A name nobody can find a body for counts as unresolved.** Resolving
 `'render_a'` to a function that exists in neither the catalogue nor the scanned
 code, and then reporting it clean, would lose the flow without even marking it
-imprecise — strictly worse than admitting defeat.
+imprecise, strictly worse than admitting defeat.
 
 ### What the default costs
 
@@ -113,7 +150,7 @@ than opaque calls. The fixture suite stayed at 100% on both halves throughout,
 so none of that was bought with false negatives.
 
 Findings resting on an assumption are counted: 395 of the 851 carry
-`imprecise`. That is not 395 guesses — the flag marks any finding in a function
+`imprecise`. That is not 395 guesses, the flag marks any finding in a function
 where the engine lost the thread anywhere, so it is an upper bound on doubt
 rather than a measure of it.
 
@@ -137,7 +174,7 @@ code. Elementor resolved 10 of its 757.
 
 **`__NAMESPACE__ . '\\render'`**, which is how a namespaced plugin names a
 callback. The identity magic constants now fold to strings during lowering, where
-the enclosing namespace and class are still in hand — so every resolver
+the enclosing namespace and class are still in hand, so every resolver
 downstream gets it without learning about scope. A trait's `__CLASS__` is left
 alone: it is the *using* class at runtime, and a wrong answer would be worse than
 an opaque one.
@@ -158,7 +195,7 @@ the real rates are higher.
 ### The wildcard that had to go
 
 A registration whose hook *name* will not resolve was first modelled as being on
-every hook — the sound choice, since it might be any of them.
+every hook, the sound choice, since it might be any of them.
 
 It is the wrong one. Advanced Custom Fields had 22 such registrations against 201
 hooks, so every dispatch gained 22 spurious callees and its average went from 1.4
@@ -186,7 +223,7 @@ marked imprecise.
 
 `permission_callback` presence used to be the whole test, which credited
 `array( $this, 'noop' )` exactly as much as a real capability check. The new rule
-reports a callback that reaches no authorization primitive — and on its first
+reports a callback that reaches no authorization primitive, and on its first
 corpus run it reported both of Akismet's routes:
 
 ```php
@@ -202,13 +239,13 @@ WordPress primitive. Reachability alone was the wrong test.
 The rule now needs both: nothing below the callback reaches a primitive, *and*
 the body contains no branch, comparison, boolean operator or negation, so it
 cannot be refusing anything. A cheap syntactic proxy for "provably returns a
-constant", and named as one — being wrong now means staying quiet, which is the
+constant", and named as one, being wrong now means staying quiet, which is the
 direction an authorization rule should fail in. Akismet: back to 0.
 
 ### What Phase 2 cost
 
 Nothing, on the corpus. Like-for-like over the 48 plugins that completed in both
-runs: **851 findings before, 840 after — down 1.3%**, while adding the entire
+runs: **851 findings before, 840 after, down 1.3%**, while adding the entire
 hook graph.
 
 That is not an accident of the gate. Following a filter cuts both ways, and the
@@ -229,7 +266,7 @@ $extra_str = apply_filters( 'supercache_filename_str', $extra_str );
 $extra_str = preg_replace( '/[^a-zA-Z0-9_-]/', '', (string) $extra_str );
 ```
 
-The flow is real — the registered callback reads the user agent — and the plugin
+The flow is real, the registered callback reads the user agent, and the plugin
 defends against it correctly with an allowlist regex the engine models as a
 plain propagator. 146 sites across the corpus use that idiom. Recorded as its
 own piece of work rather than fixed here.
@@ -263,8 +300,8 @@ $wpdb->query( $sql[0] );        // $table_engine interpolated
 ```
 
 Content from a restored SQL dump reaches `$wpdb->query()` through a regex
-capture. The authors have marked those lines `phpcs:ignore` — WPCS flags them
-too — which puts them in the accepted-debt category rather than the false
+capture. The authors have marked those lines `phpcs:ignore`, WPCS flags them
+too, which puts them in the accepted-debt category rather than the false
 positive one.
 
 ### Aliasing fought SSA before it worked
@@ -281,7 +318,7 @@ Two corrections, both found as convergence warnings rather than wrong answers:
 - The link for a by-reference loop variable is one-way, into the collection's
   element slot. `foreach ( $x as &$v )` lowers to an `AssignRef` binding `$v` to
   the iterator's value, and the `$v = …` inside the loop is a fresh SSA version
-  the binding never mentions — so the link has to cover every version of the
+  the binding never mentions, so the link has to cover every version of the
   name. Pushing back the other way would fight the assignment that owns those
   operands; pushing only into the element slot cannot, because nothing ever
   *sets* an element slot, it is only ever grown.
@@ -295,7 +332,7 @@ argument it reads, which in an add-only model is a no-op.
 it connects request data to template files that have never been analysed in
 context. Budget was +25%.
 
-**It came in at +0.6%** — 1,071 findings to 1,077, 0 convergence warnings. Two
+**It came in at +0.6%**, 1,071 findings to 1,077, 0 convergence warnings. Two
 plugins moved: All in One SEO +4 and Wordfence +2.
 
 ### Why it was cheap, and where it would not be
@@ -309,7 +346,7 @@ Include resolution is doing real work. Roughly half of all include sites resolve
 | Wordfence | 196 | 73 |
 | Contact Form 7 | 43 | 18 |
 
-Findings barely moved because most of those are bootstrap — `require_once` of a
+Findings barely moved because most of those are bootstrap, `require_once` of a
 file that defines a class or a function, with no variables in scope to carry.
 The theme shape, where a template echoes a variable the includer set, is a
 minority of include sites *in a plugin*. The corpus is plugin-heavy, which the
@@ -319,7 +356,7 @@ budget was not unreasonable for one.
 ### Half the unresolved sites were three bugs, not dynamic paths
 
 The first run resolved roughly half of all include sites. Asking *why* the other
-half failed — rather than assuming they were genuinely dynamic — turned up three
+half failed, rather than assuming they were genuinely dynamic, turned up three
 bugs:
 
 - **`plugin_dir_path()` forgot its `dirname()`.** It is
@@ -330,7 +367,7 @@ bugs:
   constant through `$this->define( 'WC_ABSPATH', … )`.
 - **The two-pass constant build accumulated into one table**, so a constant the
   first pass could not resolve was marked unresolvable and the second pass could
-  never clear it — defeating the entire reason the second pass exists.
+  never clear it, defeating the entire reason the second pass exists.
   WooCommerce: 266 resolved to 519.
 
 Across seven large plugins, resolution went from ~50% to **72%**. Corpus
@@ -359,7 +396,7 @@ define( 'WPCF7_PLUGIN_DIR', untrailingslashit( dirname( WPCF7_PLUGIN ) ) );
 ```
 
 Constants come from a table built over the whole scan, and `__DIR__`/`__FILE__`
-fold at parse time — but the constant itself needed two function calls
+fold at parse time, but the constant itself needed two function calls
 evaluated. With `dirname()`, `untrailingslashit()`, `trailingslashit()`,
 `plugin_dir_path()` and a few string helpers, CF7 resolves 43 of 61.
 
@@ -383,7 +420,7 @@ neither of them wrote became a channel between them.
 The table has two halves now: **in** is what a file may find on entry, unioned
 over every site that includes it; **out** is what the file's own top-level code
 leaves, and only for names it actually assigns. Jetpack went back to 94, its
-figure before includes were followed — all 29 were the leak.
+figure before includes were followed, all 29 were the leak.
 
 The inbound union across includers stays, because it is the honest
 over-approximation: a template included from two places really can see either
@@ -393,7 +430,7 @@ caller's state.
 
 wp-super-cache's `{main}` stopped converging, because the scope join was writing
 to variables during a pass and fighting the assignments that own those operands.
-Every scope write is now a one-time seed before the propagation loop — which is
+Every scope write is now a one-time seed before the propagation loop, which is
 also more correct, since an included file that assigns `$title` itself should win
 over what its includer had.
 
@@ -409,7 +446,7 @@ sanitizer lists.
 
 The generator's important half is what it refuses to emit. WPCS says *that*
 `esc_attr()` escapes; it cannot say which taint kinds it clears, because a
-token-based sniff has no concept of kinds — and `esc_url_raw()` is on the
+token-based sniff has no concept of kinds, and `esc_url_raw()` is on the
 escaping list while being emphatically not an HTML escaper. Kinds come from a
 hand-written table, and a function whose kinds are not stated is skipped rather
 than guessed. 50 entries generated, 20 skipped with a reason recorded for each.
@@ -421,7 +458,7 @@ from 10 findings to 38. Two mechanisms accounted for most of it.
 
 **`$wpdb->prefix` became tainted.** `wpdb::get_blog_prefix()` assigns
 `$this->prefix`, so the moment core's body is analysed the property carries
-taint — and every plugin interpolates it into SQL because there is no other way
+taint, and every plugin interpolates it into SQL because there is no other way
 to name a table. Cookie Law Info gained 23 findings rooted there. The
 safe-identifier rule said a `$wpdb` property was clean *provided the property map
 recorded no taint for it*, and core defeats the proviso. A read of a known safe
@@ -463,14 +500,14 @@ than two.
 Corpus effect: **1,081 findings to 1,046**, every mover downward. Yoast SEO −14
 and Loginizer −13 were the largest, and every removed trace carried the line
 "Array taint is tracked per array, not per key, so the whole array is treated as
-tainted from here" — which is as direct a confirmation as the corpus offers.
+tainted from here", which is as direct a confirmation as the corpus offers.
 
 ## The corpus as a tracked number
 
 Seventeen bugs over this work were found by running the corpus, and none of them
 by the fixture suite. Two made findings *fall*, which is the direction nobody
 thinks to look in: per-key array taint took the corpus down seventeen findings,
-every mover downward, and it was a false negative — `effectiveTaintOf()` had
+every mover downward, and it was a false negative, `effectiveTaintOf()` had
 stopped seeing keyed slots at call boundaries. The only reason it was caught is
 that somebody happened to read the numbers.
 
@@ -482,14 +519,14 @@ number: a baseline that moves whenever upstream releases teaches people to
 ignore it. Serial because a worker that runs out of memory takes its shard with
 it, and a baseline that depends on the runner's RAM is not a baseline.
 
-A diff is not automatically a regression — a real improvement moves the number
+A diff is not automatically a regression, a real improvement moves the number
 too. It means *look*, then either fix the cause or accept the new baseline with
 the reason in the commit message. A count that falls gets flagged for extra
 suspicion, because a false positive is visible and annoying while a false
 negative is silent.
 
 It earned its keep within an hour: modelling `add_query_arg()` moved two counts,
-and reading the traces showed the shape test was wrong — it recognised a literal
+and reading the traces showed the shape test was wrong, it recognised a literal
 `array()` but not `$this->get_args`, a property holding one.
 
 ## Determinism across `--jobs`, again
@@ -502,7 +539,7 @@ reasoning that writes are visited in a fixed order. True within one worker.
 Across workers, a property written in two places has those writes split between
 shards, so which arrives first depends on the worker count.
 
-The obvious fix — keep the longest trace, since it explains most — does not
+The obvious fix, keep the longest trace, since it explains most, does not
 terminate:
 
 ```php
@@ -524,7 +561,7 @@ condition the bug needed.
 
 Ordered by how many findings each accounted for.
 
-### 1. "Not a string literal" is not "unsafe" — 532 findings
+### 1. "Not a string literal" is not "unsafe": 532 findings
 
 By far the largest. `wp.sqli.prepare-non-literal` fired at **critical** severity
 on this:
@@ -537,13 +574,13 @@ $wpdb->get_row( $wpdb->prepare( "SELECT … FROM {$table} WHERE name = %s", $key
 The check was asking *"is this argument a string literal"*. What `prepare()`
 actually needs is *"did anything attacker-controlled reach the format string"*.
 Those are different questions, and only the second is answerable without a
-dataflow engine — which is the whole reason to have one.
+dataflow engine, which is the whole reason to have one.
 
 It now reports when the format string carries SQL taint, or when a component of
 it is one the engine cannot account for. The same machinery already existed for
 `wp.sqli.unprepared-query`; this reuses it.
 
-### 2. Clean property writes were never recorded — 57 findings on one plugin
+### 2. Clean property writes were never recorded: 57 findings on one plugin
 
 LiteSpeed Cache produced 57, 42 of them critical, all on this:
 
@@ -557,7 +594,7 @@ $wpdb->prepare( 'SELECT url FROM `' . $this->_tb . '` WHERE md5 = %s', $md5 );
 ```
 
 Two separate bugs. `propagateIndirectWrite()` returned early when the assigned
-value carried no taint, so a *clean* property write was never recorded at all —
+value carried no taint, so a *clean* property write was never recorded at all,
 which defeated the whole point of tracking, because "we watched this property
 and nothing tainted ever went into it" is the answer the shape rules need. And
 the read is inside a trait, whose declaring class is the trait as far as the CFG
@@ -566,7 +603,7 @@ missed across that boundary.
 
 LiteSpeed Cache: 57 findings to 6.
 
-### 3. Stored data is not filesystem input — several hundred findings
+### 3. Stored data is not filesystem input: several hundred findings
 
 Stored sources were modelled as introducing `path` and `url` taint alongside
 `html` and `sql`. That turned every `get_option()` holding a directory name into
@@ -581,7 +618,7 @@ Stored sources now carry `html`, `html_attr` and `sql` only. A project that
 really does let a low-privilege user write a path into an option can add a
 local `[[sources]]` entry.
 
-### 4. The `IN (...)` placeholder idiom — 4 findings, but on Akismet
+### 4. The `IN (...)` placeholder idiom: 4 findings, but on Akismet
 
 ```php
 $format_string = implode( ', ', array_fill( 0, count( $ids ), '%s' ) );
@@ -596,7 +633,7 @@ prepared `IN (...)` clause and we called it a non-literal format string.
 literals, `$wpdb` properties, integers, the output of an inner `prepare()`, and
 anything built from those through calls the catalogue models as pure.
 
-### 5. Custom `$wpdb` table properties — 107 findings on WooCommerce
+### 5. Custom `$wpdb` table properties: 107 findings on WooCommerce
 
 Action Scheduler registers `$wpdb->actionscheduler_actions`, and WooCommerce
 interpolates it into fourteen prepared queries. The safe-identifier list only
@@ -611,7 +648,7 @@ reported.
 
 `register_rest_route()` takes a *list* of route definitions with an optional
 shared `args` schema alongside. We treated the schema block as a route and
-reported it for having no `permission_callback` — which a schema block neither
+reported it for having no `permission_callback`, which a schema block neither
 has nor should have. Found on Akismet.
 
 And the AJAX rule accepted a *method* whose name reads like a check but not a
@@ -645,7 +682,7 @@ Not every finding a reviewer would dismiss is a bug in the tool.
 **`wp.sqli.unprepared-query` on a value from an allowlist.** Rank Math builds
 `$wpdb->prepare( "{$key} = %d", $value )` inside a loop guarded by
 `in_array( $key, $allowed_keys, true )`. The engine cannot see that the
-allowlist constrains `$key`, and neither can WPCS — it flags the same line.
+allowlist constrains `$key`, and neither can WPCS, it flags the same line.
 Reporting it is defensible; suppressing it would need path-sensitive analysis of
 a membership test, which is a long way past v1.
 
@@ -654,13 +691,13 @@ remaining SQL findings sit on lines carrying
 `// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared`. WPCS flags them too and
 the author decided the risk was acceptable. Those are accepted debt rather than
 false positives, and wp-taint has its own suppression mechanism for recording
-that decision — with a mandatory reason.
+that decision, with a mandatory reason.
 
 **Genuine flows in widely-installed plugins.** Several remaining findings are
 real: `$_FILES['upload_file']['tmp_name']` reaching `unlink()`, and
 `$_POST['archives']` reaching `unlink()` through two function boundaries. Both
 sit behind nonce checks the dataflow engine does not model, so they are
-reachable only by an authenticated user with the right nonce — but the dataflow
+reachable only by an authenticated user with the right nonce, but the dataflow
 is exactly what the tool says it is.
 
 ## Honest scoring
@@ -675,11 +712,11 @@ What has been done instead:
   suppressed, and each has a fixture taken from the plugin code that exposed it.
 - The corpus total fell from 1,394 findings to 1,046, a 25% reduction across
   the same 50 plugins. The effect is far larger on the plugins that triggered
-  each class — LiteSpeed Cache 57 to 6, Advanced Custom Fields 22 to 3, Cookie
-  Law Info 29 to 7, Akismet 5 to 0 — because each fix targeted one idiom rather
+  each class, LiteSpeed Cache 57 to 6, Advanced Custom Fields 22 to 3, Cookie
+  Law Info 29 to 7, Akismet 5 to 0, because each fix targeted one idiom rather
   than trimming across the board.
 - The fixture suite grew from 133 files to 148, and still passes at 100% on both
-  halves — so none of the tuning was bought with false negatives.
+  halves, so none of the tuning was bought with false negatives.
 
 What has **not** been done: a finding-by-finding triage of all remaining
 findings with a verified true/false verdict on each. Anyone adopting this should
@@ -701,7 +738,7 @@ SARIF output opened in Trail of Bits' SARIF Explorer is a far better triage
 surface than a spreadsheet: it renders the source-to-sink flow and lets you
 classify each result as Bug or False Positive with one keystroke.
 
-## Phase 8 — scored against somebody else's answer key
+## Phase 8: scored against somebody else's answer key
 
 Everything above measures this engine against tests we wrote. The fixture suite
 is ours and 37 of its cases were added after the behaviour they check; the
@@ -750,8 +787,8 @@ than by heuristic. That also deleted the `unquoted_sql_safe` option and the
 strict `LiteralAnalyzer` mode the first attempt had needed.
 
 The summary had to carry it too: the escaper lives in the callee, so the caller
-learns about it only from `paramToSink`, recorded under `sql` — what the caller
-passes in — rather than `sql_unquoted`, which is what the callee turns it into.
+learns about it only from `paramToSink`, recorded under `sql`, what the caller
+passes in, rather than `sql_unquoted`, which is what the callee turns it into.
 
 ### A nonce is not an authorization check
 
@@ -763,21 +800,21 @@ present and was in the `[[authorization]]` list.
 A nonce proves the request was deliberate. It says nothing about entitlement: a
 subscriber can hold a perfectly valid nonce for a form they should never submit.
 `[[authorization]]` entries now carry `proves = "entitlement" | "intent"`. The
-AJAX rule still accepts either — demanding a capability there moves findings
-across every plugin in the corpus — and the admin_post_ rule requires
+AJAX rule still accepts either, demanding a capability there moves findings
+across every plugin in the corpus, and the admin_post_ rule requires
 entitlement, which is the only reason it catches what it was written for.
 
 Across the corpus the new rule reports **nothing**: all 16 resolvable
 `admin_post_` registrations genuinely check. Verified rather than assumed, by
-instrumenting the walk. Registrations made through a wrapper —
-`$this->loader->add_action( 'admin_post_x', ... )` — are not seen at all, a
+instrumenting the walk. Registrations made through a wrapper,
+`$this->loader->add_action( 'admin_post_x', ... )`, are not seen at all, a
 pre-existing blind spot shared with the AJAX rule.
 
 ### One function could only ever be one sink
 
 `update_option()` is a stored-taint sink on its value and a
 privilege-escalation sink on its name. `$this->sinks[$matcher->key()] = $sink`
-kept whichever the loader saw last and dropped the other silently — in a
+kept whichever the loader saw last and dropped the other silently, in a
 registry otherwise built to hard-error on an unknown key. Sinks are now a list
 per matcher.
 
@@ -788,17 +825,17 @@ The vulnerability is the attacker choosing *which* option is written:
 
 1. **Report any request-derived name.** 63 findings. The
    `ajax-nopriv-missing-check` fixture failed, because
-   `add_option( 'acme_subscriber_' . $_POST['email'], 1 )` is anchored — junk in
+   `add_option( 'acme_subscriber_' . $_POST['email'], 1 )` is anchored, junk in
    a namespace the plugin owns, not escalation.
 2. **Require a literal prefix.** Astra Sites still reported nine, all
    `$source . '_usage_optin'`. A literal *suffix* pens the attacker in just as
    well; so does one in the middle.
-3. **Require a literal anywhere — and look for it across call boundaries.**
+3. **Require a literal anywhere, and look for it across call boundaries.**
    The remaining false positives were all values whose anchor was real but
    several frames away:
 
    ```php
-   // PluginsHelper.php — $job_id is request data, so the taint is correct
+   // PluginsHelper.php: $job_id is request data, so the taint is correct
    $option_name = 'woocommerce_onboarding_..._async_' . $job_id;
    $logger      = new AsyncPluginsInstallLogger( $option_name );
    // → constructor → property → update_option( $this->option_name, $data )
@@ -813,7 +850,7 @@ A parameter means opposite things in the two directions, which is worth stating
 because it is not obvious. Reading a value, an unknown parameter means "the
 caller anchored this" and counts as constrained. Summarising a *return*,
 `function f( $id ) { return $id; }` guarantees callers nothing, and calling that
-anchored would launder the request through any one-line pass-through — hence
+anchored would launder the request through any one-line pass-through, hence
 `hasWithinBody()` beside `has()`.
 
 **Known false negatives**, both deliberate: an unresolvable callee is assumed to
@@ -844,7 +881,7 @@ reachable at all.
 
 php-parser emits a `Stmt\Nop` for a comment trailing the last statement of a
 block, so `wp_safe_redirect( $url ); // bail` ended in a Nop and the rule saw the
-comment rather than the redirect. Writing the fixture is what surfaced it —
+comment rather than the redirect. Writing the fixture is what surfaced it,
 using the suite's own `wp-taint-expect` annotation, which is a trailing comment.
 Uncaught, the rule would have missed every commented guard in the wild.
 
@@ -854,7 +891,7 @@ Uncaught, the rule would have missed every commented guard in the wild.
 Adding a kind left it one bit short, so every value seeded as "all kinds"
 silently lost the new one. Derived from the enum now.
 
-## Phase 9 — measured against real CVEs, and what that found
+## Phase 9: measured against real CVEs, and what that found
 
 Phase 8 scored 12 of 12 on a plugin written for teaching. 47 published CVEs in
 real plugins scored **8 attributed, 17 unattributable, 22 silent**, and the gap
@@ -874,8 +911,8 @@ grants *more* than the write did: a subscriber-level meta write becomes RCE
 through a POP chain in whatever classes happen to be loaded. It is the classic
 WordPress escalation, and three of the pinned CVEs are exactly it.
 
-Adding the kind caught CVE-2023-1196 in Advanced Custom Fields — five findings
-before the fix, none after — and cost 79 corpus findings, all in the new class.
+Adding the kind caught CVE-2023-1196 in Advanced Custom Fields, five findings
+before the fix, none after, and cost 79 corpus findings, all in the new class.
 
 **Then it had to be calibrated.** 91 findings at `critical`, next to the 12 that
 need no precondition at all, devalues the word for both. WordPress reads its own
@@ -884,7 +921,7 @@ own rule at `high`, and `wp.rce.unserialize` keeps `critical` for a request
 reaching `unserialize()` directly.
 
 `unserialize( $data, [ 'allowed_classes' => false ] )` is not reported. It is
-the documented fix — what Better Search Replace shipped for CVE-2023-6933 — and
+the documented fix, what Better Search Replace shipped for CVE-2023-6933, and
 flagging code that already applies it tells people to do what they have done.
 Two attempts were needed: `false` arrives as a temporary defined by a
 `ConstFetch`, not as a boolean literal, so the obvious test silently answered no
@@ -901,14 +938,14 @@ attribute injection; WPS Hide Login's fix adds a conditional early return inside
 a `wp_redirect` filter callback, which is a logic bug with no dataflow to see.
 
 The five CWE-94 cases are Code Snippets, Insert Headers and Footers, WP Super
-Cache and Loco Translate — plugins whose purpose is executing admin-supplied
+Cache and Loco Translate, plugins whose purpose is executing admin-supplied
 code. Those CVEs are privilege-boundary bugs wearing a code-injection label.
 
 Genuine gap found anyway: `header( 'Location: ' . $url )` is reported as header
 injection rather than as an open redirect, because only `wp_redirect()` carries
 the redirect rule.
 
-## Phase 9b — hooks nobody was registering
+## Phase 9b: hooks nobody was registering
 
 Eight of the fifty corpus plugins register hooks through their own loader rather
 than calling `add_action()` where a scanner can see it. Those registrations were
@@ -918,7 +955,7 @@ they were never counted, never reported, never walked.
 A clean authorization report on a boilerplate-generated plugin meant the rules
 had not run.
 
-Three arg layouts cover what the corpus contains — the WPPB
+Three arg layouts cover what the corpus contains, the WPPB
 `$loader->add_action( $hook, $component, 'method' )`, a wrapped array callback,
 and a bare method name on `$this`. A method named `add_action` counts whatever
 its receiver, because every plugin names its loader differently and the name is
@@ -937,7 +974,7 @@ prevent, so it gives up instead.
 
 Corpus: 1,073 to 1,163.
 
-## Phase 10 — escaping has to survive to the sink
+## Phase 10: escaping has to survive to the sink
 
 A plain taint model reports nothing at all on this:
 
@@ -959,7 +996,7 @@ second plugin to actually hook the filter.
 
 ### Which calls void it is generated, not guessed
 
-The obvious version — void on `apply_filters()` — misses the commonest case by
+The obvious version, void on `apply_filters()`, misses the commonest case by
 far, which is an ordinary-looking core function with a filter inside it:
 
 ```php
@@ -975,8 +1012,8 @@ Three corrections, each found by measuring rather than reasoning.
 **Pattern-matching two spellings was too narrow.** `return apply_filters(...)`
 and `$x = apply_filters(...); return $x;` miss the case where the filter and the
 return are several statements apart, which is most of how core is written. A
-fixed point over the body — a variable is filtered if assigned from a filter or
-from anything mentioning an already-filtered variable — took it 524 to 629.
+fixed point over the body, a variable is filtered if assigned from a filter or
+from anything mentioning an already-filtered variable, took it 524 to 629.
 
 **Passing a value as an argument does not make the result derive from it.**
 `$rval = $wpdb->update( $table, $data )` returns a row count, not `$data`. Calls
@@ -999,7 +1036,7 @@ report at ten thousand call sites.
 
 **Numeric coercion is not escaping.** `absint()` clears every kind, and marking
 its result escaped made `echo get_the_title( absint( $_GET['id'] ) )` look like
-voided escaping — the *id* carried the marker into a call whose result has
+voided escaping, the *id* carried the marker into a call whose result has
 nothing to do with it.
 
 **And escaping after the filter clears the voiding**, because that is the
@@ -1022,11 +1059,11 @@ echo wpautop( wptexturize( $description ) );
 One known false positive, on the plugin pinned to zero to catch exactly this
 kind of thing. `wp_update_comment()` is listed as returning its first parameter
 filtered because core contains `if ( false === $data ) { return $data; }` after
-the filter — a return only reachable when the value is `false`. The generator is
+the filter, a return only reachable when the value is `false`. The generator is
 right about the syntax and wrong about the semantics, and knowing the difference
 needs path-sensitivity a generated list cannot have.
 
-## Phase 11 — two suites nobody here wrote
+## Phase 11: two suites nobody here wrote
 
 Every benchmark up to now had the same hole in a different place. The fixture
 suite is ours, and 47 of its cases were written after the behaviour they test.
@@ -1034,8 +1071,8 @@ The corpus is third-party code with no answer key. The CVE set has an answer key
 and no line-level ground truth, tests 14% of what was available, and its nine
 "attributed" cases split four strong to five that could be code churn.
 
-Two labelled suites arrived with their own scorers. They cover *semantics* —
-context correctness, escape invalidation, weak sanitisers posing as real ones —
+Two labelled suites arrived with their own scorers. They cover *semantics*,
+context correctness, escape invalidation, weak sanitisers posing as real ones,
 where the corpus covers volume and the CVE set covers incidents.
 
 The first run was the useful one:
@@ -1048,7 +1085,7 @@ Recall had three causes, and two were whole missing rules.
 ### An escaper can be present and still be wrong
 
 Zero of five. `esc_html()` inside `<script>`, `esc_attr()` on an `href`, any
-escaper in an unquoted attribute — every one has a visible `esc_*` call and
+escaper in an unquoted attribute, every one has a visible `esc_*` call and
 every one is exploitable. "Was an escaper applied" and "was it the right one"
 are different questions and the engine only asked the first.
 
@@ -1061,7 +1098,7 @@ most wants.
 Two corrections, both from our own fixtures rather than theirs. `wp_get_referer()`
 is a *source*; reporting it as the wrong escaper misnames the problem and
 duplicates the ordinary output rule. And `sanitize_html_class()` is a legitimate
-attribute escaper. Only recognised escapers are judged now — a function this
+attribute escaper. Only recognised escapers are judged now, a function this
 rule has no opinion about is left alone.
 
 ### The third answer for provenance
@@ -1074,7 +1111,7 @@ function fx_render_bad( $value ) {   // "assumed tainted (option, meta, query va
 }
 ```
 
-A parameter with no caller. The engine had two answers — tainted or clean — and
+A parameter with no caller. The engine had two answers, tainted or clean, and
 gave the second to anything it could not trace, which scored the output half at
 **0.18 recall**.
 
@@ -1095,7 +1132,7 @@ question the tool is answering rather than making it better at the old one.
 
 ### What it cost
 
-Corpus 1,399 to roughly 1,500 with the flag off, and 2,566 with it on — 926 of
+Corpus 1,399 to roughly 1,500 with the flag off, and 2,566 with it on, 926 of
 those the obligation rule. Far below the 14,000 a crude estimate had suggested,
 because it fires on parameters rather than on every `echo`, and any sanitizer
 clears it.
@@ -1120,7 +1157,7 @@ condition has nowhere to be recorded. Fixing it means per-block state, and this
 project has had five separate convergence failures in exactly that machinery.
 Worth doing, and not worth doing carelessly.
 
-## Phase 12 — path sensitivity, which was never the blocker it looked like
+## Phase 12: path sensitivity, which was never the blocker it looked like
 
 Three false positive classes had the same diagnosis: a guard the engine could
 not see. WooCommerce validating an option name with `in_array`, Duplicator's
@@ -1128,8 +1165,8 @@ vendored copy of core's `wp_specialchars()`, and two cases in a third-party
 suite labelled safe.
 
 The diagnosis before this phase was that fixing it needed per-block state, and
-that the engine's single `TaintState` per function — the thing that makes its
-fixed point cheap — stood in the way. Five convergence failures have come out of
+that the engine's single `TaintState` per function, the thing that makes its
+fixed point cheap, stood in the way. Five convergence failures have come out of
 that machinery, so it was left alone.
 
 **That was wrong, and dumping one CFG showed it:**
@@ -1143,7 +1180,7 @@ Block#2 (guard taken)              Block#3 (fall-through)
 
 php-cfg gives each branch its own operand. The paths were always separable; the
 engine was passing taint straight through the assertion that said so. A comment
-in the transfer explained why — `isset()` and `empty()` produce an assertion
+in the transfer explained why, `isset()` and `empty()` produce an assertion
 whose result is an operand *already written* by the op that produced the value,
 and narrowing there gives one operand two writers. True, and true only of that
 shape. Narrowing when the operands differ has one writer and cannot oscillate.
@@ -1155,8 +1192,8 @@ their own answer. The first attempt walked `Block::parents` and stopped at any
 join, assuming a guard clause leaves a linear chain. It never fired once: the
 fall-through block of a guard has two predecessors in php-cfg's output.
 
-Dominance is the question that was actually being asked — is the validating edge
-on *every* path to this sink — and it is a standard fixed point over the block
+Dominance is the question that was actually being asked, is the validating edge
+on *every* path to this sink, and it is a standard fixed point over the block
 graph. Computed once per function, consulted at reporting time, and able only to
 suppress a finding, so no part of propagation changes.
 
@@ -1189,8 +1226,8 @@ suppressed, because the value leaves that way.
 
 WooCommerce's controller still reports. The guard is in one loop and the sink in
 another, over an array populated under the guard, and the guard genuinely does
-not dominate the sink. Proving that safe is container reasoning — every write
-into this array happened under a guard — and is a different piece of work.
+not dominate the sink. Proving that safe is container reasoning, every write
+into this array happened under a guard, and is a different piece of work.
 
 
 ## Triage pass: 1,610 findings to 1,078
@@ -1218,7 +1255,7 @@ function __construct( $file, $level ) {
 
 left `MC4WP_Debug_Log::$file` permanently holding html, sql, path, shell, eval
 and ten more. `explain` said so in as many words. 334 findings rested on a seed
-like that one — Twig's template compiler as an eval sink, phpseclib's Barrett
+like that one, Twig's template compiler as an eval sink, phpseclib's Barrett
 reduction twice, monolog's configured `proc_open()`, Wordfence's own view loader
 as local file inclusion after it had run the path through `preg_replace`.
 
@@ -1226,7 +1263,7 @@ Probe runs now get a sealed copy: reads work, writes go nowhere. The copy is
 shallow and never writes an array, so PHP never copies one.
 
 That lost the flow the over-approximation had been catching by accident, so the
-second half adds `paramToProperty` — the write counterpart to `paramToSink`. A
+second half adds `paramToProperty`, the write counterpart to `paramToSink`. A
 probe records which properties its parameter reached; the call site applies the
 taint the caller actually passed. The trace improved, because it now has
 somewhere real to start:
@@ -1242,7 +1279,7 @@ somewhere real to start:
 Intraprocedurally: `esc_html__( 'The root URL of your site.', 'woocommerce' )`
 is a fixed English sentence before the call and the same sentence after it. The
 marker is now withheld when every argument the escaper reads is a compile-time
-constant. Testing "carries no taint" instead cost four true positives — a
+constant. Testing "carries no taint" instead cost four true positives, a
 function parameter carries no taint either, and that is the case the rule exists
 for.
 
@@ -1262,7 +1299,7 @@ $wpdb->prepare( "UPDATE `{$table}` SET `vtime` = LEAST(`vtime`, %d)", $t );
 
 The rule's own description says taint analysis could not prove the value is
 attacker-controlled. The query-shape rule next to it already settled the
-convention — high without a proven path, critical with one — and this rule now
+convention, high without a proven path, critical with one, and this rule now
 follows it.
 
 ### Three claims that were not true
@@ -1275,9 +1312,9 @@ it, and WP Super Cache's 32 `action="…"` forms were all being called wrong.
 
 **`wp.header.injection` carried CWE-113** and told 28 findings to strip CR and
 LF. PHP rejects both inside `header()` and refuses to send the header; sending
-`setcookie()` a value urlencodes it first. What is left needs no newline —
+`setcookie()` a value urlencodes it first. What is left needs no newline,
 a Content-Type that decides whether the body is HTML, a Location that decides
-where the visitor goes, a cookie name that shadows the session cookie — and that
+where the visitor goes, a cookie name that shadows the session cookie, and that
 is what the rule says now.
 
 **`$_FILES['f']['tmp_name']`** is PHP's own path under `upload_tmp_dir`, and
@@ -1320,8 +1357,8 @@ something it has already read.
 
 The real case is a function nothing in the scan calls: a callback on a hook core
 dispatches, a public API a theme uses, a template WordPress includes. The call
-graph already answers that — it is built before analysis and the authorization
-rules already walk it — so the only new part is a reverse index and one question
+graph already answers that, it is built before analysis and the authorization
+rules already walk it, so the only new part is a reverse index and one question
 at the seeding site. The hook graph is folded into those edges, which makes the
 distinction right for free: a callback whose `apply_filters()` dispatch is in the
 scan has a caller and its arguments are read from that dispatch; one registered
@@ -1331,11 +1368,11 @@ on `init` has none.
     wp-taint-fixtures   recall 0.72 -> 0.84, F1 0.84 -> 0.91, precision 0.98
 
 Same recall as before the narrowing. The 784 that went away were never buying
-it — about three findings per plugin now rather than eighteen, all at `low`,
+it, about three findings per plugin now rather than eighteen, all at `low`,
 below the default `--fail-on=high`.
 
-Still off by default. It asks a different question — "is this proven safe"
-rather than "can I trace this to something dangerous" — and which one you want
+Still off by default. It asks a different question, "is this proven safe"
+rather than "can I trace this to something dangerous", and which one you want
 is a decision about the review.
 
 ## Following a receiver through a plugin's singleton
@@ -1363,7 +1400,7 @@ reason is recorded below.
 
 Two changes aimed at `wp.sqli.prepare-non-literal` moved it by three, so the
 shape rule was instrumented to record what it fails to account for, per reported
-finding rather than per evaluation — the two give very different answers, and
+finding rather than per evaluation, the two give very different answers, and
 the per-evaluation one is what produced the wrong estimate.
 
     46  Assign          a chain; bottoms out in one of the others
@@ -1376,7 +1413,7 @@ the per-evaluation one is what produced the wrong estimate.
 
 Three distinct causes, none of them cheap:
 
-**A table name passed as an argument** is 22 of 174 — about 13%. Resolving it
+**A table name passed as an argument** is 22 of 174, about 13%. Resolving it
 means an interprocedural fixed point over "does every caller pass a resolved
 value", which is the shape of problem that has caused five separate
 non-convergences in this project. Wrong trade.
@@ -1396,8 +1433,8 @@ it needs constant-argument-sensitive return typing.
 genuinely unknowable, and the `[scan] reference` config is the answer rather
 than a code change.
 
-So the rule is left as it is. It is honestly labelled — its own description says
-taint analysis could not account for the value — and since the severity change
+So the rule is left as it is. It is honestly labelled, its own description says
+taint analysis could not account for the value, and since the severity change
 it is ranked `high` rather than `critical`, which was the part that actually
 misled.
 
@@ -1417,7 +1454,7 @@ be read, diagnosed and either fixed or refused.
 `echo` and `print` each carry `html`, `unknown` and `escape_voided`. `printf()`,
 `vprintf()` and `var_dump()` had only the first: the other two were added
 alongside `echo` and the rest of the family was missed. Nothing about `printf()`
-makes it different — it writes the same bytes to the same place.
+makes it different, it writes the same bytes to the same place.
 
 ### Closures captured nothing
 
@@ -1426,7 +1463,7 @@ makes it different — it writes the same bytes to the same place.
 
 The body is a separate function and the captured variable arrives inside it as a
 free operand, so nothing connected the two. A capture is the same shape as an
-include's scope — a map of names to taint crossing a boundary — so it uses the
+include's scope, a map of names to taint crossing a boundary, so it uses the
 same table.
 
 Two things had to be right. **By name, not by operand:** php-cfg gives the `use`
@@ -1441,7 +1478,7 @@ WordPress hands the callback attributes from the post body and prints what it
 returns. Three things had to be true: the registration had to be seen
 (`add_shortcode()` shares `add_action()`'s argument layout, so the hook graph
 already knew how), the parameters had to carry post content, and the return had
-to count as output — there is no `echo` to find, because `do_shortcode()` does
+to count as output, there is no `echo` to find, because `do_shortcode()` does
 the printing.
 
 Underneath was a catalogue gap: `shortcode_atts()` was listed as filterable and
@@ -1482,8 +1519,8 @@ fail a build on its own.
 
 The argument for it is that a reader who knows a value is safe dismisses a `low`
 in a second, and a reader who is never shown it cannot. The argument against was
-that the eight it adds on a real client theme are one pattern — Gutenberg inner
-blocks, which are meant to be echoed raw — and that is a weak reason to withhold
+that the eight it adds on a real client theme are one pattern, Gutenberg inner
+blocks, which are meant to be echoed raw, and that is a weak reason to withhold
 the other eleven true positives it finds on labelled code.
 
 The fixture harness now runs with defaults rather than pinning the flag off, so
@@ -1505,7 +1542,7 @@ functions existing anywhere in the catalogue.
 
 Two separate things keep it that way. `wp.output.unescaped-unknown` needs the
 marker to reach the output, and none of these is a propagator, so nothing
-carries through them — an unmodelled return is clean, which is usually the
+carries through them, an unmodelled return is clean, which is usually the
 under-approximation this project apologises for and is exactly right here.
 `wp.xss.escape-voided` needs evidence that something *was* escaped before the
 filterable call, and echoing one of these provides none.
@@ -1520,7 +1557,7 @@ The one shape that does report is escaping something on the way *in*:
     echo wp_get_attachment_image( $id, 'large', false,
         array( 'alt' => esc_attr( $title ) ) );
 
-Redundant rather than wrong — core escapes those attributes itself — and the
+Redundant rather than wrong, core escapes those attributes itself, and the
 advice attached to it is imperfect, since the `<img>` markup that comes back
 cannot be escaped afterwards. Rare enough to leave.
 
@@ -1531,7 +1568,7 @@ cannot be escaped afterwards. Rare enough to leave.
 along and had never been read finding by finding. Doing that split them three
 ways.
 
-**Three were not misses.** F14, F15 and O09 are found — reported as
+**Three were not misses.** F14, F15 and O09 are found, reported as
 `wp.xss.unescaped-output` and `wp.xss.wrong-context-escape` where the suite's
 vocabulary expects `output.escape_invalidated` and `output.wrong_context_escape`.
 That is the adapter being deliberately conservative about which of our rule ids
@@ -1558,7 +1595,7 @@ the rest is code. No HTML escaper protects it.
 
 `render_callback` appears in 110 files across the fifty-plugin corpus and 205
 across two real client projects. WordPress calls it and prints what it returns,
-so there is no `echo` in the plugin for a rule to find — the shortcode problem
+so there is no `echo` in the plugin for a rule to find, the shortcode problem
 exactly, so it reuses that machinery. Only the lookup is new: the callback
 arrives under an array key rather than in a positional argument.
 
@@ -1574,7 +1611,7 @@ real client theme echoes that value four times over.
                writes back out to the enclosing scope and that is not modelled.
 
 F16 is the only one of the ten that is a gap rather than a decision, and it is
-the write direction of a boundary already crossed one way — the same shape as
+the write direction of a boundary already crossed one way, the same shape as
 the paramToProperty work.
 
     analyser-fixtures   missing 10 -> 7
@@ -1583,7 +1620,7 @@ the paramToProperty work.
 ### And then F16
 
 `use ( &$x )` is a two-way binding and only one way was modelled. php-cfg keeps
-the flag — each `use` is an `Operand\BoundVariable` with `byRef` on it — so
+the flag, each `use` is an `Operand\BoundVariable` with `byRef` on it, so
 telling the two apart cost nothing.
 
 A closure that writes to a by-reference capture now publishes what it assigned,
@@ -1613,7 +1650,7 @@ diagnosis said it would.
 
 **A computed method name that folds to one string resolves.** `$m = 'verify';
 $this->$m();` was unresolvable, which walked an AJAX handler's capability check
-straight past the authorization rule — a checked handler reported as unchecked.
+straight past the authorization rule, a checked handler reported as unchecked.
 The value resolver already answered this question for hook names and class
 names; the method-call path just never asked it. Several possible strings stay
 dynamic, because picking one would be a guess.
@@ -1621,20 +1658,20 @@ dynamic, because picking one would be a guess.
 **A loader component on a property resolves.** `$this->loader->add_action(
 $hook, $this->admin, 'handle' )` could not name `$this->admin`'s class, so the
 callback had no body and a missing check was invisible. The class is in the same
-file three ways — a typed declaration, a promoted constructor parameter, or a
-single `$this->admin = new Acme_Admin()` — and the resolver now reads all three,
+file three ways, a typed declaration, a promoted constructor parameter, or a
+single `$this->admin = new Acme_Admin()`, and the resolver now reads all three,
 giving up on ambiguity for the same reason the variable path does.
 
 **A pass-through named as a sanitize_callback is reported.**
 `'sanitize_callback' => 'wp_unslash'` is the same as naming none, and the
 catalogue already says so: it is a propagator, not a sanitizer. A user callback
 that reaches no catalogue sanitiser stays accepted, because absence proves
-nothing there — an allowlist check reaches no sanitiser and is exactly right.
+nothing there, an allowlist check reaches no sanitiser and is exactly right.
 
 **`wp_text_diff()` joins the filterable list.** The one content-returning
 pluggable whose core definition does not run a filter, so the generated
 catalogue could not see it. The rest of pluggable.php returns booleans, objects
-and voids — nothing escaping could have been applied to.
+and voids, nothing escaping could have been applied to.
 
     corpus, both suites and the vulnerable plugin unchanged
     four fixtures, one per fix
@@ -1645,7 +1682,7 @@ and voids — nothing escaping could have been applied to.
 The misses table called this a medium project aimed at `get_template_part()`.
 Measuring first changed the target: across five big corpus plugins, 424
 unresolved includes split into 272 pointing at WordPress core (out of scan by
-design), ~100 crude-classifier noise, 38 genuinely dynamic — and the real
+design), ~100 crude-classifier noise, 38 genuinely dynamic, and the real
 mechanical gaps were elsewhere.
 
 **Theme constant chains** were the loudest failure on real client themes, not
@@ -1657,14 +1694,14 @@ whenever the calling file is itself inside a theme in the scan:
     require_once ACME_THEME_INC . 'core.php';
 
 One fold connects the chain. ThemeRoots reads the `themes/<name>/` convention
-from the scanned file list — never the filesystem — and a client theme went from
+from the scanned file list, never the filesystem, and a client theme went from
 17 unresolved includes to 9, the recovered nine being its entire `includes/`
 tree. A plugin calling it resolves only when the scan holds exactly one theme.
 
 **Templated returns.** `include self::get_view_filename( 'html-main.php' )`
 where the helper returns `__DIR__ . "/views/$view"`. The constant-return table
-now records a *template* — literal fragments around the function's own
-parameters — when every return produces the same one, and a call with literal
+now records a *template*, literal fragments around the function's own
+parameters, when every return produces the same one, and a call with literal
 arguments folds it exactly. A transformed parameter refuses: substituting into
 `basename( $view )` would fold to a path the code never builds. The nested
 interpolation mattered: `"/views/$view"` is its own op feeding the outer concat,
@@ -1678,7 +1715,7 @@ looped until memory ran out.
 
 **A bootstrap file**, suggested mid-implementation and nearly free: `bootstrap =
 ["wp-taint-bootstrap.php"]` in the config or `--bootstrap` on the command line,
-for constants defined outside anything scanned — `ABSPATH` above all. It is
+for constants defined outside anything scanned, `ABSPATH` above all. It is
 mechanically `reference` under a name that answers "where do I put the define".
 Verified end to end: a bootstrap defining ABSPATH plus core referenced resolves
 `require_once ABSPATH . 'wp-admin/…'` and carries a flow through it.
@@ -1699,7 +1736,7 @@ The `Template:` header in a child's `style.css` is how core resolves the pair,
 so it is how this does. `get_stylesheet_directory()` is the file's own theme;
 `get_template_directory()` is the declared parent when the scan holds it;
 `get_theme_file_path()` checks the child's copy first against the scanned file
-list, then the parent's — core's override order; `get_template_part()` from a
+list, then the parent's, core's override order; `get_template_part()` from a
 child searches the parent's tree too. A plugin file folds to every scanned
 theme, the same union a two-valued hook name gets, rather than to nothing.
 
@@ -1713,4 +1750,4 @@ parent, a flow through the parent's helper reports, and
 `get_template_part( 'partials/card', null, [ 'title' => $_GET['t'] ] )` from the
 child reports at the echo in the parent's partial. A caller local NOT passed
 through `$args` correctly does not flow, because template parts do not inherit
-caller locals — which is WordPress semantics, not a limitation.
+caller locals, which is WordPress semantics, not a limitation.

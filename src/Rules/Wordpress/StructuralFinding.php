@@ -33,6 +33,7 @@ final class StructuralFinding
         Severity $severity,
         string $description,
         string $identity,
+        TaintKind $kind = TaintKind::Authz,
     ): Finding {
         $line = $node->getStartLine();
         $column = self::column($node, $file->sourceMap);
@@ -46,14 +47,14 @@ final class StructuralFinding
             null,
             $snippet,
             $description,
-            TaintSet::of(TaintKind::Authz),
+            TaintSet::of($kind),
         );
 
         return new Finding(
             $ruleId,
             $registry->rule($ruleId),
             $severity,
-            TaintKind::Authz,
+            $kind,
             $file->relativePath,
             $line,
             $column,

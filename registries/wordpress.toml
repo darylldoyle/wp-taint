@@ -255,19 +255,23 @@ function = "get_the_excerpt"
 
 [[sanitizers]]
 function = "esc_html"
-clears = ["html"]
+clears = ["html", "html_attr"]
+note = "Runs _wp_specialchars with ENT_QUOTES, so both quote characters are encoded: safe in HTML text and in a quoted attribute."
 
 [[sanitizers]]
 function = "esc_html__"
-clears = ["html"]
+clears = ["html", "html_attr"]
+note = "Runs _wp_specialchars with ENT_QUOTES, so both quote characters are encoded: safe in HTML text and in a quoted attribute."
 
 [[sanitizers]]
 function = "esc_html_e"
-clears = ["html"]
+clears = ["html", "html_attr"]
+note = "Runs _wp_specialchars with ENT_QUOTES, so both quote characters are encoded: safe in HTML text and in a quoted attribute."
 
 [[sanitizers]]
 function = "esc_html_x"
-clears = ["html"]
+clears = ["html", "html_attr"]
+note = "Runs _wp_specialchars with ENT_QUOTES, so both quote characters are encoded: safe in HTML text and in a quoted attribute."
 
 [[sanitizers]]
 function = "esc_attr"
@@ -287,7 +291,8 @@ clears = ["html", "html_attr"]
 
 [[sanitizers]]
 function = "esc_textarea"
-clears = ["html"]
+clears = ["html", "html_attr"]
+note = "Runs _wp_specialchars with ENT_QUOTES, so both quote characters are encoded: safe in HTML text and in a quoted attribute."
 
 [[sanitizers]]
 function = "esc_js"
@@ -325,12 +330,13 @@ clears = ["html"]
 
 [[sanitizers]]
 function = "sanitize_text_field"
-clears = ["html", "html_attr", "header"]
-note = "Strips tags and control characters, including CR and LF. Does nothing for SQL."
+clears = ["html", "header"]
+note = "Strips tags and control characters, including CR and LF. Quotes survive it, so it does not make a value attribute-safe, and it does nothing for SQL."
 
 [[sanitizers]]
 function = "sanitize_textarea_field"
-clears = ["html", "html_attr"]
+clears = ["html"]
+note = "Strips tags and keeps newlines. Quotes survive it, so it does not make a value attribute-safe."
 
 [[sanitizers]]
 function = "sanitize_key"

@@ -43,6 +43,16 @@ final class CallResolver
     }
 
     /**
+     * The value resolver this resolver folds names through, for components
+     * that need the same folding outside a call position — the query-shape
+     * inspector reads quote state from fragments only it can fold.
+     */
+    public function values(): ValueResolver
+    {
+        return $this->values;
+    }
+
+    /**
      * Every callee a call op can reach.
      *
      * Usually one. Several when a callable variable holds a different name on
@@ -109,18 +119,35 @@ final class CallResolver
             return [$direct];
         }
 
-        $dispatched = $dispatcher->hook
-            ? $this->dispatchedByHook($direct, $dispatcher)
-            : $this->dispatched($direct, $dispatcher, $context, $types);
+        $prefixed = [];
+
+        if ($dispatcher->hook) {
+            [$dispatched, $prefixed] = $this->dispatchedByHook($direct, $dispatcher);
+
+            // A prefix join is a bounded guess, so it gets half the treatment
+            // an exact match gets: the callback is analysed — its parameters
+            // receive the dispatch's arguments and its sinks fire — but its
+            // return never replaces the dispatcher's own semantics. An
+            // apply_filters() joined only by prefix still voids escaping and
+            // still hands back its own argument, because anything else could
+            // also be hooked on the name the scan could not fold.
+            $prefixed = array_map(
+                static fn (CallTarget $target): CallTarget => $target->returningTo(CallResultMode::Discard),
+                $prefixed,
+            );
+        } else {
+            $dispatched = $this->dispatched($direct, $dispatcher, $context, $types);
+        }
 
         if ($dispatched === []) {
             // A hook with nothing registered on it returns the value it was
             // handed, and that is a *known* answer rather than a failure to
             // resolve — the catalogue's own propagator entry states it. Falling
             // through to the dynamic case would turn every dispatch on a hook
-            // this scan happens not to see into an unresolved call.
+            // this scan happens not to see into an unresolved call. The
+            // prefix-joined callbacks ride along for their sinks.
             if ($dispatcher->hook) {
-                return [$direct];
+                return [$direct, ...$prefixed];
             }
 
             // For everything else an empty set means the callable could not be
@@ -146,7 +173,9 @@ final class CallResolver
 
         // `array_filter()` and friends still need their own entry to run: it is
         // what puts the input array's taint on the result.
-        return $dispatcher->returns === DispatchReturn::Own ? [$direct, ...$targets] : $targets;
+        return $dispatcher->returns === DispatchReturn::Own
+            ? [$direct, ...$targets, ...$prefixed]
+            : [...$targets, ...$prefixed];
     }
 
     /**
@@ -158,30 +187,52 @@ final class CallResolver
      * value the engine believed was clean; an action's arguments never reached
      * the sinks inside its callbacks.
      *
-     * @return list<CallTarget>
+     * Two lists come back: the exact matches, and the prefix joins — a literal
+     * dispatch reaching a `"save_{$type}"` registration, or a dynamic dispatch
+     * whose folded head reaches literal registrations. The caller treats the
+     * second list as the bounded guess it is.
+     *
+     * @return array{0: list<CallTarget>, 1: list<CallTarget>}
      */
     private function dispatchedByHook(CallTarget $call, Dispatcher $dispatcher): array
     {
         if ($this->hooks === null) {
-            return [];
+            return [[], []];
         }
 
         $name = $call->argument($dispatcher->callable);
 
         if ($name === null) {
-            return [];
+            return [[], []];
         }
 
         $arguments = $this->calleeArguments($call, $dispatcher);
-        $targets = [];
+        $exact = [];
+        $prefixed = [];
+        $names = $this->values->strings($name);
 
-        foreach ($this->values->strings($name) as $hook) {
+        foreach ($names as $hook) {
             foreach ($this->hooks->targetsFor($hook) as $target) {
-                $targets[] = $target->withArguments($arguments);
+                $exact[] = $target->withArguments($arguments);
+            }
+
+            foreach ($this->hooks->prefixTargetsFor($hook) as $target) {
+                $prefixed[] = $target->withArguments($arguments);
             }
         }
 
-        return $targets;
+        // `do_action( "save_{$type}" )`: the name will not fold, but its head
+        // will, and the registrations on any literal hook starting with that
+        // head are the ones this dispatch can run.
+        if ($names === []) {
+            foreach ($this->values->prefixes($name) as $prefix) {
+                foreach ($this->hooks->targetsMatchingPrefix($prefix) as $target) {
+                    $prefixed[] = $target->withArguments($arguments);
+                }
+            }
+        }
+
+        return [$exact, $prefixed];
     }
 
     /**
@@ -202,19 +253,19 @@ final class CallResolver
                 continue;
             }
 
-            $key = $name . '::__construct';
+            $key = $this->functions->resolveMethodKey($name, '__construct');
             $matcher = Matcher::method($name, '__construct');
 
             // A class name nobody can find a definition for leaves the call
             // dynamic, rather than resolving it to nothing and reporting clean.
-            if (! $this->functions->has($key) && ! $this->registry->knows($matcher)) {
+            if ($key === null && ! $this->registry->knows($matcher)) {
                 continue;
             }
 
             $targets[] = CallTarget::resolved(
                 $arguments,
                 $matcher,
-                $this->functions->has($key) ? strtolower($key) : null,
+                $key,
                 'new ' . $name . '()',
             );
         }
@@ -390,7 +441,7 @@ final class CallResolver
             return CallTarget::resolved(
                 $arguments,
                 Matcher::method($class, $method),
-                $this->functions->has($class . '::' . $method) ? strtolower($class . '::' . $method) : null,
+                $this->functions->resolveMethodKey($class, $method),
                 $class . '::' . $method . '()',
             );
         }
@@ -478,20 +529,31 @@ final class CallResolver
         $method = OperandHelper::literalString($op->name);
         $class = OperandHelper::literalString($op->class);
 
-        if ($class !== null && in_array(strtolower($class), ['self', 'static', 'parent'], true)) {
+        if ($class !== null && in_array(strtolower($class), ['self', 'static'], true)) {
             $class = $context->className;
+        }
+
+        // `parent::` starts the lookup one level up, or PHP's semantics are
+        // lost twice over: `parent::render()` inside an override would resolve
+        // to the override itself, and a summary of `render()` that calls
+        // `parent::render()` would contain a call to its own key. A parent the
+        // scan has no declaration for falls back to the calling class, which is
+        // the old behaviour: conservative, and right whenever the method is not
+        // overridden.
+        if ($class !== null && strtolower($class) === 'parent') {
+            $class = $context->className === null
+                ? null
+                : ($this->functions->classHierarchy()->parentOf($context->className) ?? $context->className);
         }
 
         if ($method === null || $class === null) {
             return CallTarget::dynamic($arguments, ($class ?? 'unknown') . '::{dynamic}()');
         }
 
-        $userKey = $this->functions->has($class . '::' . $method) ? strtolower($class . '::' . $method) : null;
-
         return CallTarget::resolved(
             $arguments,
             Matcher::staticMethod($class, $method),
-            $userKey,
+            $this->functions->resolveMethodKey($class, $method),
             $class . '::' . $method . '()',
         );
     }
@@ -505,12 +567,10 @@ final class CallResolver
             return CallTarget::dynamic($arguments, 'new {dynamic}()');
         }
 
-        $userKey = $this->functions->has($class . '::__construct') ? strtolower($class . '::__construct') : null;
-
         return CallTarget::resolved(
             $arguments,
             Matcher::method($class, '__construct'),
-            $userKey,
+            $this->functions->resolveMethodKey($class, '__construct'),
             'new ' . $class . '()',
         );
     }

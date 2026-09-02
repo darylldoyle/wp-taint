@@ -49,6 +49,14 @@ final class FunctionAnalysis
      */
     private array $propertiesReached = [];
 
+    /**
+     * Closure captures the seeded parameter reached, keyed so a loop or a
+     * later round records each once. See {@see AnalysisResult::$capturesReached}.
+     *
+     * @var array<string, array{0: string, 1: string}>
+     */
+    private array $capturesReached = [];
+
     private TaintState $state;
 
     private ClassTypeMap $types;
@@ -190,7 +198,8 @@ final class FunctionAnalysis
         $this->types = new ClassTypeMap();
         $this->queryShapes = new QueryShapeInspector(
             $literals,
-            new OriginClassifier($registry, $resolver, $properties, $receivers),
+            new OriginClassifier($registry, $resolver, $properties, $receivers, $functions->classHierarchy()),
+            $resolver->values(),
         );
         $this->anchors = new LiteralAnchor(
             $summaries,
@@ -278,6 +287,7 @@ final class FunctionAnalysis
             $this->state,
             $this->returnAnchored ?? false,
             array_values($this->propertiesReached),
+            array_values($this->capturesReached),
         );
     }
 
@@ -1454,7 +1464,44 @@ final class FunctionAnalysis
      */
     private function readsUntaintedSubKey(Op\Expr\ArrayDimFetch $op, string|int|null $key): bool
     {
-        $base = $this->throughAssignments($op->var);
+        return $this->everyBaseSkipsSubKey($op->var, is_string($key) ? $key : null, 0);
+    }
+
+    /**
+     * Does every value this operand can hold trace to a superglobal entry
+     * whose sub-key list says this key is not the attacker's?
+     *
+     * A phi is followed when *all* of its inputs qualify:
+     *
+     *     $file = empty( $_FILES['csv'] ) ? $_FILES['fallback'] : $_FILES['csv'];
+     *     fopen( $file['tmp_name'], 'r' );
+     *
+     * Both branches are `$_FILES` entries and `tmp_name` is PHP's own path in
+     * either, so the merge is as safe as each side. One branch that is not a
+     * qualifying fetch — a parameter, a `$_POST` array — disqualifies the
+     * whole phi, because the value could be that branch's.
+     */
+    private function everyBaseSkipsSubKey(Operand $operand, ?string $key, int $depth): bool
+    {
+        if ($depth > 4) {
+            return false;
+        }
+
+        $base = $this->throughAssignments($operand);
+
+        if ($base instanceof Op\Phi) {
+            if ($base->vars === []) {
+                return false;
+            }
+
+            foreach ($base->vars as $var) {
+                if (! $var instanceof Operand || ! $this->everyBaseSkipsSubKey($var, $key, $depth + 1)) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
 
         if (! $base instanceof Op\Expr\ArrayDimFetch) {
             return false;
@@ -1468,7 +1515,7 @@ final class FunctionAnalysis
 
         $source = $this->registry->source(Matcher::superglobal($superglobal));
 
-        return $source !== null && ! $source->matchesSubKey(is_string($key) ? $key : null);
+        return $source !== null && ! $source->matchesSubKey($key);
     }
 
     /**
@@ -1636,7 +1683,7 @@ final class FunctionAnalysis
             return $this->state->set($op->result, TaintSet::empty());
         }
 
-        $stored = $this->properties->get($owner, $property);
+        $stored = $this->storedPropertyTaint($owner, $property);
         $taint = $stored->union($this->state->taintOf($op->var));
 
         if ($taint->isEmpty()) {
@@ -1651,9 +1698,51 @@ final class FunctionAnalysis
                 $op,
                 sprintf('Read from property $%s.', $property),
                 [$op->var],
-                prefix: $this->properties->originOf($owner, $property),
+                prefix: $this->storedPropertyOrigin($owner, $property),
             ),
         );
+    }
+
+    /**
+     * The stored taint of a property, unioned across the class hierarchy.
+     *
+     * A write lands under the class whose method performed it: the parent's
+     * constructor writes under the parent, an override under the child. The
+     * property is one storage slot on the instance regardless, so a read has
+     * to see every ancestor's writes or a flow through an inherited property
+     * disappears — `$this->value = $_GET['x']` in a base-class constructor,
+     * echoed by a subclass method, was invisible under flat keys.
+     */
+    private function storedPropertyTaint(?string $owner, string $property): TaintSet
+    {
+        if ($owner === null) {
+            return $this->properties->get(null, $property);
+        }
+
+        $taint = TaintSet::empty();
+
+        foreach ($this->functions->classHierarchy()->lookupOrder($owner) as $candidate) {
+            $taint = $taint->union($this->properties->get($candidate, $property));
+        }
+
+        return $taint;
+    }
+
+    /**
+     * The recorded origin of the nearest class in the hierarchy that tracked
+     * the property, so the trace still says where the value was written.
+     *
+     * @return list<TraceStep>
+     */
+    private function storedPropertyOrigin(?string $owner, string $property): array
+    {
+        foreach ($owner === null ? [null] : $this->functions->classHierarchy()->lookupOrder($owner) as $candidate) {
+            if ($this->properties->isTracked($candidate, $property)) {
+                return $this->properties->originOf($candidate, $property);
+            }
+        }
+
+        return [];
     }
 
     /**
@@ -1671,7 +1760,11 @@ final class FunctionAnalysis
         }
 
         $owner = $this->staticOwnerClass($op);
-        $taint = $this->properties->get($owner, $property);
+        // A static property not redeclared by the subclass is the parent's one
+        // slot, so `Child::$option` and `Base::$option` are the same storage —
+        // the union across the hierarchy applies exactly as it does to
+        // instance properties.
+        $taint = $this->storedPropertyTaint($owner, $property);
 
         if ($taint->isEmpty()) {
             return $this->state->set($op->result, $taint);
@@ -1684,7 +1777,7 @@ final class FunctionAnalysis
                 TraceVerb::Propagate,
                 $op,
                 sprintf('Read from static property $%s.', $property),
-                prefix: $this->properties->originOf($owner, $property),
+                prefix: $this->storedPropertyOrigin($owner, $property),
             ),
         );
     }
@@ -1970,7 +2063,16 @@ final class FunctionAnalysis
         // shares makes the seed an assertion, which is the same mistake the
         // property map made and the same fix: the baseline run, which seeds
         // nothing and reads the body as written, is the one that publishes.
+        //
+        // What the probe run does instead is *record* which captures the seed
+        // reached, exactly as it records property writes: the summary carries
+        // "parameter reaches capture $name of closure key", and the call site
+        // publishes the caller's actual taint. Without that, a capture whose
+        // value is the enclosing function's own parameter was published clean
+        // whatever the caller passed.
         if ($this->seedParameterIndex !== null) {
+            $this->recordCaptureReferences($op);
+
             return $this->state->set($op->result, TaintSet::empty());
         }
 
@@ -2005,6 +2107,36 @@ final class FunctionAnalysis
 
         // The closure value itself is a callable, not the captured data.
         return $this->state->set($op->result, TaintSet::empty()) || $changed;
+    }
+
+    /**
+     * A probe run reached a closure creation with the seeded parameter's taint
+     * on a captured name. Recorded, not published — see {@see transferClosure}.
+     */
+    private function recordCaptureReferences(Op\Expr\Closure $op): void
+    {
+        $key = FunctionContext::keyFor($op->func, $this->context->file);
+        $enclosing = $this->namedScopeWithOrigins();
+
+        foreach ($op->useVars as $captured) {
+            if (! $captured instanceof Operand) {
+                continue;
+            }
+
+            $name = OperandHelper::variableName($captured);
+
+            if ($name === null) {
+                continue;
+            }
+
+            $taint = $enclosing['taint'][$name] ?? null;
+
+            if ($taint === null || $taint->isEmpty()) {
+                continue;
+            }
+
+            $this->capturesReached[$key . '::' . $name] = [$key, $name];
+        }
     }
 
     private function transferPassThrough(Op\Expr $op, Operand $input, string $description): bool
@@ -2230,9 +2362,11 @@ final class FunctionAnalysis
         $voided = $this->voidEscaping($taint);
 
         // Say where. A step describing the propagation is the wrong answer to
-        // "filtered where?", and it was the only one in the trace.
+        // "filtered where?", and it was the only one in the trace. The prefix
+        // survives the substitution: a stored read's trace still starts at the
+        // write that stored the value, voided or not.
         if (! $voided->equals($taint)) {
-            $provenance = $this->voidProvenance($voided) ?? $provenance;
+            $provenance = $this->voidProvenance($voided, $provenance->prefix ?? []) ?? $provenance;
         }
 
         $taint = $voided;
@@ -2279,6 +2413,7 @@ final class FunctionAnalysis
 
         $changed = $matcher === null ? false : $this->applyByRefEffect($op, $call, $matcher);
         $changed = ($matcher === null ? false : $this->joinTemplateScope($op, $call, $matcher)) || $changed;
+        $changed = ($matcher === null ? false : $this->recordOptionWrite($op, $call, $matcher)) || $changed;
 
         if ($matcher !== null) {
             $sinks = $this->registry->sinksFor($matcher);
@@ -2296,9 +2431,15 @@ final class FunctionAnalysis
             $source = $this->registry->source($matcher);
 
             if ($source !== null && $this->sourceApplies($source, $call)) {
+                // A read of a key the scan watched being written carries the
+                // write's taint and trace on top of the stored baseline — the
+                // proven second-order flow, at the severity of what actually
+                // went in, rather than the assumption that something might have.
+                [$storedTaint, $storedOrigin] = $this->optionStoreTaint($matcher, $call);
+
                 return $this->writeResult(
                     $op->result,
-                    $source->kinds,
+                    $source->kinds->union($storedTaint),
                     new Provenance(
                         TraceVerb::Source,
                         $op,
@@ -2307,6 +2448,7 @@ final class FunctionAnalysis
                             $matcher->describe(),
                             $source->stored ? 'stored, user-supplied' : 'user-supplied',
                         ),
+                        prefix: $storedOrigin,
                     ),
                 ) || $changed;
             }
@@ -2499,7 +2641,7 @@ final class FunctionAnalysis
             $formatArgument = $call->argument($sanitizer->requiresLiteralArgument);
 
             if ($formatArgument !== null && $this->formatStringIsUnsafe($formatArgument)) {
-                return $this->reportNonLiteralSanitizer($op, $call, $sanitizer, $matcher, $formatArgument, $incoming);
+                return $this->reportNonLiteralSanitizer($op, $call, $sanitizer, $matcher, $formatArgument);
             }
         }
 
@@ -2627,7 +2769,7 @@ final class FunctionAnalysis
                 $class,
                 $property,
                 $argumentTaint,
-                $this->propertyWriteTrace($op, $argument, $argumentTaint, $summary, $property),
+                $this->propertyWriteTrace($op, $argument, $argumentTaint, $summary, $property, $class),
             ) || $changed;
 
             // The anchor is the caller's to settle. Inside the callee the value
@@ -2644,6 +2786,207 @@ final class FunctionAnalysis
     }
 
     /**
+     * The captures a callee's parameter reaches, fed with what this caller
+     * actually passed.
+     *
+     * A probe run must not publish — its seed is a question — so it re-records
+     * instead, which is what carries a capture through a helper chain: A's
+     * probe applying B's summary learns that A's parameter reaches B's
+     * closure, and A's own summary says so to A's callers.
+     */
+    private function applySummaryCaptures(
+        Op\Expr $op,
+        FunctionSummary $summary,
+        int $index,
+        Operand $argument,
+        TaintSet $argumentTaint,
+    ): bool {
+        if ($argumentTaint->isEmpty() || $summary->capturesFor($index) === []) {
+            return false;
+        }
+
+        if ($this->seedParameterIndex !== null) {
+            foreach ($summary->capturesFor($index) as [$closureKey, $name]) {
+                $this->capturesReached[$closureKey . '::' . $name] = [$closureKey, $name];
+            }
+
+            return false;
+        }
+
+        $changed = false;
+
+        foreach ($summary->capturesFor($index) as [$closureKey, $name]) {
+            $changed = $this->scopes->addInto(
+                $closureKey,
+                [$name => $argumentTaint],
+                [$name => $this->captureWriteTrace($op, $argument, $argumentTaint, $summary, $name)],
+            ) || $changed;
+        }
+
+        return $changed;
+    }
+
+    /**
+     * The trace of a capture that happened inside a callee.
+     *
+     * @return list<TraceStep>
+     */
+    private function captureWriteTrace(
+        Op\Expr $op,
+        Operand $argument,
+        TaintSet $taint,
+        FunctionSummary $summary,
+        string $name,
+    ): array {
+        $kind = $taint->kinds()[0] ?? null;
+
+        if ($kind === null) {
+            return [];
+        }
+
+        return $this->traces->build($argument, $kind, $this->traces->step(
+            TraceVerb::Propagate,
+            $op,
+            $taint,
+            sprintf('Passed to %s(), where a closure captures it as $%s.', $summary->displayName, $name),
+        ));
+    }
+
+    /**
+     * The options table as one more property owner.
+     *
+     * `update_option( 'acme_x', $request )` then `get_option( 'acme_x' )` in
+     * another function is a second-order flow with both ends visible, and the
+     * stored-source baseline flattened it into "an option might hold anything".
+     * Tracking the write per key — in the same map property writes use, under
+     * an owner no class name can collide with — lets the read carry what
+     * actually went in, with the write in the trace. The `#` is the collision
+     * guard: not a character a PHP class name can start with.
+     */
+    private const OPTION_STORE = '#options';
+
+    /** Option writers: matcher key => [key argument, value argument]. */
+    private const OPTION_WRITERS = [
+        'function:update_option' => [0, 1],
+        'function:add_option' => [0, 1],
+        'function:update_site_option' => [0, 1],
+    ];
+
+    /** Option readers: matcher key => key argument. */
+    private const OPTION_READERS = [
+        'function:get_option' => 0,
+        'function:get_site_option' => 0,
+    ];
+
+    /**
+     * Record what an option write put under its key, when the key folds.
+     *
+     * The probe run records the reach instead of performing the write — the
+     * same split every property write uses — so a helper wrapping
+     * update_option() carries its caller's taint into the store through
+     * paramToProperty, with no machinery of its own.
+     */
+    private function recordOptionWrite(Op\Expr $op, CallTarget $call, Matcher $matcher): bool
+    {
+        $spec = self::OPTION_WRITERS[$matcher->key()] ?? null;
+
+        if ($spec === null) {
+            return false;
+        }
+
+        $key = $call->argument($spec[0]);
+        $value = $call->argument($spec[1]);
+
+        if ($key === null || $value === null) {
+            return false;
+        }
+
+        $names = $this->resolver->values()->strings($key);
+
+        if ($names === [] || count($names) > 4) {
+            return false;
+        }
+
+        // Content kinds cross the store; the escaping ledger does not. Whether
+        // the value was escaped before storage says nothing about the context
+        // it will eventually land in — WordPress's own convention is escape at
+        // output whatever was done at input — and carrying `escaped` through
+        // made every read through the filterable get_option() re-report the
+        // write's escaping as voided, on a line the output rule already owns.
+        $taint = $this->state->taintOf($value)
+            ->without(TaintSet::of(TaintKind::Escaped, TaintKind::EscapeVoided));
+        $changed = false;
+
+        foreach ($names as $name) {
+            if (! $taint->isEmpty()) {
+                $this->recordPropertyReference(self::OPTION_STORE, $name);
+            }
+
+            $changed = $this->properties->add(
+                self::OPTION_STORE,
+                $name,
+                $taint,
+                $this->optionWriteTrace($op, $value, $taint, $name),
+            ) || $changed;
+        }
+
+        return $changed;
+    }
+
+    /**
+     * What the store holds under the keys a read can name, and the trace of
+     * the write that put it there.
+     *
+     * A key that will not fold reads nothing extra: the stored baseline
+     * already covers "an option whose name we cannot pin down".
+     *
+     * @return array{0: TaintSet, 1: list<TraceStep>}
+     */
+    private function optionStoreTaint(Matcher $matcher, CallTarget $call): array
+    {
+        $index = self::OPTION_READERS[$matcher->key()] ?? null;
+        $key = $index === null ? null : $call->argument($index);
+
+        if ($key === null) {
+            return [TaintSet::empty(), []];
+        }
+
+        $taint = TaintSet::empty();
+        $origin = [];
+
+        foreach ($this->resolver->values()->strings($key) as $name) {
+            $stored = $this->properties->get(self::OPTION_STORE, $name);
+
+            if ($origin === [] && ! $stored->isEmpty()) {
+                $origin = $this->properties->originOf(self::OPTION_STORE, $name);
+            }
+
+            $taint = $taint->union($stored);
+        }
+
+        return [$taint, $origin];
+    }
+
+    /**
+     * @return list<TraceStep>
+     */
+    private function optionWriteTrace(Op\Expr $op, Operand $value, TaintSet $taint, string $name): array
+    {
+        $kind = $taint->kinds()[0] ?? null;
+
+        if ($kind === null || $this->seedParameterIndex !== null) {
+            return [];
+        }
+
+        return $this->traces->build($value, $kind, $this->traces->step(
+            TraceVerb::Propagate,
+            $op,
+            $taint,
+            sprintf("Written to the option '%s'.", $name),
+        ));
+    }
+
+    /**
      * The trace of a property write that happened inside a callee.
      *
      * @return list<TraceStep>
@@ -2654,6 +2997,7 @@ final class FunctionAnalysis
         TaintSet $taint,
         FunctionSummary $summary,
         string $property,
+        ?string $class = null,
     ): array {
         $kind = $taint->kinds()[0] ?? null;
 
@@ -2665,7 +3009,9 @@ final class FunctionAnalysis
             TraceVerb::Propagate,
             $op,
             $taint,
-            sprintf('Passed to %s(), which writes it into $%s.', $summary->displayName, $property),
+            $class === self::OPTION_STORE
+                ? sprintf("Passed to %s(), which stores it in the option '%s'.", $summary->displayName, $property)
+                : sprintf('Passed to %s(), which writes it into $%s.', $summary->displayName, $property),
         ));
     }
 
@@ -2837,7 +3183,6 @@ final class FunctionAnalysis
         Sanitizer $sanitizer,
         Matcher $matcher,
         Operand $formatArgument,
-        TaintSet $incoming,
     ): bool {
         $ruleId = $sanitizer->literalViolationRuleId;
 
@@ -2877,14 +3222,26 @@ final class FunctionAnalysis
             );
         }
 
+        // A non-literal format string is the injection surface, and the result
+        // carries its taint. The *placeholder arguments* are a different matter:
+        // prepare() still substitutes and escapes every `%s`/`%d`/`%i` argument
+        // whether or not the template was literal, so a value bound to a
+        // placeholder does not reach the query as raw SQL. Passing the union of
+        // all arguments through — as an earlier version did — laundered the
+        // template's failure onto its bound arguments and reported the outer
+        // `$wpdb->query()` as an unprepared-query sink on a value that prepare()
+        // had in fact escaped (`$wpdb->query( $wpdb->prepare( "… {$table} …
+        // source_url = %s", $source_url ) )`). The template's own taint is what
+        // survives; the arguments' taint does not.
         return $this->writeResult(
             $op->result,
-            $incoming,
+            $this->state->taintOf($formatArgument),
             new Provenance(
                 TraceVerb::Propagate,
                 $op,
                 sprintf(
-                    '%s was called with a non-literal format string, so it escapes nothing.',
+                    '%s was called with a non-literal format string, so it escapes nothing. Its placeholder '
+                        . 'arguments are still bound and escaped; the format string itself is not.',
                     $matcher->describe(),
                 ),
                 $call->arguments,
@@ -3011,6 +3368,8 @@ final class FunctionAnalysis
 
             $this->reportSummarySinks($op, $call, $summary, $index, $argument, $argumentTaint);
             $changed = $this->applySummaryProperties($op, $summary, $index, $argument, $argumentTaint)
+                || $changed;
+            $changed = $this->applySummaryCaptures($op, $summary, $index, $argument, $argumentTaint)
                 || $changed;
         }
 
@@ -3336,7 +3695,10 @@ final class FunctionAnalysis
      * work, and being told "this value was escaped and then filtered" with no
      * indication of which call did the filtering is not enough to act on.
      */
-    private function voidProvenance(TaintSet $taint): ?Provenance
+    /**
+     * @param list<TraceStep> $prefix
+     */
+    private function voidProvenance(TaintSet $taint, array $prefix = []): ?Provenance
     {
         $call = $this->voidingCall;
         $op = $this->voidingOp;
@@ -3358,6 +3720,7 @@ final class FunctionAnalysis
             $call->arguments,
             callee: $name,
             imprecise: $taint->has(TaintKind::Unknown),
+            prefix: $prefix,
         );
     }
 
@@ -3377,6 +3740,14 @@ final class FunctionAnalysis
             Sink::UNANCHORED => ! $this->anchors->has($operand),
             Sink::UNSERIALIZE_ALLOWS_OBJECTS => $this->sinkCall === null || ! $this->forbidsClasses($this->sinkCall),
             Sink::ESCAPED_THEN_VOIDED => $this->state->effectiveTaintOf($operand)->has(TaintKind::Escaped),
+            // A component whose tags were stripped and whose quotes were not,
+            // landing inside a quoted attribute. `html` is excluded so a raw
+            // value is reported once, by the html sink, not twice.
+            Sink::QUOTED_ATTRIBUTE => $this->queryShapes->quotedAttributeComponent(
+                $operand,
+                fn (Operand $component): bool => $this->state->effectiveTaintOf($component)->has(TaintKind::HtmlAttr)
+                    && ! $this->state->effectiveTaintOf($component)->has(TaintKind::Html),
+            ) !== null,
             default => true,
         };
     }

@@ -183,7 +183,9 @@ abstract class HookHandlerAuthorization implements StructuralRule
     protected function checkVerdict(array $resolved, Registry $registry, RuleContext $context): array
     {
         $graph = $context->callGraph();
-        $key = $resolved['key'];
+        // Canonicalized, because the AST spells an inherited callback under the
+        // subclass's name and the graph knows it under the defining class's.
+        $key = $resolved['key'] === null ? null : $context->canonicalCallbackKey($resolved['key']);
         $primitives = $this->acceptedChecks($registry);
 
         // A key with no statements is a cross-file resolution: the class body

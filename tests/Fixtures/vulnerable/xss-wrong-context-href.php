@@ -8,5 +8,5 @@
 
 function acme_render_link($url)
 {
-    printf('<a href="%s">Go</a>', esc_attr($url)); // wp-taint-expect wp.xss.wrong-context-escape authz
+    printf('<a href="%s">Go</a>', esc_attr($url)); // wp-taint-expect wp.xss.wrong-context-escape html
 }

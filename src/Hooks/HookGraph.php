@@ -50,6 +50,30 @@ final class HookGraph
      */
     private array $unplaced = [];
 
+    /**
+     * Registrations whose hook name folds only to a literal head —
+     * `add_action( "save_{$type}", $cb )` — keyed by that prefix.
+     *
+     * @var array<string, list<HookRegistration>>
+     */
+    private array $byPrefix = [];
+
+    /**
+     * A prefix shorter than this joins nothing: `wp_` would connect a dynamic
+     * name to half of core's hook namespace, and a join that wide is a guess
+     * wearing a prefix's clothes.
+     */
+    public const MIN_PREFIX = 4;
+
+    /**
+     * A prefix matching more literal hooks than this is a plugin's *namespace*,
+     * not a hook family, and joins nothing. `add_filter( "wpforms_{$key}", … )`
+     * starts with the same eight characters as every hook WPForms fires;
+     * joining it everywhere replaced real filterable-void findings with guessed
+     * callee effects across a whole plugin.
+     */
+    public const MAX_PREFIX_FANOUT = 8;
+
     /** @var array<string, true> */
     private array $seen = [];
 
@@ -76,7 +100,32 @@ final class HookGraph
     }
 
     /**
-     * Every callback registered on a hook.
+     * A registration whose hook name folded only to its literal head.
+     *
+     * The registration's `hook` field holds the prefix. Too short a prefix is
+     * refused and the caller should fall back to treating the registration as
+     * unplaced.
+     */
+    public function addPrefix(HookRegistration $registration): bool
+    {
+        if (strlen($registration->hook) < self::MIN_PREFIX) {
+            return false;
+        }
+
+        $identity = 'prefix:' . $registration->sortKey();
+
+        if (isset($this->seen[$identity])) {
+            return true;
+        }
+
+        $this->seen[$identity] = true;
+        $this->byPrefix[$registration->hook][] = $registration;
+
+        return true;
+    }
+
+    /**
+     * Every callback registered on a hook, by exact name.
      *
      * @return list<HookRegistration>
      */
@@ -90,6 +139,79 @@ final class HookGraph
         );
 
         return $registrations;
+    }
+
+    /**
+     * The dynamic registrations a literal dispatch reaches by prefix:
+     * `do_action( 'save_post' )` runs whatever `add_action( "save_{$type}",
+     * $cb )` registered, for the `$type` values the scan could not fold.
+     *
+     * Kept apart from {@see callbacksFor} because a prefix join is a bounded
+     * guess: the caller analyses these callbacks for their sinks but must not
+     * let them replace the dispatcher's own return semantics.
+     *
+     * @return list<CallTarget>
+     */
+    public function prefixTargetsFor(string $hook): array
+    {
+        $matched = [];
+
+        foreach ($this->byPrefix as $prefix => $registrations) {
+            if (str_starts_with($hook, $prefix) && ! $this->tooGeneric($prefix)) {
+                $matched = [...$matched, ...$registrations];
+            }
+        }
+
+        usort(
+            $matched,
+            static fn (HookRegistration $a, HookRegistration $b): int => $a->sortKey() <=> $b->sortKey(),
+        );
+
+        return array_map(static fn (HookRegistration $r): CallTarget => $r->callback, $matched);
+    }
+
+    /**
+     * Every callback a dynamically-named dispatch could reach, by its folded
+     * head: `do_action( "save_{$type}" )` runs whatever is registered on any
+     * literal hook starting with `save_`, and whatever dynamic registration
+     * shares a compatible prefix.
+     *
+     * @return list<CallTarget>
+     */
+    public function targetsMatchingPrefix(string $needle): array
+    {
+        if (strlen($needle) < self::MIN_PREFIX || $this->tooGeneric($needle)) {
+            return [];
+        }
+
+        $matched = [];
+
+        foreach ($this->byHook as $hook => $registrations) {
+            // Synthetic entries — shortcode and block callbacks — are not
+            // hooks a do_action() can reach.
+            if (str_starts_with($hook, HookGraphBuilder::SHORTCODE_PREFIX)) {
+                continue;
+            }
+
+            if (str_starts_with($hook, $needle)) {
+                $matched = [...$matched, ...$registrations];
+            }
+        }
+
+        // Two dynamic names whose known heads are compatible — one extends
+        // the other — can be the same hook at runtime.
+        foreach ($this->byPrefix as $prefix => $registrations) {
+            if (str_starts_with($prefix, $needle) || str_starts_with($needle, $prefix)) {
+                $matched = [...$matched, ...$registrations];
+            }
+        }
+
+        usort(
+            $matched,
+            static fn (HookRegistration $a, HookRegistration $b): int => $a->sortKey() <=> $b->sortKey(),
+        );
+
+        return array_map(static fn (HookRegistration $r): CallTarget => $r->callback, $matched);
     }
 
     /**
@@ -216,4 +338,34 @@ final class HookGraph
     {
         return count($this->seen);
     }
+
+    /**
+     * Does this prefix match so many distinct literal hooks that it can only
+     * be a namespace? Counted against the exact-name index, synthetic entries
+     * excluded, and memoized: the index is complete before any join is asked
+     * for.
+     */
+    private function tooGeneric(string $prefix): bool
+    {
+        if (isset($this->generic[$prefix])) {
+            return $this->generic[$prefix];
+        }
+
+        $matches = 0;
+
+        foreach (array_keys($this->byHook) as $hook) {
+            if (str_starts_with($hook, HookGraphBuilder::SHORTCODE_PREFIX)) {
+                continue;
+            }
+
+            if (str_starts_with($hook, $prefix) && ++$matches > self::MAX_PREFIX_FANOUT) {
+                return $this->generic[$prefix] = true;
+            }
+        }
+
+        return $this->generic[$prefix] = false;
+    }
+
+    /** @var array<string, bool> */
+    private array $generic = [];
 }
