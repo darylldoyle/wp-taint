@@ -232,10 +232,30 @@ final class FindingCollection implements IteratorAggregate, Countable
         usort($findings, static function (Finding $a, Finding $b): int {
             $bySeverity = $b->severity->rank() <=> $a->severity->rank();
 
-            return $bySeverity !== 0 ? $bySeverity : $a->compareTo($b);
+            if ($bySeverity !== 0) {
+                return $bySeverity;
+            }
+
+            // Within one effective tier, order by the severity a finding was
+            // reduced from, most severe first: a critical SQL issue acknowledged
+            // down to a notice must not sit below a low unknown-output notice. A
+            // finding that was never acknowledged reports its own severity here,
+            // so this is a no-op outside the notice tier.
+            $byOrigin = self::originSeverity($b)->rank() <=> self::originSeverity($a)->rank();
+
+            return $byOrigin !== 0 ? $byOrigin : $a->compareTo($b);
         });
 
         return $findings;
+    }
+
+    /**
+     * The severity a finding started at: the one it was acknowledged down from,
+     * or its own when it was never acknowledged.
+     */
+    private static function originSeverity(Finding $finding): Severity
+    {
+        return $finding->acknowledgement->originalSeverity ?? $finding->severity;
     }
 
     public function hasKind(TaintKind $kind): bool

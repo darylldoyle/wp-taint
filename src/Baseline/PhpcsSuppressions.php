@@ -39,8 +39,14 @@ final class PhpcsSuppressions
      */
     private const MIN_SNIFF_SEGMENTS = 3;
 
+    // The trailing close-tag group lets a line-specific ignore sit right before
+    // a PHP closing tag, as in `<?php echo $x; // phpcs:ignore Std.Cat.Sniff`
+    // followed by the closing tag on the same line. PHP ends a `//` comment at
+    // the closing tag, so the ignore is still line-specific; the tag is the only
+    // trailing content accepted, not arbitrary text, and it is kept out of a
+    // captured `-- reason`.
     private const PATTERN = '/(?:\/\/|#|\/\*)\s*phpcs:ignore\s+(?<sniffs>[A-Za-z0-9_.,\s]+?)\s*'
-        . '(?:--\s*(?<reason>.*?))?\s*(?:\*\/)?$/';
+        . '(?:--\s*(?<reason>.*?))?\s*(?:\*\/)?\s*(?:\?>)?$/';
 
     /** @var array<string, array{sniffs: list<string>, reason: ?string}> `file:line` => acknowledgement */
     private array $byLine = [];

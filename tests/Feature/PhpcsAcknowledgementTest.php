@@ -76,6 +76,40 @@ it('downgrades a finding whose line names the matching sniff', function (): void
     expect($findings[0]['acknowledged']['reason'])->toBe('from a block');
 });
 
+it('acknowledges a trailing ignore before a PHP closing tag', function (): void {
+    // Gravity Forms writes exactly this shape for GFCommon::get_remote_message().
+    // PHP terminates the // comment at the closing tag, so the ignore is still
+    // line-specific; it must acknowledge like any other trailing ignore.
+    $findings = scanForAck(<<<'PHP'
+        <?php echo $_GET['x']; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
+        PHP);
+
+    expect($findings)->toHaveCount(1);
+    expect($findings[0]['severity'])->toBe('notice');
+    expect($findings[0]['acknowledged']['sniff'])->toBe('WordPress.Security.EscapeOutput.OutputNotEscaped');
+    expect($findings[0]['acknowledged']['reducedFrom'])->toBe('high');
+});
+
+it('acknowledges a trailing ignore with a reason before a PHP closing tag', function (): void {
+    $findings = scanForAck(<<<'PHP'
+        <?php echo $_GET['x']; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- reviewed ?>
+        PHP);
+
+    expect($findings)->toHaveCount(1);
+    expect($findings[0]['severity'])->toBe('notice');
+    // The closing tag must not leak into the captured reason.
+    expect($findings[0]['acknowledged']['reason'])->toBe('reviewed');
+});
+
+it('reports a closing-tag ignore at full severity under --no-phpcs-suppressions', function (): void {
+    $findings = scanForAck(<<<'PHP'
+        <?php echo $_GET['x']; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
+        PHP, ['--no-phpcs-suppressions' => true]);
+
+    expect($findings[0]['severity'])->toBe('high');
+    expect($findings[0]['acknowledged'])->toBeNull();
+});
+
 it('leaves a finding with no ignore at full severity', function (): void {
     $findings = scanForAck(<<<'PHP'
         <?php

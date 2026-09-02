@@ -2,11 +2,21 @@
 
 declare(strict_types=1);
 
+use Enshrined\WpTaint\Finding\Acknowledgement;
+use Enshrined\WpTaint\Finding\Finding;
+use Enshrined\WpTaint\Finding\FindingCollection;
+use Enshrined\WpTaint\Finding\RuleDefinition;
+use Enshrined\WpTaint\Finding\Severity;
+use Enshrined\WpTaint\Finding\TraceStep;
+use Enshrined\WpTaint\Finding\TraceVerb;
 use Enshrined\WpTaint\Report\Ansi;
 use Enshrined\WpTaint\Report\ConsoleReporter;
 use Enshrined\WpTaint\Report\JsonReporter;
 use Enshrined\WpTaint\Report\ReportOptions;
 use Enshrined\WpTaint\Report\SarifReporter;
+use Enshrined\WpTaint\Scan\ScanResult;
+use Enshrined\WpTaint\Taint\TaintKind;
+use Enshrined\WpTaint\Taint\TaintSet;
 
 function reportableScan(): Enshrined\WpTaint\Scan\ScanResult
 {
@@ -338,4 +348,66 @@ it('names the unresolved boundary on an imprecise finding rather than a generic 
     expect($report)->toContain('Imprecise:');
     expect($report)->toContain('inside acme_emit');
     expect($report)->not->toContain('this path crossed something the engine could not resolve');
+});
+
+it('orders notices in the console by the severity they were reduced from', function (): void {
+    // Acknowledged findings all render as NOTICE. A critical SQL issue reduced
+    // to a notice must sort above a low unknown-output notice, whatever the
+    // canonical file order, and do so deterministically.
+    $ack = new Acknowledgement('WordPress.DB.PreparedSQL.NotPrepared');
+    $rule = new RuleDefinition('wp.xss.unescaped-output', 'T', 'D', 'R');
+
+    $make = static function (Severity $severity, string $file) use ($rule, $ack): Finding {
+        $step = new TraceStep(
+            TraceVerb::Sink,
+            $file,
+            5,
+            3,
+            null,
+            'echo $x;',
+            'Reaches echo.',
+            TaintSet::of(TaintKind::Html),
+        );
+
+        return (new Finding(
+            'wp.xss.unescaped-output',
+            $rule,
+            $severity,
+            TaintKind::Html,
+            $file,
+            5,
+            3,
+            null,
+            'msg',
+            [$step],
+            $file,
+        ))->acknowledged($ack);
+    };
+
+    // Input order deliberately unsorted; file names chosen so canonical order
+    // (alphabetical) would give the opposite result if the origin tiebreak were
+    // ignored.
+    $result = new ScanResult(
+        FindingCollection::fromArray([
+            $make(Severity::Low, 'aaa-low.php'),
+            $make(Severity::Critical, 'zzz-critical.php'),
+            $make(Severity::High, 'mmm-high.php'),
+        ]),
+        [],
+        1,
+        [],
+        '/root',
+        ['php-core'],
+        true,
+        10,
+    );
+
+    $report = (new ConsoleReporter(new Ansi(false)))->render($result, new ReportOptions());
+
+    $critical = strpos($report, 'zzz-critical.php');
+    $high = strpos($report, 'mmm-high.php');
+    $low = strpos($report, 'aaa-low.php');
+
+    expect($critical)->toBeLessThan($high);
+    expect($high)->toBeLessThan($low);
 });
