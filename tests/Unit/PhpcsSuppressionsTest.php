@@ -47,6 +47,37 @@ it('acknowledges a trailing ignore naming the matching sniff', function () use (
     expect($ack->reason)->toBe('reviewed');
 });
 
+it('acknowledges a trailing ignore before a PHP closing tag', function () use ($escape): void {
+    // PHP ends the // comment at the closing tag, so this is still a
+    // line-specific ignore. It is the shape Gravity Forms uses for
+    // GFCommon::get_remote_message().
+    $s = phpcsFor(['echo $x; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>']);
+
+    $ack = $s->acknowledgementFor(findingAt(2), $escape);
+
+    expect($ack)->not->toBeNull();
+    expect($ack->sniff)->toBe('WordPress.Security.EscapeOutput.OutputNotEscaped');
+    expect($ack->reason)->toBeNull();
+});
+
+it('keeps the closing tag out of the reason before a PHP closing tag', function () use ($escape): void {
+    $s = phpcsFor([
+        'echo $x; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- reviewed ?>',
+    ]);
+
+    $ack = $s->acknowledgementFor(findingAt(2), $escape);
+
+    expect($ack)->not->toBeNull();
+    expect($ack->reason)->toBe('reviewed');
+});
+
+it('acknowledges a trailing ignore hard against a PHP closing tag', function () use ($escape): void {
+    // No space before the tag: still a line comment, still terminated by it.
+    $s = phpcsFor(['echo $x; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped?>']);
+
+    expect($s->acknowledgementFor(findingAt(2), $escape))->not->toBeNull();
+});
+
 it('acknowledges a standalone ignore for the line below it', function () use ($escape): void {
     $s = phpcsFor([
         '// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped',

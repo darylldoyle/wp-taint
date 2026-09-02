@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Enshrined\WpTaint\Finding\Acknowledgement;
 use Enshrined\WpTaint\Finding\Finding;
 use Enshrined\WpTaint\Finding\FindingCollection;
 use Enshrined\WpTaint\Finding\RuleDefinition;
@@ -215,6 +216,41 @@ it('orders by severity, most severe first, then canonically', function (): void 
     // Within the two highs, canonical file order holds: b.php before m.php.
     expect($ordered[1]->file)->toBe('b.php');
     expect($ordered[2]->file)->toBe('m.php');
+});
+
+it('orders notices by the severity they were reduced from, then canonically', function (): void {
+    $ack = new Acknowledgement('Std.Cat.Sniff');
+
+    // Deliberately shuffled input, mixed original severities and files.
+    $ordered = FindingCollection::fromArray([
+        makeFinding(severity: Severity::Low, file: 'a.php', fingerprint: '1')->acknowledged($ack),
+        makeFinding(severity: Severity::Critical, file: 'z.php', fingerprint: '2')->acknowledged($ack),
+        makeFinding(severity: Severity::High, file: 'm.php', fingerprint: '3')->acknowledged($ack),
+        makeFinding(severity: Severity::Critical, file: 'b.php', fingerprint: '4')->acknowledged($ack),
+    ])->orderedBySeverity();
+
+    // Every finding is effectively a notice, so ordering is by original severity
+    // descending, then canonical file order within a tie.
+    expect(array_map(static fn ($f): string => $f->severity->value, $ordered))
+        ->toBe(['notice', 'notice', 'notice', 'notice']);
+    expect(array_map(
+        static fn ($f): string => $f->acknowledgement->originalSeverity->value . ':' . $f->file,
+        $ordered,
+    ))->toBe(['critical:b.php', 'critical:z.php', 'high:m.php', 'low:a.php']);
+});
+
+it('ranks an acknowledged higher-severity notice above a plain lower notice deterministically', function (): void {
+    $ack = new Acknowledgement('Std.Cat.Sniff');
+
+    $ordered = FindingCollection::fromArray([
+        // A genuine notice (never acknowledged): original severity is Notice.
+        makeFinding(severity: Severity::Notice, file: 'a.php', fingerprint: '1'),
+        // A critical acknowledged down to a notice.
+        makeFinding(severity: Severity::Critical, file: 'z.php', fingerprint: '2')->acknowledged($ack),
+    ])->orderedBySeverity();
+
+    expect($ordered[0]->file)->toBe('z.php'); // reduced-from critical wins
+    expect($ordered[1]->file)->toBe('a.php');
 });
 
 it('groups by file in sorted order', function (): void {
