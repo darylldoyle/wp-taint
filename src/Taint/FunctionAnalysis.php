@@ -3298,7 +3298,7 @@ final class FunctionAnalysis
                 $op,
                 $call->arguments,
                 sprintf(
-                    'Call to %s could not be resolved, so %s (--dynamic-calls=propagate).',
+                    'Call to %s could not be resolved, so %s.',
                     $call->name(),
                     DynamicCallPolicy::Propagate->describe(),
                 ),
@@ -3311,7 +3311,7 @@ final class FunctionAnalysis
                     TraceVerb::Propagate,
                     $op,
                     sprintf(
-                        'Call to %s could not be resolved, so %s (--dynamic-calls=tainted).',
+                        'Call to %s could not be resolved, so %s.',
                         $call->name(),
                         DynamicCallPolicy::Tainted->describe(),
                     ),

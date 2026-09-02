@@ -301,10 +301,15 @@ final class ConsoleReporter implements Reporter
         }
 
         $acknowledged = 0;
+        $imprecise = 0;
 
         foreach ($result->findings as $finding) {
             if ($finding->acknowledgement !== null) {
                 $acknowledged++;
+            }
+
+            if ($finding->imprecise) {
+                $imprecise++;
             }
         }
 
@@ -312,6 +317,14 @@ final class ConsoleReporter implements Reporter
             $out .= '  ' . $this->ansi->dim(sprintf(
                 '%d downgraded to notice by a matching phpcs:ignore (--no-phpcs-suppressions for full severity)',
                 $acknowledged,
+            )) . "\n";
+        }
+
+        if ($imprecise > 0) {
+            $out .= '  ' . $this->ansi->dim(sprintf(
+                '%d crossed something the engine could not resolve, marked imprecise '
+                    . '(--dynamic-calls tunes how unresolved calls are treated)',
+                $imprecise,
             )) . "\n";
         }
 
