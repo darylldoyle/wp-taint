@@ -13,7 +13,7 @@ use Symfony\Component\Console\Application as ConsoleApplication;
 
 final class Application extends ConsoleApplication
 {
-    public const VERSION = '0.1.0';
+    public const VERSION = '0.3.1';
 
     public function __construct()
     {
