@@ -134,6 +134,14 @@ Further precision changes from corpus adjudication of the new attribute rule:
   followed back through the phi when every branch reaches a qualifying
   superglobal, clearing a false traversal report on `fopen()`.
 
+### Changed
+
+- `init` now asks with a checklist (Laravel Prompts) instead of typing
+  comma-separated numbers: space to check the directories you wrote, and the
+  rest become the reference set. The terminal guard is unchanged, so a
+  non-interactive or CI run still writes the commented template rather than
+  prompting.
+
 ## [0.1.0] - 2026-08-30
 
 The first tagged release. Everything below shipped in it.

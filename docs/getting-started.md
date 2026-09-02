@@ -22,7 +22,7 @@ writes a `wp-taint.toml`. What it writes depends on how you run it:
 ```mermaid
 flowchart TD
     A["wp-taint init"] --> B{How is it run?}
-    B -->|Interactive terminal| C["Asks which directories you wrote,<br>writes those as scan paths"]
+    B -->|Interactive terminal| C["A checklist of detected directories:<br>check the ones you wrote, they become<br>scan paths, the rest become reference-only"]
     B -->|"--all"| D["Every detected directory a scan path"]
     B -->|"Non-interactive (CI, piped)"| E["Template, every directory commented out"]
 ```
