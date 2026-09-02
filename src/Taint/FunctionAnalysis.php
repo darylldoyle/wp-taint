@@ -11,6 +11,7 @@ use Enshrined\WpTaint\Finding\Severity;
 use Enshrined\WpTaint\Finding\TraceStep;
 use Enshrined\WpTaint\Finding\TraceVerb;
 use Enshrined\WpTaint\Registry\ArgumentSelector;
+use Enshrined\WpTaint\Registry\DispatchReturn;
 use Enshrined\WpTaint\Registry\Matcher;
 use Enshrined\WpTaint\Registry\MatcherKind;
 use Enshrined\WpTaint\Registry\Registry;
@@ -3551,6 +3552,26 @@ final class FunctionAnalysis
                 $index,
             );
 
+            // When the callee's own analysis of this flow was imprecise, the
+            // boundary the reader needs named is the sink inside that callee,
+            // so the sink step carries the mark and says so. A finding is
+            // imprecise exactly when one of its steps is, so this is also what
+            // keeps the reporter from ever falling back to a locationless note.
+            $sinkDescription = $reference->imprecise
+                ? sprintf(
+                    'Reaches %s inside %s, whose own analysis of this path could not be fully '
+                        . 'resolved, so the %s taint reaching it is assumed.',
+                    $reference->sinkIdentity,
+                    $reference->functionDisplayName,
+                    $reference->kind->value,
+                )
+                : sprintf(
+                    'Reaches %s inside %s with %s taint intact.',
+                    $reference->sinkIdentity,
+                    $reference->functionDisplayName,
+                    $reference->kind->value,
+                );
+
             $sinkStep = new TraceStep(
                 TraceVerb::Sink,
                 $reference->relativeFile,
@@ -3558,13 +3579,9 @@ final class FunctionAnalysis
                 $reference->column,
                 $reference->endColumn,
                 $reference->snippet,
-                sprintf(
-                    'Reaches %s inside %s with %s taint intact.',
-                    $reference->sinkIdentity,
-                    $reference->functionDisplayName,
-                    $reference->kind->value,
-                ),
+                $sinkDescription,
                 TaintSet::of($reference->kind),
+                imprecise: $reference->imprecise,
             );
 
             $trace = [
@@ -3589,7 +3606,7 @@ final class FunctionAnalysis
                     $reference->sinkIdentity,
                     $reference->snippet,
                 ),
-                self::traceIsImprecise($trace) || $reference->imprecise,
+                self::traceIsImprecise($trace),
                 $reference->sinkIdentity,
             );
         }
@@ -3615,8 +3632,17 @@ final class FunctionAnalysis
             return false;
         }
 
-        if ($this->registry->dispatcher($matcher)?->hook === true) {
-            return true;
+        $dispatcher = $this->registry->dispatcher($matcher);
+
+        if ($dispatcher?->hook === true) {
+            // A filter returns what its callbacks produced, so a value escaped
+            // before the call is no longer guaranteed once it passes through.
+            // An action returns nothing (returns = own): the callbacks' returns
+            // are discarded, so escaping on the same line survives it. A
+            // do_action() reaches output only through a by-reference argument or
+            // shared state, neither of which flows through this call's return,
+            // so treating it as voiding is a false positive.
+            return $dispatcher->returns !== DispatchReturn::Own;
         }
 
         if ($matcher->kind !== MatcherKind::Func) {

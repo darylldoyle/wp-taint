@@ -104,6 +104,7 @@ final class JsonReporter implements Reporter
             'acknowledged' => $finding->acknowledgement === null ? null : [
                 'sniff' => $finding->acknowledgement->sniff,
                 'reason' => $finding->acknowledgement->reason,
+                'reducedFrom' => $finding->acknowledgement->originalSeverity?->value,
             ],
             'trace' => array_values(array_map(
                 static fn (int $index, TraceStep $step): array => array_filter(

@@ -55,13 +55,27 @@ final class ConsoleReporter implements Reporter
 
         $rule = str_repeat('─', 61);
         $count = count($result->findings);
+        $notices = $result->findings->countsBySeverity()['notice'] ?? 0;
 
-        return $rule . "\n"
-            . '  ' . $this->ansi->bold('wp-taint') . $this->ansi->dim(sprintf(
+        // The notice count is broken out so a large total does not read as all
+        // actionable: most of it is often findings the author already
+        // acknowledged. The total still counts them, matching the summary line.
+        $tail = $notices > 0
+            ? sprintf(
+                '  ·  %d finding%s (%d notice%s), most severe first',
+                $count,
+                $count === 1 ? '' : 's',
+                $notices,
+                $notices === 1 ? '' : 's',
+            )
+            : sprintf(
                 '  ·  %d finding%s, most severe first',
                 $count,
                 $count === 1 ? '' : 's',
-            )) . "\n"
+            );
+
+        return $rule . "\n"
+            . '  ' . $this->ansi->bold('wp-taint') . $this->ansi->dim($tail) . "\n"
             . $rule . "\n\n";
     }
 
@@ -103,31 +117,21 @@ final class ConsoleReporter implements Reporter
         $out = "\n";
 
         if ($first !== null && $first !== $last) {
-            $out .= sprintf(
-                "    %s  :%d:%d  %s\n",
-                $this->ansi->cyan(str_pad('source', 8)),
-                $first->line,
-                $first->column,
-                self::truncate($first->snippet, 64),
-            );
+            $out .= $this->traceRow('source', $first);
         }
 
         if ($last !== null) {
-            $out .= sprintf(
-                "    %s  :%d:%d  %s\n",
-                $this->ansi->cyan(str_pad('sink', 8)),
-                $last->line,
-                $last->column,
-                self::truncate($last->snippet, 64),
-            );
+            $out .= $this->traceRow('sink', $last);
         }
 
         $out .= "\n  " . $finding->message . "\n";
 
         if ($finding->acknowledgement !== null) {
+            $from = $finding->acknowledgement->originalSeverity;
             $out .= '  ' . $this->ansi->dim(sprintf(
-                'Suppressed in PHPCS with %s; reporting as a notice rather than a finding.',
+                'Acknowledged in PHPCS with %s; severity reduced %sto notice.',
                 $finding->acknowledgement->sniff,
+                $from === null ? '' : sprintf('from %s ', $from->value),
             )) . "\n";
         }
 
@@ -136,6 +140,25 @@ final class ConsoleReporter implements Reporter
         }
 
         return $out;
+    }
+
+    /**
+     * A source or sink line: label, position, snippet.
+     *
+     * A synthetic operand has no position; php-cfg reports line 0, column 0 for
+     * it. Printing `:0:0` leaks an engine internal to the reader, so the
+     * position reads `(unknown)` when it is missing rather than as a real one.
+     */
+    private function traceRow(string $label, TraceStep $step): string
+    {
+        $position = $step->line >= 1 ? sprintf(':%d:%d', $step->line, $step->column) : '(unknown)';
+
+        return sprintf(
+            "    %s  %s  %s\n",
+            $this->ansi->cyan(str_pad($label, 8)),
+            $position,
+            self::truncate($step->snippet, 64),
+        );
     }
 
     /**
@@ -150,7 +173,14 @@ final class ConsoleReporter implements Reporter
             }
         }
 
-        return 'this path crossed something the engine could not resolve.';
+        // A finding is marked imprecise only when one of its steps is, so this
+        // is unreachable; if that invariant ever breaks, name the sink rather
+        // than emitting a caveat the reader cannot locate.
+        $last = $finding->trace[count($finding->trace) - 1] ?? null;
+
+        return $last === null
+            ? sprintf('%s:%d', $finding->file, $finding->line)
+            : sprintf('%s:%d  %s', $finding->file, $last->line, $last->description);
     }
 
     private function renderVerbose(Finding $finding, ReportOptions $options): string

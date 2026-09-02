@@ -154,6 +154,45 @@ it('applies a named precedence only against the named rule', function (): void {
     expect($unrelated)->toHaveCount(2);
 });
 
+it('collapses the unescaped-output family to the most specific finding at a line', function (): void {
+    // The real precedence from Scanner: escape-voided ⊐ unescaped-output ⊐
+    // unescaped-unknown. Three findings at one line, three different kinds,
+    // one story about the same echo. Only the most specific survives.
+    $precedence = [
+        'wp.output.unescaped-unknown' => ['wp.xss.unescaped-output', 'wp.xss.escape-voided'],
+        'wp.xss.unescaped-output' => ['wp.xss.escape-voided'],
+    ];
+
+    $all = FindingCollection::fromArray([
+        makeFinding(ruleId: 'wp.output.unescaped-unknown', kind: TaintKind::Unknown, fingerprint: '1'),
+        makeFinding(ruleId: 'wp.xss.unescaped-output', kind: TaintKind::Html, fingerprint: '2'),
+        makeFinding(ruleId: 'wp.xss.escape-voided', kind: TaintKind::EscapeVoided, fingerprint: '3'),
+    ])->withRulePrecedence($precedence);
+
+    expect($all->all())->toHaveCount(1);
+    expect($all->all()[0]->ruleId)->toBe('wp.xss.escape-voided');
+
+    // With no escape-voided, unescaped-output is the most specific and wins.
+    $withoutVoided = FindingCollection::fromArray([
+        makeFinding(ruleId: 'wp.output.unescaped-unknown', kind: TaintKind::Unknown, fingerprint: '1'),
+        makeFinding(ruleId: 'wp.xss.unescaped-output', kind: TaintKind::Html, fingerprint: '2'),
+    ])->withRulePrecedence($precedence);
+
+    expect($withoutVoided->all())->toHaveCount(1);
+    expect($withoutVoided->all()[0]->ruleId)->toBe('wp.xss.unescaped-output');
+});
+
+it('does not collapse the output family across different lines', function (): void {
+    $precedence = ['wp.output.unescaped-unknown' => ['wp.xss.unescaped-output', 'wp.xss.escape-voided']];
+
+    $collection = FindingCollection::fromArray([
+        makeFinding(ruleId: 'wp.output.unescaped-unknown', kind: TaintKind::Unknown, line: 10, fingerprint: '1'),
+        makeFinding(ruleId: 'wp.xss.unescaped-output', kind: TaintKind::Html, line: 20, fingerprint: '2'),
+    ])->withRulePrecedence($precedence);
+
+    expect($collection)->toHaveCount(2);
+});
+
 it('counts by severity with every bucket present', function (): void {
     $counts = FindingCollection::fromArray([makeFinding(severity: Severity::High)])->countsBySeverity();
 
