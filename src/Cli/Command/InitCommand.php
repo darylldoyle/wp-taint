@@ -8,11 +8,11 @@ use Enshrined\WpTaint\Cli\ExitCode;
 use Enshrined\WpTaint\Cli\ProjectLayout;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
-use Symfony\Component\Console\Helper\QuestionHelper;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
-use Symfony\Component\Console\Question\ChoiceQuestion;
+
+use function Laravel\Prompts\multiselect;
 
 /**
  * Write a `wp-taint.toml` for a WordPress project.
@@ -26,6 +26,17 @@ use Symfony\Component\Console\Question\ChoiceQuestion;
 #[AsCommand(name: 'init', description: 'Detect a WordPress project and write a wp-taint.toml')]
 final class InitCommand extends Command
 {
+    /**
+     * @param (\Closure(InputInterface): bool)|null $promptGate whether a terminal
+     *        is present to prompt on; the real stream check when null. Injected
+     *        so a test can force the interactive branch and drive the multiselect
+     *        with a fake, without a real TTY.
+     */
+    public function __construct(private readonly ?\Closure $promptGate = null)
+    {
+        parent::__construct();
+    }
+
     protected function configure(): void
     {
         $this
@@ -77,8 +88,8 @@ final class InitCommand extends Command
         // that scans everything is the trap it exists to avoid. Interactive
         // asks. Non-interactive writes a template with every candidate
         // commented out for you to uncomment, rather than guessing.
-        if ($input->isInteractive() && self::stdinIsTerminal() && $input->getOption('all') !== true) {
-            $targets = $this->askWhichAreYours($input, $output, $candidates);
+        if ($this->canPrompt($input) && $input->getOption('all') !== true) {
+            $targets = $this->askWhichAreYours($candidates);
 
             if ($targets === []) {
                 $output->writeln('<comment>Nothing selected; no config written.</comment>');
@@ -119,38 +130,50 @@ final class InitCommand extends Command
     }
 
     /**
-     * Whether stdin is a terminal a prompt can read from.
+     * Whether there is a terminal to prompt on.
      *
-     * Symfony's isInteractive() is driven by --no-interaction, not by the pipe,
-     * so a scan in CI without that flag would hang on the prompt. Checking the
-     * stream keeps the template path — not a hang — the default when there is
-     * no one to answer.
+     * Two gates, and both matter. Symfony's isInteractive() is driven by
+     * --no-interaction, not by the pipe, and a prompt library reading a stream
+     * that is not a terminal either hangs or throws, so a scan in CI without
+     * the flag would break. Checking the stream too keeps the template path,
+     * not a hang, the default when there is no one to answer. The decision is
+     * injectable through the constructor so a test can force the interactive
+     * branch and drive the prompt with a fake.
      */
-    private static function stdinIsTerminal(): bool
+    private function canPrompt(InputInterface $input): bool
     {
-        return \defined('STDIN') && \function_exists('stream_isatty') && stream_isatty(\STDIN);
+        if ($this->promptGate !== null) {
+            return ($this->promptGate)($input);
+        }
+
+        return $input->isInteractive()
+            && \defined('STDIN')
+            && \function_exists('stream_isatty')
+            && stream_isatty(\STDIN);
     }
 
     /**
+     * The multiselect a real terminal gets: space to check, enter to confirm.
+     *
+     * Nothing is pre-selected, because the question is which of the detected
+     * directories you wrote, and the tool cannot know. What is left unchecked
+     * becomes the reference set: analysed for symbols, never reported on. An
+     * empty selection is allowed and handled by the caller.
+     *
      * @param list<string> $candidates
      *
      * @return list<string>
      */
-    private function askWhichAreYours(InputInterface $input, OutputInterface $output, array $candidates): array
+    private function askWhichAreYours(array $candidates): array
     {
-        $output->writeln('Which of these did you write? (comma-separated numbers, or "all")');
+        $selected = multiselect(
+            label: 'Which of these directories did you write?',
+            options: $candidates,
+            scroll: 15,
+            hint: 'Space to select, Enter to confirm. Everything left unchecked becomes reference-only.',
+        );
 
-        $question = new ChoiceQuestion('Your directories', $candidates);
-        $question->setMultiselect(true);
-        $question->setErrorMessage('%s is not one of the choices.');
-
-        $helper = $this->getHelper('question');
-        assert($helper instanceof QuestionHelper);
-
-        /** @var list<string> $answer */
-        $answer = $helper->ask($input, $output, $question);
-
-        return $answer;
+        return array_values(array_map(static fn (mixed $value): string => (string) $value, $selected));
     }
 
     /**

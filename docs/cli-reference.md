@@ -32,7 +32,7 @@ What it writes depends on how it runs:
 
 | How it runs | Result |
 |-------------|--------|
-| Interactive terminal | Asks which directories you wrote, writes those as `[scan] paths` |
+| Interactive terminal | A checklist of the detected directories: the ones you check become `[scan] paths`, the rest become `reference` |
 | `--all` | Every detected directory becomes a scan path |
 | Non-interactive (CI, piped) | A template with every directory commented out |
 
