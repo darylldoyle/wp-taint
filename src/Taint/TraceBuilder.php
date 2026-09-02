@@ -84,6 +84,7 @@ final class TraceBuilder
             $this->state->taintOf($operand),
             $provenance->callee,
             $provenance->parameterIndex,
+            $provenance->imprecise,
         );
     }
 

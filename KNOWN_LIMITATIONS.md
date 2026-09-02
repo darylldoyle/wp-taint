@@ -8,8 +8,11 @@ The design rule behind most of these: **prefer a documented false negative to an
 undocumented false positive.** A tool that cries wolf gets muted and then
 deleted, at which point its true positives stop mattering too.
 
-Findings that crossed one of these carry `imprecise: true` in JSON output,
-`properties.imprecise` in SARIF, and a note in the console. You can filter on it.
+A finding whose own source-to-sink path crossed one of these carries
+`imprecise: true` in JSON output, `properties.imprecise` in SARIF, and a note
+in the console naming the step it crossed. It is path-level: a finding is
+imprecise only when a step on its own trace is, not when its function happened
+to contain an unresolvable construct elsewhere. You can filter on it.
 
 ## Where each limitation comes from
 

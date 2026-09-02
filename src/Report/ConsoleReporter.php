@@ -132,12 +132,25 @@ final class ConsoleReporter implements Reporter
         }
 
         if ($finding->imprecise) {
-            $out .= '  ' . $this->ansi->dim(
-                'This path crossed something the engine could not resolve; it may be a false positive.',
-            ) . "\n";
+            $out .= '  ' . $this->ansi->dim('Imprecise: ' . $this->impreciseReason($finding)) . "\n";
         }
 
         return $out;
+    }
+
+    /**
+     * The specific unresolved step on this finding's path, so the reader learns
+     * what is uncertain without re-running with `--verbose`.
+     */
+    private function impreciseReason(Finding $finding): string
+    {
+        foreach ($finding->trace as $step) {
+            if ($step->imprecise) {
+                return sprintf('%s:%d  %s', $finding->file, $step->line, $step->description);
+            }
+        }
+
+        return 'this path crossed something the engine could not resolve.';
     }
 
     private function renderVerbose(Finding $finding, ReportOptions $options): string
@@ -288,10 +301,15 @@ final class ConsoleReporter implements Reporter
         }
 
         $acknowledged = 0;
+        $imprecise = 0;
 
         foreach ($result->findings as $finding) {
             if ($finding->acknowledgement !== null) {
                 $acknowledged++;
+            }
+
+            if ($finding->imprecise) {
+                $imprecise++;
             }
         }
 
@@ -299,6 +317,14 @@ final class ConsoleReporter implements Reporter
             $out .= '  ' . $this->ansi->dim(sprintf(
                 '%d downgraded to notice by a matching phpcs:ignore (--no-phpcs-suppressions for full severity)',
                 $acknowledged,
+            )) . "\n";
+        }
+
+        if ($imprecise > 0) {
+            $out .= '  ' . $this->ansi->dim(sprintf(
+                '%d crossed something the engine could not resolve, marked imprecise '
+                    . '(--dynamic-calls tunes how unresolved calls are treated)',
+                $imprecise,
             )) . "\n";
         }
 
