@@ -9,6 +9,15 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A `notice` severity, below `low`, for a finding the author acknowledged with
+  a matching `phpcs:ignore`. A line-specific ignore naming the sniff a rule maps
+  to (`WordPress.Security.EscapeOutput.OutputNotEscaped` for the output rules,
+  `WordPress.DB.PreparedSQL.*` for the SQL ones) is the author saying they
+  looked, so the finding is reported as a notice rather than silenced, with the
+  sniff and their reason in its trace. It never fails a build. A bare
+  `phpcs:ignore`, an unrelated sniff, and `phpcs:disable`/`enable` ranges are
+  deliberately not honoured. `--no-phpcs-suppressions` turns the behaviour off,
+  for auditing code whose author's judgement you do not share.
 - Object-level authorization detection, the largest previously-silent class in
   the authorization column.
   - `wp.authz.object-id-from-request` reports a request-chosen post, comment,

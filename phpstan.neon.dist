@@ -38,3 +38,10 @@ parameters:
             identifier: missingType.property
             path: src/Cfg/*
             reportUnmatched: false
+        # symfony/console 7.4 adds addCommand() and deprecates add(). The
+        # runtime method_exists() picks the right one across the ^7.0 range;
+        # PHPStan only sees the installed 7.4, where addCommand() always exists.
+        -
+            identifier: function.alreadyNarrowedType
+            path: src/Cli/Application.php
+            reportUnmatched: false

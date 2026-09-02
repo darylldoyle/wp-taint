@@ -61,7 +61,7 @@ final class RegistryLoader
 
     private const CAPABILITY_KEYS = ['name', 'scope', 'note'];
 
-    private const RULE_KEYS = ['id', 'title', 'description', 'remediation', 'cwe', 'message'];
+    private const RULE_KEYS = ['id', 'title', 'description', 'remediation', 'cwe', 'message', 'phpcs_sniffs'];
 
     /**
      * `scan` is not a catalogue section and is ignored here.
@@ -618,6 +618,9 @@ final class RegistryLoader
                 $this->requiredString($file, $context . ' remediation', $entry['remediation'] ?? null),
                 $this->optionalString($file, $context . ' cwe', $entry['cwe'] ?? null),
                 $this->optionalString($file, $context . ' message', $entry['message'] ?? null),
+                isset($entry['phpcs_sniffs'])
+                    ? $this->stringList($file, $context . ' phpcs_sniffs', $entry['phpcs_sniffs'])
+                    : [],
             ));
         }
     }

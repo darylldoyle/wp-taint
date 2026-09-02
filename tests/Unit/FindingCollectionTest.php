@@ -157,9 +157,25 @@ it('applies a named precedence only against the named rule', function (): void {
 it('counts by severity with every bucket present', function (): void {
     $counts = FindingCollection::fromArray([makeFinding(severity: Severity::High)])->countsBySeverity();
 
-    expect(array_keys($counts))->toBe(['critical', 'high', 'medium', 'low']);
+    expect(array_keys($counts))->toBe(['critical', 'high', 'medium', 'low', 'notice']);
     expect($counts['high'])->toBe(1);
     expect($counts['low'])->toBe(0);
+    expect($counts['notice'])->toBe(0);
+});
+
+it('orders by severity, most severe first, then canonically', function (): void {
+    $ordered = FindingCollection::fromArray([
+        makeFinding(severity: Severity::Notice, file: 'a.php', fingerprint: '1'),
+        makeFinding(severity: Severity::Critical, file: 'z.php', fingerprint: '2'),
+        makeFinding(severity: Severity::High, file: 'm.php', fingerprint: '3'),
+        makeFinding(severity: Severity::High, file: 'b.php', fingerprint: '4'),
+    ])->orderedBySeverity();
+
+    expect(array_map(static fn ($f): string => $f->severity->value, $ordered))
+        ->toBe(['critical', 'high', 'high', 'notice']);
+    // Within the two highs, canonical file order holds: b.php before m.php.
+    expect($ordered[1]->file)->toBe('b.php');
+    expect($ordered[2]->file)->toBe('m.php');
 });
 
 it('groups by file in sorted order', function (): void {

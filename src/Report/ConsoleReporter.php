@@ -33,15 +33,36 @@ final class ConsoleReporter implements Reporter
 
     public function render(ScanResult $result, ReportOptions $options): string
     {
-        $out = '';
+        $out = $this->renderHeader($result);
 
-        foreach ($result->findings->groupedByFile() as $findings) {
-            foreach ($findings as $finding) {
-                $out .= $this->renderFinding($finding, $options);
-            }
+        foreach ($result->findings->orderedBySeverity() as $finding) {
+            $out .= $this->renderFinding($finding, $options);
         }
 
         return $out . $this->renderSummary($result, $options);
+    }
+
+    /**
+     * A banner marking where the findings start, so a reader dropped into a
+     * long scroll can find the top. Only when there is something to report;
+     * a clean scan has just its summary.
+     */
+    private function renderHeader(ScanResult $result): string
+    {
+        if ($result->findings->isEmpty()) {
+            return '';
+        }
+
+        $rule = str_repeat('─', 61);
+        $count = count($result->findings);
+
+        return $rule . "\n"
+            . '  ' . $this->ansi->bold('wp-taint') . $this->ansi->dim(sprintf(
+                '  ·  %d finding%s, most severe first',
+                $count,
+                $count === 1 ? '' : 's',
+            )) . "\n"
+            . $rule . "\n\n";
     }
 
     private function renderFinding(Finding $finding, ReportOptions $options): string
@@ -103,13 +124,18 @@ final class ConsoleReporter implements Reporter
 
         $out .= "\n  " . $finding->message . "\n";
 
+        if ($finding->acknowledgement !== null) {
+            $out .= '  ' . $this->ansi->dim(sprintf(
+                'Suppressed in PHPCS with %s; reporting as a notice rather than a finding.',
+                $finding->acknowledgement->sniff,
+            )) . "\n";
+        }
+
         if ($finding->imprecise) {
             $out .= '  ' . $this->ansi->dim(
                 'This path crossed something the engine could not resolve; it may be a false positive.',
             ) . "\n";
         }
-
-        $out .= '  ' . $this->ansi->dim('Run with --verbose for the full path.') . "\n";
 
         return $out;
     }
@@ -225,11 +251,12 @@ final class ConsoleReporter implements Reporter
         $rule = str_repeat('─', 61);
 
         $line = sprintf(
-            '  %s   %s   %s   %s',
+            '  %s   %s   %s   %s   %s',
             $this->ansi->severity(Severity::Critical, ($counts['critical'] ?? 0) . ' critical'),
             $this->ansi->severity(Severity::High, ($counts['high'] ?? 0) . ' high'),
             $this->ansi->severity(Severity::Medium, ($counts['medium'] ?? 0) . ' medium'),
             $this->ansi->severity(Severity::Low, ($counts['low'] ?? 0) . ' low'),
+            $this->ansi->severity(Severity::Notice, ($counts['notice'] ?? 0) . ' notice'),
         );
 
         $out = $rule . "\n" . $line . "\n";
@@ -258,6 +285,21 @@ final class ConsoleReporter implements Reporter
                 $result->suppressedInline,
                 $result->suppressedInline === 1 ? '' : 's',
             );
+        }
+
+        $acknowledged = 0;
+
+        foreach ($result->findings as $finding) {
+            if ($finding->acknowledgement !== null) {
+                $acknowledged++;
+            }
+        }
+
+        if ($acknowledged > 0) {
+            $out .= '  ' . $this->ansi->dim(sprintf(
+                '%d downgraded to notice by a matching phpcs:ignore (--no-phpcs-suppressions for full severity)',
+                $acknowledged,
+            )) . "\n";
         }
 
         // Always shown when non-zero, at any verbosity. A silently skipped file
@@ -331,16 +373,18 @@ final class ConsoleReporter implements Reporter
     }
 
     /**
-     * How to ask why, spelled out with a location that exists.
+     * The footer, shown once rather than under every finding.
      *
-     * This used to read "run with --verbose for the full path, or --explain for
-     * why", which is wrong twice over: `explain` is a command rather than an
-     * option, so `scan --explain` fails outright, and it needs `--scope` or it
-     * analyses the one file alone and reports clean on anything whose taint
-     * arrives through an include or a hook.
+     * Two hints belonged under each finding and said the same thing every time,
+     * which is noise. They live here now: how to see the full trace, and how to
+     * ask why a value is tainted.
      *
-     * So the hint is built from the first finding rather than described. A
-     * command someone can paste cannot be wrong about its own syntax.
+     * The explain hint is built from the first finding rather than described,
+     * because a command someone can paste cannot be wrong about its own syntax.
+     * It used to read "run with --verbose ... or --explain", which was wrong
+     * twice: `explain` is a command, not an option, so `scan --explain` fails,
+     * and it needs `--scope` or it analyses the one file alone and reports clean
+     * on anything whose taint arrives through an include or a hook.
      */
     private function renderExplainHint(ScanResult $result, ReportOptions $options): string
     {
@@ -351,7 +395,9 @@ final class ConsoleReporter implements Reporter
             return '';
         }
 
-        return "\n" . $this->ansi->dim('  Why is a value tainted? Ask about the line:') . "\n"
+        return "\n" . $this->ansi->dim('  Run with --verbose for the full source-to-sink trace on each finding.')
+            . "\n\n"
+            . $this->ansi->dim('  Why is a value tainted? Ask about the line:') . "\n"
             . $this->ansi->dim(sprintf(
                 "  wp-taint explain %s:%d --scope=%s",
                 rtrim($result->root, '/') . '/' . ltrim($first->file, '/'),

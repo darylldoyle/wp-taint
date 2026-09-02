@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Enshrined\WpTaint\Finding;
 
 use Enshrined\WpTaint\Taint\TaintKind;
+use Enshrined\WpTaint\Taint\TaintSet;
 
 final class Finding
 {
@@ -31,6 +32,12 @@ final class Finding
          * which the source/sink block below it already carries.
          */
         public readonly string $sinkIdentity = '',
+        /**
+         * Set when the author marked this line reviewed with a matching
+         * `phpcs:ignore`. The finding is downgraded to {@see Severity::Notice}
+         * and this records why. Null on everything else.
+         */
+        public readonly ?Acknowledgement $acknowledgement = null,
     ) {
     }
 
@@ -65,6 +72,53 @@ final class Finding
             $this->fingerprint,
             $this->imprecise,
             $this->sinkIdentity,
+            $this->acknowledgement,
+        );
+    }
+
+    /**
+     * The author marked this line reviewed with a matching `phpcs:ignore`, so
+     * the finding drops to a notice and gains a trace step saying why. The
+     * fingerprint is unchanged, so a baseline or a suppression still matches.
+     */
+    public function acknowledged(Acknowledgement $acknowledgement): self
+    {
+        $reason = $acknowledgement->reason === null ? '' : sprintf(' ("%s")', $acknowledgement->reason);
+        $steps = $this->trace;
+        $end = end($steps);
+        $last = $end === false ? null : $end;
+
+        $note = new TraceStep(
+            $last === null ? TraceVerb::Sink : $last->verb,
+            $this->file,
+            $this->line,
+            $this->column,
+            $this->endColumn,
+            $last === null ? '' : $last->snippet,
+            sprintf(
+                'Suppressed in PHPCS with %s%s. Reported as a notice rather than a finding; '
+                    . '--no-phpcs-suppressions reports it at full severity.',
+                $acknowledgement->sniff,
+                $reason,
+            ),
+            $last === null ? TaintSet::empty() : $last->kinds,
+        );
+
+        return new self(
+            $this->ruleId,
+            $this->rule,
+            Severity::Notice,
+            $this->kind,
+            $this->file,
+            $this->line,
+            $this->column,
+            $this->endColumn,
+            $this->message,
+            [...$this->trace, $note],
+            $this->fingerprint,
+            $this->imprecise,
+            $this->sinkIdentity,
+            $acknowledgement,
         );
     }
 }
