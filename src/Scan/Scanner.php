@@ -65,6 +65,15 @@ final class Scanner
         // Both say "this escaper does not protect this attribute"; the traced
         // finding also says where the value came from, so it wins the line.
         'wp.xss.wrong-context-escape' => ['wp.xss.unescaped-attribute'],
+        // The unescaped-output family tells one story at three levels of
+        // certainty about the same echo. "Unknown" says the escaping could not
+        // be determined; "unescaped-output" says it is definitely absent;
+        // "escape-voided" says an escaper ran and something undid it. The more
+        // specific finding names the real defect and its fix, so it supersedes
+        // the vaguer ones at the same line rather than the reader triaging all
+        // three.
+        'wp.output.unescaped-unknown' => ['wp.xss.unescaped-output', 'wp.xss.escape-voided'],
+        'wp.xss.unescaped-output' => ['wp.xss.escape-voided'],
     ];
 
     public function __construct(

@@ -83,6 +83,14 @@ final class Finding
      */
     public function acknowledged(Acknowledgement $acknowledgement): self
     {
+        // Record the severity being reduced, so the finding keeps what it was
+        // downgraded from and the reporters can show it.
+        $recorded = new Acknowledgement(
+            $acknowledgement->sniff,
+            $acknowledgement->reason,
+            $this->severity,
+        );
+
         $reason = $acknowledgement->reason === null ? '' : sprintf(' ("%s")', $acknowledgement->reason);
         $steps = $this->trace;
         $end = end($steps);
@@ -96,7 +104,7 @@ final class Finding
             $this->endColumn,
             $last === null ? '' : $last->snippet,
             sprintf(
-                'Suppressed in PHPCS with %s%s. Reported as a notice rather than a finding; '
+                'Acknowledged in PHPCS with %s%s; severity reduced to notice. '
                     . '--no-phpcs-suppressions reports it at full severity.',
                 $acknowledgement->sniff,
                 $reason,
@@ -118,7 +126,7 @@ final class Finding
             $this->fingerprint,
             $this->imprecise,
             $this->sinkIdentity,
-            $acknowledgement,
+            $recorded,
         );
     }
 }

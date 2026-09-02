@@ -38,10 +38,9 @@
     },
     "duplicate-post": {
         "version": "4.7",
-        "findings": 5,
+        "findings": 4,
         "bySeverity": {
             "high": 2,
-            "low": 1,
             "medium": 2
         },
         "warnings": 0,
@@ -49,9 +48,9 @@
     },
     "loginizer": {
         "version": "2.1.0",
-        "findings": 11,
+        "findings": 10,
         "bySeverity": {
-            "high": 7,
+            "high": 6,
             "medium": 4
         },
         "warnings": 0,
@@ -68,10 +67,10 @@
     },
     "wpforms-lite": {
         "version": "2.0.1.1",
-        "findings": 46,
+        "findings": 45,
         "bySeverity": {
             "critical": 4,
-            "high": 26,
+            "high": 25,
             "low": 6,
             "medium": 10
         },

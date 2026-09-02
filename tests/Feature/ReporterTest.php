@@ -218,3 +218,124 @@ it('omits the explain hint when there is nothing to explain', function (): void 
 
     expect($report)->not->toContain('wp-taint explain');
 });
+
+it('breaks out the notice count in the header so a total does not read as all actionable', function (): void {
+    $rule = new Enshrined\WpTaint\Finding\RuleDefinition('wp.xss.unescaped-output', 'T', 'D', 'R');
+    $step = new Enshrined\WpTaint\Finding\TraceStep(
+        Enshrined\WpTaint\Finding\TraceVerb::Sink,
+        'a.php',
+        5,
+        3,
+        null,
+        'echo $x;',
+        'Reaches echo.',
+        Enshrined\WpTaint\Taint\TaintSet::of(Enshrined\WpTaint\Taint\TaintKind::Html),
+    );
+    $make = static fn (Enshrined\WpTaint\Finding\Severity $severity, string $fp): Enshrined\WpTaint\Finding\Finding
+        => new Enshrined\WpTaint\Finding\Finding(
+            'wp.xss.unescaped-output',
+            $rule,
+            $severity,
+            Enshrined\WpTaint\Taint\TaintKind::Html,
+            'a.php',
+            5,
+            3,
+            null,
+            'msg',
+            [$step],
+            $fp,
+        );
+
+    $result = new Enshrined\WpTaint\Scan\ScanResult(
+        Enshrined\WpTaint\Finding\FindingCollection::fromArray([
+            $make(Enshrined\WpTaint\Finding\Severity::High, '1'),
+            $make(Enshrined\WpTaint\Finding\Severity::Notice, '2'),
+        ]),
+        [],
+        1,
+        [],
+        '/root',
+        ['php-core'],
+        true,
+        10,
+    );
+
+    $report = (new ConsoleReporter(new Ansi(false)))->render($result, new ReportOptions());
+
+    expect($report)->toContain('2 findings (1 notice), most severe first');
+});
+
+it('never prints a synthetic 0:0 position for a source with no location', function (): void {
+    // A synthetic operand carries line 0, column 0. Printing `:0:0` leaks an
+    // engine internal; the position reads (unknown) instead.
+    $source = new Enshrined\WpTaint\Finding\TraceStep(
+        Enshrined\WpTaint\Finding\TraceVerb::Source,
+        'a.php',
+        0,
+        0,
+        null,
+        '',
+        'Attacker-controlled input.',
+        Enshrined\WpTaint\Taint\TaintSet::of(Enshrined\WpTaint\Taint\TaintKind::Html),
+    );
+    $sink = new Enshrined\WpTaint\Finding\TraceStep(
+        Enshrined\WpTaint\Finding\TraceVerb::Sink,
+        'a.php',
+        5,
+        3,
+        null,
+        'echo $x;',
+        'Reaches echo.',
+        Enshrined\WpTaint\Taint\TaintSet::of(Enshrined\WpTaint\Taint\TaintKind::Html),
+    );
+    $finding = new Enshrined\WpTaint\Finding\Finding(
+        'wp.xss.unescaped-output',
+        new Enshrined\WpTaint\Finding\RuleDefinition('wp.xss.unescaped-output', 'T', 'D', 'R'),
+        Enshrined\WpTaint\Finding\Severity::High,
+        Enshrined\WpTaint\Taint\TaintKind::Html,
+        'a.php',
+        5,
+        3,
+        null,
+        'Untrusted input reaches output.',
+        [$source, $sink],
+        'fp',
+    );
+    $result = new Enshrined\WpTaint\Scan\ScanResult(
+        Enshrined\WpTaint\Finding\FindingCollection::fromArray([$finding]),
+        [],
+        1,
+        [],
+        '/root',
+        ['php-core'],
+        true,
+        10,
+    );
+
+    $report = (new ConsoleReporter(new Ansi(false)))->render($result, new ReportOptions());
+
+    expect($report)->toContain('(unknown)');
+    expect($report)->not->toContain(':0:0');
+});
+
+it('names the unresolved boundary on an imprecise finding rather than a generic caveat', function (): void {
+    // A cross-function finding: the value reaches the sink inside a callee
+    // whose own path crossed an unresolved dynamic call. Its imprecision used
+    // to surface as "this path crossed something the engine could not resolve",
+    // which named nothing. It must name where instead.
+    $result = scanCode(<<<'PHP'
+        <?php
+        function acme_emit($cb, $value) {
+            echo $cb($value);
+        }
+        function acme_caller() {
+            acme_emit('acme_unknown_callback', $_GET['x']);
+        }
+        PHP);
+
+    $report = (new ConsoleReporter(new Ansi(false)))->render($result, new ReportOptions());
+
+    expect($report)->toContain('Imprecise:');
+    expect($report)->toContain('inside acme_emit');
+    expect($report)->not->toContain('this path crossed something the engine could not resolve');
+});

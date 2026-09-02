@@ -39,6 +39,29 @@ function scanForAck(string $php, array $options = []): array
     }
 }
 
+/**
+ * The same scan rendered for a human, so the console wording can be asserted.
+ */
+function scanForAckConsole(string $php): string
+{
+    $file = sys_get_temp_dir() . '/wp-taint-ack-' . bin2hex(random_bytes(6)) . '.php';
+    file_put_contents($file, $php);
+
+    try {
+        $tester = new CommandTester((new Application())->find('scan'));
+        $tester->execute([
+            'paths' => [$file],
+            '--min-severity' => 'notice',
+            '--fail-on' => 'never',
+            '--no-ansi' => true,
+        ], ['interactive' => false]);
+
+        return $tester->getDisplay();
+    } finally {
+        @unlink($file);
+    }
+}
+
 it('downgrades a finding whose line names the matching sniff', function (): void {
     $findings = scanForAck(<<<'PHP'
         <?php
@@ -110,6 +133,33 @@ it('honours a standalone ignore on the line above', function (): void {
         PHP);
 
     expect($findings[0]['severity'])->toBe('notice');
+});
+
+it('keeps the severity it was reduced from in the data model', function (): void {
+    $findings = scanForAck(<<<'PHP'
+        <?php
+        function acme() {
+            echo $_GET['x']; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- reviewed
+        }
+        PHP);
+
+    expect($findings[0]['severity'])->toBe('notice');
+    expect($findings[0]['acknowledged']['reducedFrom'])->toBe('high');
+});
+
+it('names the sniff and what the severity was reduced from in the console', function (): void {
+    $display = scanForAckConsole(<<<'PHP'
+        <?php
+        function acme() {
+            echo $_GET['x']; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- reviewed
+        }
+        PHP);
+
+    expect($display)->toContain(
+        'Acknowledged in PHPCS with WordPress.Security.EscapeOutput.OutputNotEscaped; '
+            . 'severity reduced from high to notice.',
+    );
+    expect($display)->not->toContain('reporting as a notice rather than a finding');
 });
 
 it('reports at full severity under --no-phpcs-suppressions', function (): void {
