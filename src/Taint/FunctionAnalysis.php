@@ -1960,14 +1960,14 @@ final class FunctionAnalysis
      *
      * @param list<Operand> $inputs
      */
-    private function transferUnion(Op\Expr $op, array $inputs, string $description): bool
+    private function transferUnion(Op\Expr $op, array $inputs, string $description, bool $imprecise = false): bool
     {
         $taint = $this->state->unionOfOwn($inputs);
         $container = $this->state->unionOfContainers($inputs);
 
         $provenance = $taint->isEmpty() && $container->isEmpty()
             ? null
-            : new Provenance(TraceVerb::Propagate, $op, $description, $inputs);
+            : new Provenance(TraceVerb::Propagate, $op, $description, $inputs, imprecise: $imprecise);
 
         $changed = $this->writeResult($op->result, $taint, $provenance);
 
@@ -3302,6 +3302,7 @@ final class FunctionAnalysis
                     $call->name(),
                     DynamicCallPolicy::Propagate->describe(),
                 ),
+                imprecise: true,
             ),
             DynamicCallPolicy::Tainted => $this->writeResult(
                 $op->result,
@@ -3315,6 +3316,7 @@ final class FunctionAnalysis
                         DynamicCallPolicy::Tainted->describe(),
                     ),
                     $call->arguments,
+                    imprecise: true,
                 ),
             ),
         };
@@ -3587,7 +3589,7 @@ final class FunctionAnalysis
                     $reference->sinkIdentity,
                     $reference->snippet,
                 ),
-                $this->imprecise || $reference->imprecise,
+                self::traceIsImprecise($trace) || $reference->imprecise,
                 $reference->sinkIdentity,
             );
         }
@@ -4074,8 +4076,29 @@ final class FunctionAnalysis
             self::messageFor($this->registry->ruleMessage($ruleId), $kind, $trace),
             $trace,
             Fingerprint::compute($ruleId, $this->context->file->relativePath, $identity, $snippet),
-            $this->imprecise,
+            self::traceIsImprecise($trace),
             $identity,
         );
+    }
+
+    /**
+     * Whether this finding's own path crossed something unresolved.
+     *
+     * Path-level, not function-level: a finding is imprecise when one of the
+     * steps on its own trace is, not when its function happened to contain an
+     * unresolvable construct somewhere else. In a plugin of thousand-line
+     * methods, the difference is most of the flags.
+     *
+     * @param list<TraceStep> $trace
+     */
+    private static function traceIsImprecise(array $trace): bool
+    {
+        foreach ($trace as $step) {
+            if ($step->imprecise) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

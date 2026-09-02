@@ -129,6 +129,28 @@ it('leaves a name nobody can find a body for unresolved', function (): void {
     expect($assumed->findings->all()[0]->imprecise)->toBeTrue();
 });
 
+it('marks imprecise only the finding whose own path crossed the unresolved call', function (): void {
+    // Path-level, not function-level: a clean finding sharing a function with
+    // an unrelated dynamic call must not inherit its imprecision.
+    $result = scanCode(<<<'PHP'
+        <?php
+        function acme( $cb ) {
+            $unused = $cb( 'x' );      // unresolved, off the reported paths
+            echo $_GET['a'];           // clean path
+            echo $cb( $_GET['b'] );    // path crosses the unresolved call
+        }
+        PHP);
+
+    $byLine = [];
+
+    foreach ($result->findings->all() as $finding) {
+        $byLine[$finding->line] = $finding->imprecise;
+    }
+
+    expect($byLine[4])->toBeFalse();
+    expect($byLine[5])->toBeTrue();
+});
+
 it('resolves a class name held in a variable at new', function (): void {
     $result = scanCode(<<<'PHP'
         <?php

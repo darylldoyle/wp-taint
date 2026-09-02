@@ -30,6 +30,12 @@ final class TraceStep
         public readonly TaintSet $kinds,
         public readonly ?string $callee = null,
         public readonly ?int $parameterIndex = null,
+        /**
+         * This step is where the path crossed something the engine could not
+         * resolve, so the value's flow through it is an assumption. A finding
+         * is imprecise exactly when one of its own steps is.
+         */
+        public readonly bool $imprecise = false,
     ) {
     }
 
