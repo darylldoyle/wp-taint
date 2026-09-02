@@ -215,6 +215,29 @@ final class FindingCollection implements IteratorAggregate, Countable
         return $grouped;
     }
 
+    /**
+     * Most severe first, then the canonical file/line order within a severity.
+     *
+     * For the console, where the thing a reader wants is the criticals, and
+     * scrolling a file-ordered list to find them is the complaint this answers.
+     * The JSON and SARIF reports keep the canonical order, which tools sort
+     * themselves.
+     *
+     * @return list<Finding>
+     */
+    public function orderedBySeverity(): array
+    {
+        $findings = $this->findings;
+
+        usort($findings, static function (Finding $a, Finding $b): int {
+            $bySeverity = $b->severity->rank() <=> $a->severity->rank();
+
+            return $bySeverity !== 0 ? $bySeverity : $a->compareTo($b);
+        });
+
+        return $findings;
+    }
+
     public function hasKind(TaintKind $kind): bool
     {
         foreach ($this->findings as $finding) {

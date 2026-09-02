@@ -140,6 +140,9 @@ it('shows source and sink only by default, and the full trace when verbose', fun
     expect($compact)->toContain('sink');
     expect($compact)->toContain('--verbose');
     expect($compact)->not->toContain('Suppress');
+    // A header marks the start of the report.
+    expect($compact)->toContain('wp-taint');
+    expect($compact)->toContain('most severe first');
 
     expect($verbose)->toContain('Fix');
     expect($verbose)->toContain('Suppress');

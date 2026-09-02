@@ -33,15 +33,36 @@ final class ConsoleReporter implements Reporter
 
     public function render(ScanResult $result, ReportOptions $options): string
     {
-        $out = '';
+        $out = $this->renderHeader($result);
 
-        foreach ($result->findings->groupedByFile() as $findings) {
-            foreach ($findings as $finding) {
-                $out .= $this->renderFinding($finding, $options);
-            }
+        foreach ($result->findings->orderedBySeverity() as $finding) {
+            $out .= $this->renderFinding($finding, $options);
         }
 
         return $out . $this->renderSummary($result, $options);
+    }
+
+    /**
+     * A banner marking where the findings start, so a reader dropped into a
+     * long scroll can find the top. Only when there is something to report;
+     * a clean scan has just its summary.
+     */
+    private function renderHeader(ScanResult $result): string
+    {
+        if ($result->findings->isEmpty()) {
+            return '';
+        }
+
+        $rule = str_repeat('─', 61);
+        $count = count($result->findings);
+
+        return $rule . "\n"
+            . '  ' . $this->ansi->bold('wp-taint') . $this->ansi->dim(sprintf(
+                '  ·  %d finding%s, most severe first',
+                $count,
+                $count === 1 ? '' : 's',
+            )) . "\n"
+            . $rule . "\n\n";
     }
 
     private function renderFinding(Finding $finding, ReportOptions $options): string
