@@ -67,8 +67,27 @@ wp-taint scan [options] [--] [<paths>...]
 | `--baseline=FILE` | none | Suppress findings listed in this file |
 | `--generate-baseline[=FILE]` | off | Write current findings to a baseline and exit |
 | `--no-structural-rules` | off | Run taint analysis only |
+| `--no-phpcs-suppressions` | off | Report at full severity even on a line the author marked reviewed with a matching `phpcs:ignore` |
 
-Severity levels are `low`, `medium`, `high` and `critical`.
+Severity levels are `notice`, `low`, `medium`, `high` and `critical`.
+
+### PHPCS-acknowledged findings
+
+A line carrying a `phpcs:ignore` that names the sniff a rule maps to is the
+author saying "I looked at this line, and here is why". So the finding is not
+silenced, it is reported as a `notice` (below `low`, never fails a build), with
+the sniff and the author's reason in its trace.
+
+```php
+echo $html; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- built from esc_html'd parts
+```
+
+Only a line-specific ignore that names the matching sniff counts. A bare
+`phpcs:ignore`, a sniff for a different rule, and `phpcs:disable`/`enable`
+ranges are ignored: a block disable is how bad code gets hidden wholesale,
+which is exactly where the analyser should keep looking. `--no-phpcs-suppressions`
+turns the whole behaviour off, for auditing code whose author's judgement you
+do not share.
 
 ### Changing the analysis
 

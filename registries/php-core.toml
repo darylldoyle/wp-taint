@@ -812,6 +812,7 @@ from = [0]
 
 [[rules]]
 id = "wp.xss.unescaped-attribute"
+phpcs_sniffs = ["WordPress.Security.EscapeOutput.OutputNotEscaped"]
 title = "Sanitised input reaches a quoted attribute that its quotes can end"
 description = "A value whose tags were stripped — sanitize_text_field() and its relatives — still carries both quote characters, and it lands inside a quoted HTML attribute. The quote ends the attribute and the rest of the payload becomes new attributes: onmouseover, onfocus, anything."
 remediation = "Escape at output for the context: esc_attr() inside a quoted attribute. Sanitising at input is about storing clean data, not about where it will land."
@@ -820,6 +821,7 @@ message = "Sanitised input reaches a quoted attribute whose quotes it can end."
 
 [[rules]]
 id = "wp.xss.unescaped-output"
+phpcs_sniffs = ["WordPress.Security.EscapeOutput.OutputNotEscaped"]
 title = "Untrusted input reaches output without HTML escaping"
 description = "A value derived from user-controlled input reaches an output construct with html taint intact."
 remediation = "Apply esc_html() for text, esc_attr() for attribute values, esc_url() for URLs, or wp_kses_post() where limited markup is intended."

@@ -72,6 +72,18 @@ final class FindingCollection implements IteratorAggregate, Countable
         return new self(array_values(array_filter($this->findings, $predicate)));
     }
 
+    /**
+     * Replace each finding with a transformed copy, keeping the count and the
+     * order. Used to downgrade a finding in place, e.g. an author-acknowledged
+     * one, without disturbing anything else.
+     *
+     * @param callable(Finding): Finding $transform
+     */
+    public function map(callable $transform): self
+    {
+        return new self(array_map($transform, $this->findings));
+    }
+
     public function withMinimumSeverity(Severity $minimum): self
     {
         return $this->filter(static fn (Finding $finding): bool => $finding->severity->atLeast($minimum));
@@ -160,6 +172,7 @@ final class FindingCollection implements IteratorAggregate, Countable
             Severity::High->value => 0,
             Severity::Medium->value => 0,
             Severity::Low->value => 0,
+            Severity::Notice->value => 0,
         ];
 
         foreach ($this->findings as $finding) {

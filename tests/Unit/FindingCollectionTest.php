@@ -157,9 +157,10 @@ it('applies a named precedence only against the named rule', function (): void {
 it('counts by severity with every bucket present', function (): void {
     $counts = FindingCollection::fromArray([makeFinding(severity: Severity::High)])->countsBySeverity();
 
-    expect(array_keys($counts))->toBe(['critical', 'high', 'medium', 'low']);
+    expect(array_keys($counts))->toBe(['critical', 'high', 'medium', 'low', 'notice']);
     expect($counts['high'])->toBe(1);
     expect($counts['low'])->toBe(0);
+    expect($counts['notice'])->toBe(0);
 });
 
 it('groups by file in sorted order', function (): void {

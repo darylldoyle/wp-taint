@@ -7,12 +7,15 @@ namespace Enshrined\WpTaint\Cli\Command;
 use Enshrined\WpTaint\Baseline\Baseline;
 use Enshrined\WpTaint\Baseline\BaselineWriter;
 use Enshrined\WpTaint\Baseline\InlineSuppressions;
+use Enshrined\WpTaint\Baseline\PhpcsSuppressions;
 use Enshrined\WpTaint\Cli\Application;
 use Enshrined\WpTaint\Cli\ConsoleScanProgress;
 use Enshrined\WpTaint\Cli\ExitCode;
 use Enshrined\WpTaint\Cli\InputReader;
 use Enshrined\WpTaint\Cli\ProjectScanConfig;
 use Enshrined\WpTaint\Cli\ScanConfiguration;
+use Enshrined\WpTaint\Finding\Finding;
+use Enshrined\WpTaint\Finding\FindingCollection;
 use Enshrined\WpTaint\Report\Ansi;
 use Enshrined\WpTaint\Report\ConsoleReporter;
 use Enshrined\WpTaint\Report\JsonReporter;
@@ -69,7 +72,13 @@ final class ScanCommand extends Command
                 'Write current findings to a baseline file',
                 false,
             )
-            ->addOption('min-severity', null, InputOption::VALUE_REQUIRED, 'low, medium, high or critical', 'low')
+            ->addOption(
+                'min-severity',
+                null,
+                InputOption::VALUE_REQUIRED,
+                'notice, low, medium, high or critical',
+                'low',
+            )
             ->addOption(
                 'fail-on',
                 null,
@@ -138,6 +147,12 @@ final class ScanCommand extends Command
                 'Report only traced flows, not output whose origin cannot be established',
             )
             ->addOption('no-structural-rules', null, InputOption::VALUE_NONE, 'Run taint analysis only')
+            ->addOption(
+                'no-phpcs-suppressions',
+                null,
+                InputOption::VALUE_NONE,
+                'Report at full severity even on lines the author marked with a matching phpcs:ignore',
+            )
             ->addOption(
                 'exclude',
                 null,
@@ -326,6 +341,7 @@ final class ScanCommand extends Command
             $reader->nullableString('dump-taint-graph'),
             ! $reader->bool('no-structural-rules'),
             $reader->int('jobs', $project->jobs ?? 1),
+            honorPhpcsSuppressions: ! $reader->bool('no-phpcs-suppressions'),
         );
     }
 
@@ -359,7 +375,43 @@ final class ScanCommand extends Command
             $baselineSuppressed = $baselineResult['suppressed'];
         }
 
+        if ($configuration->honorPhpcsSuppressions) {
+            $findings = $this->acknowledgeSuppressed($configuration, $files, $findings);
+        }
+
         return $result->withFindings($findings, $baselineSuppressed, $inlineResult['suppressed']);
+    }
+
+    /**
+     * Downgrade findings on lines the author marked reviewed with a matching
+     * `phpcs:ignore`, rather than silencing them: the comment is evidence of
+     * review, not of safety.
+     *
+     * @param list<string> $files
+     */
+    private function acknowledgeSuppressed(
+        ScanConfiguration $configuration,
+        array $files,
+        FindingCollection $findings,
+    ): FindingCollection {
+        $phpcs = new PhpcsSuppressions();
+
+        foreach ($files as $file) {
+            $source = is_readable($file) ? file_get_contents($file) : false;
+
+            if ($source !== false) {
+                $phpcs->addFile(PathHelper::relative($file, $configuration->root), $source);
+            }
+        }
+
+        $rules = $configuration->registry->rules();
+
+        return $findings->map(static function (Finding $finding) use ($phpcs, $rules): Finding {
+            $sniffs = $rules[$finding->ruleId]->phpcsSniffs ?? [];
+            $acknowledgement = $phpcs->acknowledgementFor($finding, $sniffs);
+
+            return $acknowledgement === null ? $finding : $finding->acknowledged($acknowledgement);
+        });
     }
 
     private function emit(

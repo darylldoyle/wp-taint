@@ -8,6 +8,12 @@ use InvalidArgumentException;
 
 enum Severity: string
 {
+    /**
+     * Below `low`, and never fails a build. Where a finding lands when the
+     * author marked the line reviewed with a matching `phpcs:ignore`: still
+     * reported, no longer counted among the things nobody has looked at.
+     */
+    case Notice = 'notice';
     case Low = 'low';
     case Medium = 'medium';
     case High = 'high';
@@ -16,10 +22,11 @@ enum Severity: string
     public function rank(): int
     {
         return match ($this) {
-            self::Low => 0,
-            self::Medium => 1,
-            self::High => 2,
-            self::Critical => 3,
+            self::Notice => 0,
+            self::Low => 1,
+            self::Medium => 2,
+            self::High => 3,
+            self::Critical => 4,
         };
     }
 
@@ -37,7 +44,7 @@ enum Severity: string
         return match ($this) {
             self::Critical, self::High => 'error',
             self::Medium => 'warning',
-            self::Low => 'note',
+            self::Low, self::Notice => 'note',
         };
     }
 
@@ -51,6 +58,7 @@ enum Severity: string
             self::High => '7.0',
             self::Medium => '5.0',
             self::Low => '3.0',
+            self::Notice => '1.0',
         };
     }
 
@@ -60,7 +68,7 @@ enum Severity: string
 
         if ($severity === null) {
             throw new InvalidArgumentException(sprintf(
-                'Unknown severity "%s". Expected one of: low, medium, high, critical.',
+                'Unknown severity "%s". Expected one of: notice, low, medium, high, critical.',
                 $value,
             ));
         }

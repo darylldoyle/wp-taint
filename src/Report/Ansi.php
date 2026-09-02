@@ -45,7 +45,7 @@ final class Ansi
             Severity::Critical => '1;31',
             Severity::High => '31',
             Severity::Medium => '33',
-            Severity::Low => '2',
+            Severity::Low, Severity::Notice => '2',
         });
     }
 

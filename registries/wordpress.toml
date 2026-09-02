@@ -1320,6 +1320,7 @@ note = "Returns markup it escaped itself. get_avatar_url() is the one that retur
 
 [[rules]]
 id = "wp.sqli.wpdb-query"
+phpcs_sniffs = ["WordPress.DB.PreparedSQL.NotPrepared", "WordPress.DB.PreparedSQL.InterpolatedNotPrepared"]
 title = "Untrusted input reaches a database query without preparation"
 description = "A value derived from user-controlled input is interpolated into SQL passed to $wpdb, with sql taint intact."
 remediation = "Pass the value as a placeholder argument to $wpdb->prepare() with a literal format string. esc_sql() is acceptable but prepare() is preferred."
@@ -1328,6 +1329,7 @@ message = "Untrusted input reaches a database query without preparation."
 
 [[rules]]
 id = "wp.sqli.prepare-non-literal"
+phpcs_sniffs = ["WordPress.DB.PreparedSQL.NotPrepared", "WordPress.DB.PreparedSQL.InterpolatedNotPrepared"]
 title = "$wpdb->prepare() called with a non-literal format string"
 description = "prepare() only escapes placeholder arguments against a literal format string. When the format string is itself built from a variable, prepare() provides no protection and the interpolated value reaches the database unescaped."
 remediation = "Move every variable out of the format string and into a placeholder argument. Interpolating $wpdb table properties such as {$wpdb->prefix} is fine; interpolating request data is not."
@@ -1336,6 +1338,7 @@ message = "$wpdb->prepare() cannot protect a format string built from untrusted 
 
 [[rules]]
 id = "wp.sqli.unprepared-query"
+phpcs_sniffs = ["WordPress.DB.PreparedSQL.NotPrepared", "WordPress.DB.PreparedSQL.InterpolatedNotPrepared"]
 title = "Variable interpolated into a database query"
 description = "A query string passed to $wpdb is built by interpolating or concatenating a variable that is not a known-safe database identifier. Taint analysis could not prove the value is attacker-controlled, but the shape alone is unsafe."
 remediation = "Use $wpdb->prepare() with a literal format string and placeholder arguments."
@@ -1427,6 +1430,7 @@ function = "do_shortcode_tag"
 
 [[rules]]
 id = "wp.output.unescaped-unknown"
+phpcs_sniffs = ["WordPress.Security.EscapeOutput.OutputNotEscaped"]
 title = "Output with nothing vouching for it"
 description = "A value whose origin the scan cannot see reaches output with no escaper applied. It may be perfectly safe; nothing here says so. WordPress's standard is to escape on output wherever the value came from, and this reports the obligation rather than a traced flow."
 remediation = "Escape at the point of output, for the context it lands in. If the value is genuinely constant, the escaper costs nothing and makes it provable."

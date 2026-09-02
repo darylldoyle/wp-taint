@@ -43,6 +43,7 @@ final class ScanConfiguration
         public readonly bool $structuralRules,
         public readonly int $jobs,
         public readonly array $includePaths = [],
+        public readonly bool $honorPhpcsSuppressions = true,
     ) {
     }
 
@@ -74,6 +75,7 @@ final class ScanConfiguration
         ?string $dumpTaintGraph,
         bool $structuralRules,
         int $jobs,
+        bool $honorPhpcsSuppressions = true,
     ): self {
         if ($paths === []) {
             throw new InvalidArgumentException('At least one path to scan is required.');
@@ -126,6 +128,7 @@ final class ScanConfiguration
                 static fn (string $path): string => rtrim($path, '/'),
                 array_values($includePaths),
             )),
+            $honorPhpcsSuppressions,
         );
     }
 
