@@ -95,6 +95,29 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A value passed down through more than one call to a sink is reported. A
+  summary never handed its callees' sinks on to its own callers, so
+  `top( $_POST ) → mid( $v ) → leaf( $v ) → echo` reported nothing: not even
+  the `low` unknown-input finding, because every function in the chain had a
+  caller. Values returned upward were unaffected. On the pinned corpus this
+  adds one finding, a correctly traced four-call flow in Loginizer's bundled
+  LightOpenID from `$_POST['openid_claimed_id']` to `file_get_contents()`.
+- Call chains of any depth resolve. Functions were summarised in key order,
+  so a chain whose callers sort before their callees moved one level per
+  round, and the 32-round cap stopped it at 31 levels with only a
+  non-convergence warning. They are now summarised callees first (Tarjan's
+  strongly connected components over the call graph), and a round's work is
+  split into contiguous slices of that order, so `--jobs` no longer strips a
+  chain across workers. Tested to 250 levels in both directions and with four
+  workers.
+- A scanned hook callback fed by a `do_action()` in a referenced tree is
+  reported. The plugin's dispatch made it the callback's caller, so the
+  callback's parameters were not seeded as unknown, and the flow was found only
+  while analysing the plugin, which the findings pass skipped: referencing a
+  plugin made the finding disappear. Reference functions that call into the
+  scanned code are now analysed in the findings pass, and only findings that
+  land in scanned code are kept.
+
 Four precision fixes from adjudicating every finding of a Gravity Forms scan
 (92 findings: 0 exploitable, 75 correct catches, 17 false positives; the fixes
 below remove 10 of the 17).

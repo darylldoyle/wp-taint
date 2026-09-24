@@ -3511,7 +3511,7 @@ final class FunctionAnalysis
         Operand $argument,
         TaintSet $argumentTaint,
     ): void {
-        if (! $this->collecting || ! $this->collectFindings) {
+        if (! $this->collecting) {
             return;
         }
 
@@ -3528,6 +3528,22 @@ final class FunctionAnalysis
                 $reference->kind === TaintKind::ObjectId
                 && $this->capabilityGuards->isEntitled($this->currentBlock)
             ) {
+                continue;
+            }
+
+            // While summarising, the sink is this function's as much as the
+            // callee's: a caller two levels up learns about it only from this
+            // summary. Without it `top( $_POST ) → mid( $v ) → leaf( $v ) →
+            // echo` reported nothing, because `mid`'s summary said its
+            // parameter reached no sink. Kept at the callee's location, which
+            // is still the line that needs the fix.
+            if ($this->seedParameterIndex !== null) {
+                $this->sinksReached[] = $reference;
+
+                continue;
+            }
+
+            if (! $this->collectFindings) {
                 continue;
             }
 

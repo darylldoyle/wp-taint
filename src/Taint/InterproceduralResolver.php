@@ -46,6 +46,12 @@ final class InterproceduralResolver
         private readonly SummaryExtractor $extractor,
         private readonly AnalysisOptions $options,
         private readonly int $jobs = 1,
+        /**
+         * What calls what, for ordering callees before callers. Without it the
+         * order falls back to sorting by key, which is correct but can cost a
+         * round per level of a call chain.
+         */
+        private readonly ?CallGraph $callGraph = null,
     ) {
     }
 
@@ -71,7 +77,7 @@ final class InterproceduralResolver
             ];
         }
 
-        $ordered = self::callOrder($functions);
+        $ordered = self::callOrder($functions, $this->callGraph);
         $pool = new WorkerPool($this->jobs);
         $rounds = 0;
         $changed = true;
@@ -179,12 +185,20 @@ final class InterproceduralResolver
             $groups[$context->key][] = $context;
         }
 
+        // A contiguous slice of the callees-first order, not every Nth group.
+        // A worker sees only its own results within a round, so striping put
+        // each link of a call chain in a different worker and moved the chain
+        // one level per round. A slice keeps a chain together, and one that
+        // spans workers crosses at most $shardCount - 1 boundaries.
+        $groupCount = count($groups);
+        $first = intdiv($groupCount * $shard, $shardCount);
+        $last = intdiv($groupCount * ($shard + 1), $shardCount);
         $index = -1;
 
         foreach ($groups as $group) {
             $index++;
 
-            if ($index % $shardCount !== $shard) {
+            if ($index < $first || $index >= $last) {
                 continue;
             }
 
@@ -209,19 +223,28 @@ final class InterproceduralResolver
     }
 
     /**
-     * Callees before callers, approximately.
+     * Callees before callers.
      *
-     * A true reverse topological sort is impossible in the presence of
-     * recursion and dynamic dispatch, and unnecessary: the fixed point
-     * converges from any order. Ordering leaves first simply gets there in
-     * fewer rounds. Sorting by key keeps it deterministic, which the round
-     * sharding depends on.
+     * A function's summary is only as good as its callees' summaries when it
+     * is extracted, and each worker reads back its own results within a round.
+     * So a callee summarised first is one its callers see straight away, and an
+     * acyclic chain of any depth settles in a single round.
+     *
+     * Sorting by key alone was the old order. It converges too, but a chain
+     * whose callers sort before their callees moved one level per round, and
+     * the round cap turned that into a depth limit: 31 levels and no further.
+     *
+     * Recursion makes a strict order impossible, so functions that call each
+     * other are grouped (Tarjan's strongly connected components) and the
+     * groups are ordered callees first; the fixed point settles the rest.
+     * Everything is visited in key order, so the result is deterministic, which
+     * the round sharding depends on.
      *
      * @param list<FunctionContext> $functions
      *
      * @return list<FunctionContext>
      */
-    private static function callOrder(array $functions): array
+    private static function callOrder(array $functions, ?CallGraph $callGraph): array
     {
         $ordered = $functions;
 
@@ -236,6 +259,128 @@ final class InterproceduralResolver
             return $a->key <=> $b->key;
         });
 
-        return $ordered;
+        if ($callGraph === null) {
+            return $ordered;
+        }
+
+        /** @var array<string, list<FunctionContext>> $byKey */
+        $byKey = [];
+
+        foreach ($ordered as $context) {
+            $byKey[$context->key][] = $context;
+        }
+
+        $rank = array_flip(array_keys($byKey));
+        $result = [];
+
+        foreach (self::componentsCalleesFirst(array_keys($byKey), $callGraph) as $component) {
+            usort($component, static fn (string $a, string $b): int => ($rank[$a] ?? 0) <=> ($rank[$b] ?? 0));
+
+            foreach ($component as $key) {
+                foreach ($byKey[$key] ?? [] as $context) {
+                    $result[] = $context;
+                }
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Tarjan's algorithm, iteratively: a deep call chain would otherwise be a
+     * deep PHP stack. Components come out callees first, which is the order
+     * Tarjan emits them in.
+     *
+     * @param list<string> $keys
+     *
+     * @return list<list<string>>
+     */
+    private static function componentsCalleesFirst(array $keys, CallGraph $callGraph): array
+    {
+        $known = array_flip($keys);
+        $index = [];
+        $low = [];
+        $onStack = [];
+        $stack = [];
+        $components = [];
+        $next = 0;
+
+        foreach ($keys as $root) {
+            if (isset($index[$root])) {
+                continue;
+            }
+
+            /** @var list<array{0: string, 1: list<string>, 2: int}> $work key, callees, next callee position */
+            $work = [[$root, self::knownCallees($root, $callGraph, $known), 0]];
+            $index[$root] = $low[$root] = $next++;
+            $stack[] = $root;
+            $onStack[$root] = true;
+
+            while ($work !== []) {
+                $top = count($work) - 1;
+                [$key, $callees, $position] = $work[$top];
+
+                $callee = $callees[$position] ?? null;
+
+                if ($callee !== null) {
+                    $work[$top][2]++;
+
+                    if (! isset($index[$callee])) {
+                        $index[$callee] = $low[$callee] = $next++;
+                        $stack[] = $callee;
+                        $onStack[$callee] = true;
+                        $work[] = [$callee, self::knownCallees($callee, $callGraph, $known), 0];
+                    } elseif (isset($onStack[$callee])) {
+                        $low[$key] = min($low[$key] ?? 0, $index[$callee]);
+                    }
+
+                    continue;
+                }
+
+                array_pop($work);
+
+                if ($work !== []) {
+                    $parent = $work[count($work) - 1][0];
+                    $low[$parent] = min($low[$parent] ?? 0, $low[$key] ?? 0);
+                }
+
+                if (($low[$key] ?? null) !== ($index[$key] ?? null)) {
+                    continue;
+                }
+
+                $component = [];
+
+                do {
+                    $member = array_pop($stack);
+
+                    if ($member === null) {
+                        break;
+                    }
+
+                    unset($onStack[$member]);
+                    $component[] = $member;
+                } while ($member !== $key);
+
+                $components[] = $component;
+            }
+        }
+
+        return $components;
+    }
+
+    /**
+     * @param array<string, int> $known
+     *
+     * @return list<string>
+     */
+    private static function knownCallees(string $key, CallGraph $callGraph, array $known): array
+    {
+        $callees = array_values(array_unique(array_filter(
+            $callGraph->calleesOf($key),
+            static fn (string $callee): bool => isset($known[$callee]),
+        )));
+        sort($callees);
+
+        return $callees;
     }
 }
