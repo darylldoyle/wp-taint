@@ -127,10 +127,9 @@ final class CallResolver
             // A prefix join is a bounded guess, so it gets half the treatment
             // an exact match gets: the callback is analysed — its parameters
             // receive the dispatch's arguments and its sinks fire — but its
-            // return never replaces the dispatcher's own semantics. An
-            // apply_filters() joined only by prefix still voids escaping and
-            // still hands back its own argument, because anything else could
-            // also be hooked on the name the scan could not fold.
+            // return is not added to the result. An exact match's return is
+            // added. Neither replaces the dispatcher's own semantics: every
+            // apply_filters() voids escaping and hands back its own argument.
             $prefixed = array_map(
                 static fn (CallTarget $target): CallTarget => $target->returningTo(CallResultMode::Discard),
                 $prefixed,
@@ -173,7 +172,17 @@ final class CallResolver
 
         // `array_filter()` and friends still need their own entry to run: it is
         // what puts the input array's taint on the result.
-        return $dispatcher->returns === DispatchReturn::Own
+        //
+        // So does every hook dispatch. `call_user_func( 'esc_html', $x )` runs
+        // `esc_html()` and nothing else, so crediting it is right. A filter
+        // runs whatever is registered on its hook *when it fires*, and the
+        // scan cannot know that set. A registration can sit behind a
+        // condition, `remove_filter()` can take it off again, and code outside
+        // the scan can add or remove callbacks. So the value handed in always
+        // reaches the result, through the catalogue's propagator entry. Each
+        // callback's return is unioned on top, because a callback can still
+        // introduce taint. None of them is credited as sanitising the input.
+        return $dispatcher->returns === DispatchReturn::Own || $dispatcher->hook
             ? [$direct, ...$targets, ...$prefixed]
             : [...$targets, ...$prefixed];
     }

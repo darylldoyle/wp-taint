@@ -234,7 +234,7 @@ args = [0, 1]
 [[propagators]]
 function = "apply_filters"
 args = [1]
-note = "The filtered value passes through even when no callback is registered. The callbacks themselves are followed through the hook graph; see [[dispatchers]] below."
+note = "The filtered value always passes through, even when a callback is registered, because the scan cannot know which callbacks are on the hook when it fires. The callbacks themselves are followed through the hook graph; see [[dispatchers]] below."
 
 [[propagators]]
 function = "apply_filters_ref_array"
@@ -756,11 +756,13 @@ stored_write = true
 # and `add_filter()`. Everything after that is the ordinary dispatcher
 # machinery.
 #
-# A filter returns what its *callbacks* return, not what it was handed: at
-# runtime each callback receives the previous one's output, so the original value
-# only survives when nothing is registered. Saying both could come out would
-# defeat every sanitizing filter. The nothing-registered case falls back to the
-# [[propagators]] entry for apply_filters, which is the pass-through.
+# A filter's result is modelled as what it was handed plus what every callback
+# returns. At runtime the original value survives only when nothing is
+# registered, but the scan cannot know what is registered when the filter
+# fires. A registration can sit behind a condition, remove_filter() can take it
+# off, and code outside the scan can add or remove callbacks. So a sanitising
+# callback is never credited. The pass-through is the [[propagators]] entry for
+# apply_filters, and it runs whether or not a callback was found.
 #
 # Actions return nothing, so their callees' returns go nowhere — they are
 # analysed for the sinks inside them.

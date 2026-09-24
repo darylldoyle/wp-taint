@@ -739,7 +739,24 @@ includes it, so a template included from two places sees either caller's state.
 `apply_filters( 'the_content', $value )` is a call to every callback registered
 on `the_content`, and `do_action( 'acme_saved', $note )` flows its arguments
 into each callback's parameters. A callback that introduces taint taints the
-filter's result; one that sanitises is credited.
+filter's result. A callback that sanitises is never credited.
+
+The value handed to a filter always reaches its result, whatever is registered.
+The scan cannot know which callbacks are on a hook when it fires. A
+registration can sit behind a condition, `remove_filter()` can take it off, and
+code outside the scan can add or remove callbacks. With nothing on the hook,
+`apply_filters()` returns its argument unchanged. So the result is the
+argument's taint plus the union of every callback's return:
+
+```php
+add_filter( 'acme_label', 'esc_html' );
+echo apply_filters( 'acme_label', $_GET['a'] );          // reported
+echo esc_html( apply_filters( 'acme_label', $_GET['a'] ) ); // not reported
+```
+
+Escape after the filter, not inside a callback on it. `call_user_func()`,
+`array_map()` and the other plain dispatchers are different: they run the one
+callable they are handed, so an escaper passed to them is credited.
 
 The graph is built from `add_action()` and `add_filter()` across the whole scan,
 so a callback registered in one file and defined in another connects. Hook names
