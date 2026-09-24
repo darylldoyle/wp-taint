@@ -17,8 +17,20 @@ final class SummaryTable
     /** @var array<string, FunctionSummary> */
     private array $summaries = [];
 
+    private ?ReadLog $log = null;
+
+    /**
+     * Record every lookup from now on. See {@see ReadLog}.
+     */
+    public function recordReadsInto(?ReadLog $log): void
+    {
+        $this->log = $log;
+    }
+
     public function get(string $key): ?FunctionSummary
     {
+        $this->log?->record('s:' . strtolower($key));
+
         return $this->summaries[strtolower($key)] ?? null;
     }
 
@@ -52,6 +64,8 @@ final class SummaryTable
 
     public function has(string $key): bool
     {
+        $this->log?->record('s:' . strtolower($key));
+
         return isset($this->summaries[strtolower($key)]);
     }
 

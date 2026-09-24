@@ -14,6 +14,8 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bar. The operating system's figures are no use for this on macOS, which
   compresses and swaps a large scan until its resident size is a small fraction
   of what PHP holds.
+- `tools/compare-incremental.php` scans each target with incremental rounds
+  on and off and reports any difference in findings, traces or warnings.
 - `tools/compare-simplifier.php` builds every file with both php-cfg's
   simplifier and wp-taint's, and reports any graph that differs other than by
   wp-taint's leaving fewer references to a removed phi.
@@ -176,6 +178,15 @@ Further precision changes from corpus adjudication of the new attribute rule:
 
 ### Changed
 
+- Fixed-point rounds after the first re-analyse only the functions that read
+  something the previous round changed. Every read of a summary, property or
+  scope entry is recorded as it happens, so a function whose reads did not
+  move is known to produce what it produced before, rather than predicted to;
+  within a round, a changed summary makes its readers later in the same slice
+  dirty at once. Findings, traces and warnings are byte-identical to
+  re-analysing everything, checked by `tools/compare-incremental.php` on all
+  50 corpus plugins and a client scan with four reference trees, where the scan
+  went from 339s to 155s.
 - Peak memory is about a quarter lower on a scan with reference trees. A
   reference file's AST is released as soon as the file is indexed, since
   structural rules never run on reference trees, rather than after the call
