@@ -154,6 +154,17 @@ final class Scanner
             $parseErrors[] = $result->error();
         }
 
+        // Indexed before the reference trees are parsed, so the symbol table
+        // sees the scanned files first, exactly as it did when everything was
+        // parsed and then indexed in one list.
+        $this->progress->phase('Indexing symbols', count($parsed));
+        $functions = new UserFunctionTable();
+
+        foreach ($parsed as $file) {
+            $this->progress->advance();
+            $functions->addFile($file);
+        }
+
         // Reference trees, parsed after the real ones so a file appearing in
         // both is analysed as the user's own.
         $referenceParseFailures = 0;
@@ -194,21 +205,22 @@ final class Scanner
                 continue;
             }
 
+            // Indexed and stripped of its AST straight away. Indexing is the
+            // only thing that reads a reference file's AST, since structural
+            // rules skip reference trees, and the AST is about 40% of a parsed
+            // file. Holding every one until the structural rules ran put them
+            // all in memory at the peak for nothing.
+            $functions->addFile($result->file());
+            $result->file()->releaseAst();
+
             $parsed[] = $result->file();
             $reference[$result->file()->relativePath] = true;
         }
 
-        $this->progress->phase('Indexing symbols', count($parsed));
-        $functions = new UserFunctionTable();
         $ruleContext = new RuleContext();
 
         /** @var list<Finding> $findings */
         $findings = [];
-
-        foreach ($parsed as $file) {
-            $this->progress->advance();
-            $functions->addFile($file);
-        }
 
         $receivers = new ReceiverResolver($functions->declaredTypes());
         $contexts = $functions->all();
@@ -344,6 +356,10 @@ final class Scanner
         }
 
         $referenceCallers = $this->referenceCallersOfScannedCode($contexts, $callGraph, $reference);
+
+        // No total: with --jobs the work happens in the workers, which cannot
+        // report back to this bar.
+        $this->progress->phase('Collecting findings', null);
 
         // A graph dump needs the live taint state, which cannot cross a process
         // boundary, so it forces the serial path.

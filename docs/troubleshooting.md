@@ -168,6 +168,11 @@ php -d memory_limit=4G vendor/bin/wp-taint scan ./src
 
 Referencing fewer trees reduces peak memory more than anything else.
 
+To see where the memory goes, add `--debug-memory`. It prints PHP's own heap
+figures at each phase and each round. Trust those over Activity Monitor or
+`ps`: macOS compresses and swaps a large scan, so its resident size can read a
+few hundred megabytes while PHP holds several gigabytes.
+
 ## --jobs seems to be ignored
 
 **Symptom.** `--jobs=4` runs no faster than `--jobs=1`.

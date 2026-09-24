@@ -9,6 +9,14 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `--debug-memory` prints PHP's heap in use, the peak so far and the elapsed
+  time at every phase and every fixed-point round, in place of the progress
+  bar. The operating system's figures are no use for this on macOS, which
+  compresses and swaps a large scan until its resident size is a small fraction
+  of what PHP holds.
+- `tools/compare-simplifier.php` builds every file with both php-cfg's
+  simplifier and wp-taint's, and reports any graph that differs other than by
+  wp-taint's leaving fewer references to a removed phi.
 - A `notice` severity, below `low`, for a finding the author acknowledged with
   a matching `phpcs:ignore`. A line-specific ignore naming the sniff a rule maps
   to (`WordPress.Security.EscapeOutput.OutputNotEscaped` for the output rules,
@@ -168,6 +176,20 @@ Further precision changes from corpus adjudication of the new attribute rule:
 
 ### Changed
 
+- Peak memory is about a quarter lower on a scan with reference trees. A
+  reference file's AST is released as soon as the file is indexed, since
+  structural rules never run on reference trees, rather than after the call
+  graphs are built, which is where the peak was. On a client scan with four
+  reference plugins: 3,231MB to 2,445MB, identical findings.
+- Building control flow graphs is about 3.5 times faster. php-cfg's simplifier
+  re-walked the whole function for every trivial phi it removed, and was most
+  of the parse time on real WordPress code. wp-taint now carries a copy with a
+  linear replacement, which visits only the ops that use the variable. It also
+  follows catch and finally edges that upstream's walk missed, so it never
+  leaves a use pointing at a removed phi where upstream did not. Over the 50
+  corpus plugins, 24,798 files: 23,976 identical graphs, 633 with fewer
+  references to a removed phi and none with more, 6 differing only in phi
+  operand order, and 183 that php-cfg's printer cannot print with either.
 - `init` now asks with a checklist (Laravel Prompts) instead of typing
   comma-separated numbers: space to check the directories you wrote, and the
   rest become the reference set. The terminal guard is unchanged, so a
