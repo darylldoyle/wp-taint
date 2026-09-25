@@ -77,6 +77,7 @@ badge:
 | [A genuinely dynamic include path](#include-and-require-are-followed-unless-the-path-is-computed) | Misses |
 | [A hook registration whose name will not resolve](#hook-callbacks-are-followed-unless-the-hook-name-is-dynamic) | Misses |
 | [`remove_filter()` is not modelled](#hook-callbacks-are-followed-unless-the-hook-name-is-dynamic) | Over-reports |
+| [A direct `$this->method()` call does not reach a subclass override](#a-callback-that-will-not-resolve-is-counted-not-guessed-at) | Misses |
 | [An unmodelled function returns clean](#an-unmodelled-function-returns-clean) | Misses |
 | [A by-reference call cannot clear its argument](#references-are-followed-and-never-cleared) | Over-reports |
 | [A closure capture](#a-closure-capture-crosses-in-both-directions) | Neither |
@@ -798,6 +799,38 @@ callback means.
 
 A callback the resolver cannot pin down is reported in the "hook registrations
 could not be resolved" count so the gap stays visible.
+
+A late-bound callback reaches every override. `$this` in a method of a base
+class is whatever class the object really is, so a base that registers
+`array( $this, 'render' )` runs a subclass's `render()` when the subclass is
+constructed:
+
+```php
+class Acme_Base {
+    public function __construct() { add_action( 'acme_x', array( $this, 'render' ) ); }
+    public function render( $v ) { echo esc_html( $v ); }
+}
+class Acme_Child extends Acme_Base {
+    public function render( $v ) { echo $v; }   // reported
+}
+```
+
+The callback resolves to the base's body and to every override the scan
+declared, read from the class hierarchy. The scan does not follow which class
+was constructed, so each body is a callee. An abstract method resolves to its
+overrides alone. `array( 'static', 'render' )` is treated the same way, and a
+trait's `$this` reaches the classes that use it. A receiver whose class is known
+exactly, `array( new Acme_Base(), 'render' )`, is not widened.
+
+**What is still missed.** A direct `$this->render()` call in the base class
+resolves only to the body the base can see, not to an override. The same
+reasoning applies to it, and it is not done yet: it changes the resolution of
+every method call inside a class hierarchy, which is a much larger change than
+the callback case. A receiver typed by a declaration, `function f( Acme_Base $b )`,
+is also not widened, although `$b` can hold a subclass. So is a subclass that
+is outside the scan.
+
+**Direction:** under-approximating, at those three shapes.
 
 ### A remote response body is a source, and so is what it is written into
 

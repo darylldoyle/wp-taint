@@ -105,6 +105,20 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A callback registered as `array( $this, 'method' )` in a base class reaches
+  every subclass override. `$this` is whatever class the object really is, so a
+  base that registers the callback in its constructor runs the child's method
+  when the child is constructed. The callback resolved only to the base's body,
+  so a child that printed its argument unescaped reported the `low`
+  unknown-input finding in place of the high one, and a callback on an abstract
+  method did not resolve at all. The callable now resolves to the base's body
+  and to every override the scan declared, read from the class hierarchy. The
+  same applies to `array( 'static', 'method' )`, to a trait's `$this`, and to
+  the plain dispatchers such as `call_user_func()`. A receiver whose class is
+  known exactly is not widened, and a direct `$this->method()` call is
+  unchanged. On the pinned corpus this adds one finding to WPForms Lite:
+  `WPForms_Provider` registers `array( $this, 'process_entry' )` with an empty
+  body, and the Constant Contact subclass's override is what runs.
 - A filter callback is no longer credited as a sanitiser.
   `add_filter( 'acme_label', 'esc_html' )` made
   `echo apply_filters( 'acme_label', $_GET['a'] )` report nothing, because a

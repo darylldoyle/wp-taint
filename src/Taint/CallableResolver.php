@@ -278,6 +278,15 @@ final class CallableResolver
                 continue;
             }
 
+            // `$this` and `static` are late-bound. Written in a method of
+            // `Acme_Base`, they name whatever class the object really is, and
+            // that can be any subclass. A base class that registers
+            // `array( $this, 'render' )` in its constructor runs the child's
+            // `render()` when the child is constructed.
+            $lateBound = $static
+                ? strtolower($class) === 'static'
+                : $this->isThis($receiver);
+
             if (in_array(strtolower($class), ['self', 'static', 'parent'], true)) {
                 // `parent` starts one level up when the parent is known — see
                 // the static-call resolver for why — and falls back to the
@@ -299,10 +308,74 @@ final class CallableResolver
                 if ($target !== null) {
                     $targets[] = $target;
                 }
+
+                if ($lateBound) {
+                    $targets = [...$targets, ...$this->overridesOf($class, $method, $static, $arguments)];
+                }
             }
         }
 
         return $targets;
+    }
+
+    /**
+     * Every body a late-bound callable could run in a subclass.
+     *
+     * Read from the declared class hierarchy, never guessed. Each subclass the
+     * scan declared resolves the method the way PHP would. A subclass that does
+     * not override it resolves to a body already in the list, and is skipped.
+     * This works for an abstract method as well: the base has no body to
+     * resolve, and the overrides are all there is.
+     *
+     * The subclass bodies are added, never substituted. Which class the object
+     * is depends on which one was constructed, and the scan does not follow
+     * that, so every body is a callee.
+     *
+     * @param list<Operand> $arguments
+     *
+     * @return list<CallTarget>
+     */
+    private function overridesOf(string $class, string $method, bool $static, array $arguments): array
+    {
+        $targets = [];
+        $inherited = $this->functions->resolveMethodKey($class, $method);
+        $seen = $inherited === null ? [] : [$inherited => true];
+
+        foreach ($this->functions->classHierarchy()->descendantsOf($class) as $subclass) {
+            $userKey = $this->functions->resolveMethodKey($subclass, $method);
+
+            if ($userKey === null || isset($seen[$userKey])) {
+                continue;
+            }
+
+            $seen[$userKey] = true;
+            $display = $subclass . '::' . $method . '()';
+            $matcher = $static ? Matcher::staticMethod($subclass, $method) : Matcher::method($subclass, $method);
+            $targets[] = CallTarget::resolved($arguments, $matcher, $userKey, $display);
+        }
+
+        return $targets;
+    }
+
+    /**
+     * Whether an operand is `$this`, seen through plain assignments.
+     *
+     * `$self = $this; add_action( 'init', array( $self, 'boot' ) );` is still
+     * a late-bound receiver.
+     */
+    private function isThis(Operand $operand, int $depth = 0): bool
+    {
+        if (OperandHelper::variableName($operand) === 'this') {
+            return true;
+        }
+
+        if ($depth > 8) {
+            return false;
+        }
+
+        $definition = OperandHelper::definingOp($operand);
+
+        return $definition instanceof Op\Expr\Assign && $this->isThis($definition->expr, $depth + 1);
     }
 
     /**
