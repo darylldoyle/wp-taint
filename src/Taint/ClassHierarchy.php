@@ -73,6 +73,13 @@ final class ClassHierarchy
     private array $orders = [];
 
     /**
+     * {@see descendantsOf()}, memoized and dropped with {@see $orders}.
+     *
+     * @var array<string, list<string>>
+     */
+    private array $descendants = [];
+
+    /**
      * Read every class, trait and enum declaration in a file.
      *
      * Must run while the AST is still held, like {@see DeclaredTypes}.
@@ -80,6 +87,7 @@ final class ClassHierarchy
     public function observeFile(ParsedFile $file): void
     {
         $this->orders = [];
+        $this->descendants = [];
 
         foreach ((new NodeFinder())->findInstanceOf($file->ast(), Node\Stmt\ClassLike::class) as $node) {
             if (! $node instanceof Node\Stmt\ClassLike || ! isset($node->namespacedName)) {
@@ -142,6 +150,38 @@ final class ClassHierarchy
         }
 
         return $this->orders[$start] = $order;
+    }
+
+    /**
+     * Every class whose method lookup passes through `$class`, apart from
+     * `$class` itself.
+     *
+     * For a class, that is its subclasses at any depth. For a trait, it is the
+     * classes that use it and their subclasses. These are the classes `$this`
+     * can be an instance of inside a method declared on `$class`. Only what
+     * the scan declared counts, so a subclass outside the scan is not found.
+     *
+     * @return list<string> normalized lowercase names, sorted
+     */
+    public function descendantsOf(string $class): array
+    {
+        $target = self::normalize($class);
+
+        if (isset($this->descendants[$target])) {
+            return $this->descendants[$target];
+        }
+
+        $found = [];
+
+        foreach (array_keys($this->seen) as $candidate) {
+            if ($candidate !== $target && in_array($target, $this->lookupOrder($candidate), true)) {
+                $found[] = $candidate;
+            }
+        }
+
+        sort($found);
+
+        return $this->descendants[$target] = $found;
     }
 
     /**

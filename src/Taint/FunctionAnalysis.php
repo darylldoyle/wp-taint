@@ -21,6 +21,7 @@ use Enshrined\WpTaint\Registry\Source;
 use PHPCfg\Block;
 use PHPCfg\Op;
 use PHPCfg\Operand;
+use SplObjectStorage;
 
 /**
  * One run of the propagation loop over one function body.
@@ -117,6 +118,14 @@ final class FunctionAnalysis
      * visited overwriting the rest. See {@see transferCalls()}.
      */
     private bool $unionResultWrites = false;
+
+    /**
+     * The result writes of each callee in the current union, held back until
+     * every callee has been visited. See {@see flushUnionWrites()}.
+     *
+     * @var list<array{operand: Operand, taint: TaintSet, provenance: ?Provenance}>
+     */
+    private array $unionWrites = [];
 
     /**
      * Where the callee currently being transferred writes its return value. A
@@ -2292,7 +2301,9 @@ final class FunctionAnalysis
 
         $previousUnion = $this->unionResultWrites;
         $previousMode = $this->resultMode;
+        $previousWrites = $this->unionWrites;
         $this->unionResultWrites = true;
+        $this->unionWrites = [];
         $changed = false;
 
         try {
@@ -2300,12 +2311,107 @@ final class FunctionAnalysis
                 $this->resultMode = $call->resultMode;
                 $changed = $this->transferCall($op, $call) || $changed;
             }
+
+            $changed = $this->flushUnionWrites() || $changed;
         } finally {
             $this->unionResultWrites = $previousUnion;
             $this->resultMode = $previousMode;
+            $this->unionWrites = $previousWrites;
         }
 
         return $changed;
+    }
+
+    /**
+     * Apply the held-back result writes of a union of callees.
+     *
+     * Two things need every callee's write in hand before any of them lands.
+     *
+     * The first is the escape claim. Several callees are alternatives, exactly
+     * like the branches a phi merges, so the rule in
+     * {@see withoutSplitEscapeClaim()} applies here too. A hook dispatch is
+     * where this matters:
+     *
+     *     add_filter( 'acme_label', 'esc_html' );
+     *     echo apply_filters( 'acme_label', $_GET['a'] );
+     *
+     * The pass-through carries the raw request value and the voiding marker.
+     * The `esc_html` callback carries the `escaped` marker. No single path
+     * escaped the value and then filtered it, so the pair would report the
+     * wrong defect: "escaping no longer holds", at medium severity, in place
+     * of the raw value reaching output. `escaped` is dropped, as at a phi.
+     *
+     * The second is the trace. The state keeps one provenance per operand, and
+     * the last write wins. The write carrying the most taint kinds goes last,
+     * so the trace follows the path that carries the most kinds. Otherwise the
+     * trace for the value above would run through `esc_html()`, which is not
+     * how the raw value got out. This changes the trace only. The taint on the
+     * operand is the same union whatever order the writes land in.
+     */
+    private function flushUnionWrites(): bool
+    {
+        $writes = $this->unionWrites;
+        $this->unionWrites = [];
+
+        if ($writes === []) {
+            return false;
+        }
+
+        /** @var SplObjectStorage<Operand, list<TaintSet>> $byOperand */
+        $byOperand = new SplObjectStorage();
+
+        foreach ($writes as $write) {
+            $byOperand[$write['operand']] = [...($byOperand[$write['operand']] ?? []), $write['taint']];
+        }
+
+        usort(
+            $writes,
+            static fn (array $a, array $b): int => self::payloadKinds($a['taint']) <=> self::payloadKinds($b['taint']),
+        );
+
+        $changed = false;
+
+        foreach ($writes as $write) {
+            $taint = self::withoutSplitCalleeClaim($write['taint'], $byOperand[$write['operand']]);
+            $changed = $this->state->add($write['operand'], $taint, $write['provenance']) || $changed;
+        }
+
+        return $changed;
+    }
+
+    /**
+     * {@see withoutSplitEscapeClaim()}, for the writes of a union of callees
+     * rather than the operands of a phi.
+     *
+     * @param list<TaintSet> $alternatives
+     */
+    private static function withoutSplitCalleeClaim(TaintSet $taint, array $alternatives): TaintSet
+    {
+        if (! $taint->has(TaintKind::Escaped)) {
+            return $taint;
+        }
+
+        $merged = TaintSet::empty();
+
+        foreach ($alternatives as $alternative) {
+            if ($alternative->has(TaintKind::Escaped) && $alternative->has(TaintKind::EscapeVoided)) {
+                return $taint;
+            }
+
+            $merged = $merged->union($alternative);
+        }
+
+        return $merged->has(TaintKind::EscapeVoided)
+            ? $taint->without(TaintSet::of(TaintKind::Escaped))
+            : $taint;
+    }
+
+    /**
+     * How many kinds a write carries, not counting the escaping markers.
+     */
+    private static function payloadKinds(TaintSet $taint): int
+    {
+        return count($taint->without(TaintSet::of(TaintKind::Escaped, TaintKind::EscapeVoided))->kinds());
     }
 
     /**
@@ -2388,9 +2494,12 @@ final class FunctionAnalysis
             return $this->state->set($result, $taint, $provenance);
         }
 
-        return $taint->isEmpty()
-            ? false
-            : $this->state->add($result, $taint, $provenance);
+        if (! $taint->isEmpty()) {
+            $this->unionWrites[] = ['operand' => $result, 'taint' => $taint, 'provenance' => $provenance];
+        }
+
+        // Reported as changed once every callee has been visited.
+        return false;
     }
 
     private function transferCall(Op\Expr $op, CallTarget $call): bool

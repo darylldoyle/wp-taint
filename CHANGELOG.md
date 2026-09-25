@@ -105,6 +105,40 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A callback registered as `array( $this, 'method' )` in a base class reaches
+  every subclass override. `$this` is whatever class the object really is, so a
+  base that registers the callback in its constructor runs the child's method
+  when the child is constructed. The callback resolved only to the base's body,
+  so a child that printed its argument unescaped reported the `low`
+  unknown-input finding in place of the high one, and a callback on an abstract
+  method did not resolve at all. The callable now resolves to the base's body
+  and to every override the scan declared, read from the class hierarchy. The
+  same applies to `array( 'static', 'method' )`, to a trait's `$this`, and to
+  the plain dispatchers such as `call_user_func()`. A receiver whose class is
+  known exactly is not widened, and a direct `$this->method()` call is
+  unchanged. On the pinned corpus this adds one finding to WPForms Lite:
+  `WPForms_Provider` registers `array( $this, 'process_entry' )` with an empty
+  body, and the Constant Contact subclass's override is what runs.
+- A filter callback is no longer credited as a sanitiser.
+  `add_filter( 'acme_label', 'esc_html' )` made
+  `echo apply_filters( 'acme_label', $_GET['a'] )` report nothing, because a
+  callback found on the hook replaced the filter's own result. The scan cannot
+  know which callbacks are on a hook when it fires. A registration can sit
+  behind a condition, `remove_filter()` can take it off, and code outside the
+  scan can add or remove callbacks. `apply_filters()` and
+  `apply_filters_ref_array()` now always pass the value handed in through to
+  the result, and each callback's return is added on top. Two consequences
+  follow. A value escaped before a filter with a registered callback now
+  reports `wp.xss.escape-voided`, the same as with nothing on the hook. And a
+  union of callees no longer reports escaping as voided when no single callee
+  both escaped the value and filtered it, the rule a branch merge already
+  followed. `call_user_func()`, `array_map()` and the other plain dispatchers
+  still credit the callable they run. The fixture
+  `safe/hook-filter-callback-escapes` encoded the old behaviour and moved to
+  `vulnerable/hook-filter-callback-escaping-not-credited`. The pinned corpus
+  does not move. The analyser-fixtures suite improves from 6 missing and 7
+  unexpected to 4 and 5: F14 and F15 now report the escape-invalidated finding
+  their authors label, in place of plain unescaped output.
 - A value passed down through more than one call to a sink is reported. A
   summary never handed its callees' sinks on to its own callers, so
   `top( $_POST ) → mid( $v ) → leaf( $v ) → echo` reported nothing: not even

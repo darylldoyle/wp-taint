@@ -94,3 +94,19 @@ it('resolves namespaced names the way the resolver spells them', function (): vo
     expect($hierarchy->parentOf('Acme\Child'))->toBe('acme\base');
     expect($hierarchy->lookupOrder('acme\child'))->toBe(['acme\child', 'acme\base']);
 });
+
+it('lists every subclass at any depth, and the classes that use a trait', function (): void {
+    $hierarchy = hierarchyFor(<<<'PHP'
+        <?php
+        trait Shared {}
+        class Base {}
+        class Middle extends Base { use Shared; }
+        class Leaf extends Middle {}
+        class Unrelated {}
+        PHP);
+
+    expect($hierarchy->descendantsOf('Base'))->toBe(['leaf', 'middle']);
+    expect($hierarchy->descendantsOf('Shared'))->toBe(['leaf', 'middle']);
+    expect($hierarchy->descendantsOf('Leaf'))->toBe([]);
+    expect($hierarchy->descendantsOf('never_declared'))->toBe([]);
+});
