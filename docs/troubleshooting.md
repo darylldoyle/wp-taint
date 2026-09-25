@@ -164,11 +164,11 @@ files. It also keeps up to `--memory-budget` of parsed files, 4GB by default.
 **Solution.**
 
 ```bash
-php -d memory_limit=12G vendor/bin/wp-taint scan ./src
+php -d memory_limit=8G vendor/bin/wp-taint scan ./src
 ```
 
-Give `memory_limit` the budget plus room for the rest: 8GB for a large site
-at the default budget, 12GB with `--memory-budget=8G`. With `bin/wp-taint`,
+Give `memory_limit` at least 4GB more than the budget: 8GB for a large site at
+the default budget, 16GB with `--memory-budget=8G`. With `bin/wp-taint`,
 set `WP_TAINT_MEMORY_LIMIT=8G` instead of passing `-d`. See
 [Scan a large site](scanning-a-wordpress-project.md#scan-a-large-site). A lower budget, such as
 `--memory-budget=1G`, trades memory for time: any file it cannot hold is parsed

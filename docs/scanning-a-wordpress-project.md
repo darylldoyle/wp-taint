@@ -158,12 +158,12 @@ list by mistake.
 
 A client site with many reference trees needs more memory than `bin/wp-taint`
 allows by default. It raises PHP's `memory_limit` to 2GB, and the graph cache
-alone can hold 4GB. Raise the limit to 8GB for a large site, or 12GB if you
-also raise the budget:
+alone can hold 4GB. Give the limit at least 4GB more than the budget: 8GB at
+the default budget, and 16GB if you raise the budget to 8GB:
 
 ```bash
 WP_TAINT_MEMORY_LIMIT=8G vendor/bin/wp-taint scan --config=wp-taint.toml
-WP_TAINT_MEMORY_LIMIT=12G vendor/bin/wp-taint scan --config=wp-taint.toml --memory-budget=8G
+WP_TAINT_MEMORY_LIMIT=16G vendor/bin/wp-taint scan --config=wp-taint.toml --memory-budget=8G
 ```
 
 Two settings are involved, and they do different jobs:
@@ -175,8 +175,10 @@ Two settings are involved, and they do different jobs:
   smaller budget uses less memory and takes longer. It never changes a
   finding.
 
-The limit has to cover the budget plus the scan's own tables, which grow with
-the number of functions. Measured on a client site of 1,337 files:
+The limit has to cover the budget, the scan's own tables, which grow with the
+number of functions, and up to 1GB of garbage waiting to be collected. The 4GB
+of room is a minimum. A site with 168 reference trees and an 8GB budget ran out
+of memory at a 12GB limit. Measured on a client site of 1,337 files:
 
 | Reference trees | Budget | Peak heap | Time |
 |---|---|---|---|

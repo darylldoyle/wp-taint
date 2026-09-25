@@ -35,7 +35,7 @@ if (! $loaded) {
  * 400MB for a 300-file plugin, and it scales with the tree.
  *
  * The default is raised to 2G, which covers everything in the WordPress.org top
- * fifty. A client site with many reference trees needs 8 to 12GB; see
+ * fifty. A client site with many reference trees needs 8GB or more; see
  * docs/scanning-a-wordpress-project.md. It is only ever raised, never lowered — an explicit `php -d
  * memory_limit=...` or a higher `php.ini` always wins. Override with
  * `WP_TAINT_MEMORY_LIMIT`, or set it to `-1` for no limit.

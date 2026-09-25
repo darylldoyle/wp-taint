@@ -115,6 +115,10 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The out-of-memory message always suggested `WP_TAINT_MEMORY_LIMIT=6G`, so a
+  scan that died at 12G was told to try half as much. It now suggests double
+  the limit the scan had, or a lower `--memory-budget`, which needs less memory
+  and takes longer.
 - `format`, `fail_on`, `min_severity` and `jobs` under `[scan.options]` in
   `wp-taint.toml` were ignored. Each matching command-line option had a
   built-in default, so it always counted as given and always won. A config

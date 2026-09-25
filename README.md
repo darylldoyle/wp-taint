@@ -299,7 +299,7 @@ theme of 926 files scans in 15 seconds.
 Memory is the real constraint. `bin/wp-taint` raises the limit to 2 GB, which
 covers everything in the WordPress.org top fifty except WooCommerce; for a tree
 that size set `WP_TAINT_MEMORY_LIMIT=4G`. A client site with many reference
-trees needs 8 to 12GB. See
+trees needs 8GB or more. See
 [Scan a large site](docs/scanning-a-wordpress-project.md#scan-a-large-site).
 
 ## Scored against two suites written elsewhere

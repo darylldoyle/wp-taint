@@ -265,15 +265,13 @@ final class ScanCommand extends Command
 
         $invocation = $argv === [] ? 'wp-taint scan …' : implode(' ', $argv);
 
-        $handler = static function () use ($stderr, $invocation): void {
+        $advice = self::outOfMemoryAdvice($configuration->memoryBudget, $invocation);
+
+        $handler = static function () use ($stderr, $advice): void {
             $error = error_get_last();
 
             if ($error !== null && str_contains($error['message'], 'Allowed memory size')) {
-                $stderr->writeln(sprintf(
-                    "\n<error>Ran out of memory. Re-run with a higher limit, for example:\n"
-                        . '  WP_TAINT_MEMORY_LIMIT=6G %s</error>',
-                    $invocation,
-                ));
+                $stderr->writeln("\n<error>" . $advice . '</error>');
             }
         };
         register_shutdown_function($handler);
@@ -363,6 +361,39 @@ final class ScanCommand extends Command
             $reader->int('jobs', $project->jobs ?? 1),
             honorPhpcsSuppressions: ! $reader->bool('no-phpcs-suppressions'),
             memoryBudget: $reader->nullableString('memory-budget') ?? $project->memoryBudget,
+        );
+    }
+
+    /**
+     * What to try after running out of memory, worked out before the scan
+     * starts, while there is memory to work it out with.
+     *
+     * It used to suggest a fixed 6G, which told a scan that died at 12G to try
+     * half as much. It now doubles the limit the scan had, and offers the
+     * slower alternative that needs no more memory: holding fewer parsed files.
+     */
+    private static function outOfMemoryAdvice(?int $budget, string $invocation): string
+    {
+        $limit = (string) ini_get('memory_limit');
+
+        try {
+            $bytes = ScanConfiguration::memoryBudget($limit);
+        } catch (InvalidArgumentException) {
+            $bytes = null;
+        }
+
+        $gigabyte = 1024 * 1024 * 1024;
+        $raised = max(4, (int) ceil(2 * ($bytes ?? 2 * $gigabyte) / $gigabyte));
+        $lowered = $budget === null ? '4G' : max(256, intdiv($budget, 2 * 1024 * 1024)) . 'M';
+
+        return sprintf(
+            "Ran out of memory at a %s limit. Re-run with a higher limit:\n"
+                . "  WP_TAINT_MEMORY_LIMIT=%dG %s\n"
+                . 'or hold fewer parsed files, which is slower but needs less memory: add --memory-budget=%s',
+            $limit,
+            $raised,
+            $invocation,
+            $lowered,
         );
     }
 
