@@ -115,6 +115,12 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `format`, `fail_on`, `min_severity` and `jobs` under `[scan.options]` in
+  `wp-taint.toml` were ignored. Each matching command-line option had a
+  built-in default, so it always counted as given and always won. A config
+  asking for `format = "json"` produced console output, and `fail_on =
+  "critical"` still failed the build at `high`. The config file's values now
+  apply, and an option given on the command line still overrides them.
 - `$request['id']` is read as the REST parameter it is. `WP_REST_Request`
   implements ArrayAccess over its parameters, and the array form was not a
   source at all, so the commonest way to read a REST parameter reached a sink

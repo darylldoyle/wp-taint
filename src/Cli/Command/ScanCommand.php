@@ -63,7 +63,11 @@ final class ScanCommand extends Command
                 InputOption::VALUE_REQUIRED,
                 'Project config file (defaults to ./wp-taint.toml if present)',
             )
-            ->addOption('format', null, InputOption::VALUE_REQUIRED, 'console, json or sarif', 'console')
+            // No Symfony defaults on the options wp-taint.toml can also set.
+            // A default makes the option always present, so the command line
+            // won every time and the config file's value was never read. The
+            // defaults live in buildConfiguration() instead, after the config.
+            ->addOption('format', null, InputOption::VALUE_REQUIRED, 'console, json or sarif [default: "console"]')
             ->addOption('output', 'o', InputOption::VALUE_REQUIRED, 'Write the report to a file instead of stdout')
             ->addOption('baseline', null, InputOption::VALUE_REQUIRED, 'Suppress findings listed in this baseline file')
             ->addOption(
@@ -77,15 +81,13 @@ final class ScanCommand extends Command
                 'min-severity',
                 null,
                 InputOption::VALUE_REQUIRED,
-                'notice, low, medium, high or critical',
-                'low',
+                'notice, low, medium, high or critical [default: "low"]',
             )
             ->addOption(
                 'fail-on',
                 null,
                 InputOption::VALUE_REQUIRED,
-                'Exit 1 at or above this severity, or "never"',
-                'high',
+                'Exit 1 at or above this severity, or "never" [default: "high"]',
             )
             ->addOption(
                 'no-interprocedural',
@@ -168,7 +170,7 @@ final class ScanCommand extends Command
                 'Write a GraphViz dot file of the taint graph',
             )
             ->addOption('trace-full', null, InputOption::VALUE_NONE, 'Never collapse the middle of a long trace')
-            ->addOption('jobs', 'j', InputOption::VALUE_REQUIRED, 'Number of worker processes', '1')
+            ->addOption('jobs', 'j', InputOption::VALUE_REQUIRED, 'Number of worker processes [default: 1]')
             ->addOption(
                 'memory-budget',
                 null,
