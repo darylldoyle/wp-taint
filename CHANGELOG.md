@@ -115,6 +115,15 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A function with thousands of blocks could take gigabytes of memory for its
+  dominators alone. The algorithm starts with every block dominating every
+  block, and held that as object sets, so a function of n blocks began with n²
+  entries. A generated theme file in a client's reference trees had a function
+  of 7,910 blocks: about 63 million entries, over 4GB, which ran the scan out
+  of memory at an 8GB limit and at a 12GB one. The sets are now bit words, and
+  the callers read them without building objects. Every dominator set across
+  422,874 functions in 168 reference trees matches the old algorithm's, and the
+  three largest functions take 0.9 seconds instead of 11.
 - The out-of-memory message always suggested `WP_TAINT_MEMORY_LIMIT=6G`, so a
   scan that died at 12G was told to try half as much. It now suggests double
   the limit the scan had, or a lower `--memory-budget`, which needs less memory

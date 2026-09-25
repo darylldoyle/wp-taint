@@ -7,7 +7,6 @@ namespace Enshrined\WpTaint\Taint;
 use PHPCfg\Block;
 use PHPCfg\Op;
 use PHPCfg\Operand;
-use SplObjectStorage;
 
 /**
  * Did every path to here prove the value was one of a known-safe set?
@@ -79,8 +78,8 @@ final class GuardAnalyzer
         'is_numeric', 'is_int', 'is_integer', 'is_long', 'is_float', 'is_double', 'is_bool',
     ];
 
-    /** @var SplObjectStorage<Block, SplObjectStorage<Block, true>>|null dominators, per function */
-    private ?SplObjectStorage $dominators = null;
+    /** Dominators, per function. */
+    private ?BlockDominators $dominators = null;
 
     /**
      * Start a new function. Dominance is a property of one block graph.
@@ -89,12 +88,12 @@ final class GuardAnalyzer
      */
     public function forFunction(array $blocks): void
     {
-        $this->dominators = $blocks === [] ? null : BlockDominators::compute($blocks);
+        $this->dominators = BlockDominators::compute($blocks);
     }
 
     public function isGuarded(Operand $operand, ?Block $block): bool
     {
-        if ($block === null || $this->dominators === null || ! $this->dominators->contains($block)) {
+        if ($block === null || $this->dominators === null || ! $this->dominators->covers($block)) {
             return false;
         }
 
@@ -104,8 +103,7 @@ final class GuardAnalyzer
             return false;
         }
 
-        /** @var SplObjectStorage<Block, true> $dominating */
-        $dominating = $this->dominators[$block];
+        $dominating = $this->dominators->of($block);
 
         // Every block that must have been passed through to get here. If one of
         // them is the validating side of a guard on this value, there was no
