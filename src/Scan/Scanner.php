@@ -36,7 +36,9 @@ use Enshrined\WpTaint\Taint\CallGraph;
 use Enshrined\WpTaint\Taint\CallGraphBuilder;
 use Enshrined\WpTaint\Taint\CallResolver;
 use Enshrined\WpTaint\Taint\CapabilityGuard;
+use Enshrined\WpTaint\Taint\FunctionBodies;
 use Enshrined\WpTaint\Taint\FunctionContext;
+use Enshrined\WpTaint\Taint\FunctionMeta;
 use Enshrined\WpTaint\Taint\InterproceduralResolver;
 use Enshrined\WpTaint\Taint\IntraproceduralAnalyzer;
 use Enshrined\WpTaint\Taint\ReceiverResolver;
@@ -162,10 +164,12 @@ final class Scanner
         // parsed and then indexed in one list.
         $this->progress->phase('Indexing symbols', count($parsed));
         $functions = new UserFunctionTable();
+        $bodies = new FunctionBodies();
 
         foreach ($parsed as $file) {
             $this->progress->advance();
             $functions->addFile($file);
+            $bodies->add($file);
         }
 
         // Reference trees, parsed after the real ones so a file appearing in
@@ -214,6 +218,7 @@ final class Scanner
             // file. Holding every one until the structural rules ran put them
             // all in memory at the peak for nothing.
             $functions->addFile($result->file());
+            $bodies->add($result->file());
             $result->file()->releaseAst();
 
             $parsed[] = $result->file();
@@ -226,7 +231,8 @@ final class Scanner
         $findings = [];
 
         $receivers = new ReceiverResolver($functions->declaredTypes());
-        $contexts = $functions->all();
+        $metas = $functions->all();
+        $contexts = $bodies->contexts($metas);
 
         // Constants first: WordPress builds include paths out of them and
         // almost nothing else, so resolution stops dead without this, and
@@ -310,7 +316,7 @@ final class Scanner
             ))->build($contexts)
             : null;
 
-        $restRoutes = $this->restRoutes($contexts, $callables, $receivers, $functions, $callGraph);
+        $restRoutes = $this->restRoutes($contexts, $callables, $receivers, $functions, $bodies, $callGraph);
 
         $analyzer = new IntraproceduralAnalyzer(
             $this->registry,
@@ -324,9 +330,16 @@ final class Scanner
             $restRoutes,
         );
         $extractor = new SummaryExtractor($analyzer, $this->options);
-        $interprocedural = new InterproceduralResolver($analyzer, $extractor, $this->options, $this->jobs, $callGraph);
+        $interprocedural = new InterproceduralResolver(
+            $analyzer,
+            $extractor,
+            $this->options,
+            $this->jobs,
+            $callGraph,
+            $bodies,
+        );
 
-        $resolution = $interprocedural->resolve($contexts, $this->progress);
+        $resolution = $interprocedural->resolve($metas, $this->progress);
 
         // Findings a structural rule could not decide alone. The rule recorded
         // what it would emit and which callback settles it; the summary — which
@@ -361,7 +374,7 @@ final class Scanner
             );
         }
 
-        $referenceCallers = $this->referenceCallersOfScannedCode($contexts, $callGraph, $reference);
+        $referenceCallers = $this->referenceCallersOfScannedCode($metas, $callGraph, $reference);
 
         // No total: with --jobs the work happens in the workers, which cannot
         // report back to this bar.
@@ -378,7 +391,8 @@ final class Scanner
                 int $shard,
                 int $shardCount
             ) use (
-                $contexts,
+                $metas,
+                $bodies,
                 $analyzer,
                 $resolution,
                 $graph,
@@ -388,7 +402,7 @@ final class Scanner
                 $shardFindings = [];
                 $shardWarnings = [];
 
-                foreach ($contexts as $index => $context) {
+                foreach ($metas as $index => $meta) {
                     if ($index % $shardCount !== $shard) {
                         continue;
                     }
@@ -405,12 +419,13 @@ final class Scanner
                     // not seeded. The flow is reported while analysing the
                     // caller, at the sink inside the callee, and skipping the
                     // caller lost the finding altogether.
-                    $isReference = isset($reference[$context->file->relativePath]);
+                    $isReference = isset($reference[$meta->relativePath]);
 
-                    if ($isReference && ! isset($referenceCallers[$context->key])) {
+                    if ($isReference && ! isset($referenceCallers[$meta->key])) {
                         continue;
                     }
 
+                    $context = $bodies->context($meta);
                     $result = $analyzer->analyze(
                         $context,
                         $resolution['summaries'],
@@ -505,6 +520,7 @@ final class Scanner
         CallableResolver $callables,
         ReceiverResolver $receivers,
         UserFunctionTable $functions,
+        FunctionBodies $bodies,
         CallGraph $callGraph,
     ): RestRouteTable {
         $table = (new RestRouteCollector($callables, $receivers))->collect($contexts);
@@ -521,11 +537,11 @@ final class Scanner
                 }
 
                 foreach ($route->permission as $permission) {
-                    $context = $permission->dynamic || $permission->userFunctionKey === null
+                    $meta = $permission->dynamic || $permission->userFunctionKey === null
                         ? null
                         : $functions->get($permission->userFunctionKey);
 
-                    if ($context === null || ! $guard->permitsOnlyWhenEntitled($context)) {
+                    if ($meta === null || ! $guard->permitsOnlyWhenEntitled($bodies->context($meta))) {
                         $entitled = false;
 
                         break 2;
@@ -538,7 +554,7 @@ final class Scanner
             }
         }
 
-        $this->entitleCallees($table, $contexts, $callGraph);
+        $this->entitleCallees($table, $functions->all(), $callGraph);
 
         return $table;
     }
@@ -557,16 +573,16 @@ final class Scanner
      * caller the graph cannot see, a callable it could not resolve, is not a
      * caller here.
      *
-     * @param list<FunctionContext> $contexts
+     * @param list<FunctionMeta> $functions
      */
-    private function entitleCallees(RestRouteTable $table, array $contexts, CallGraph $callGraph): void
+    private function entitleCallees(RestRouteTable $table, array $functions, CallGraph $callGraph): void
     {
         /** @var array<string, array<string, true>> $callers */
         $callers = [];
 
-        foreach ($contexts as $context) {
-            foreach ($callGraph->calleesOf($context->key) as $callee) {
-                $callers[$callee][$context->key] = true;
+        foreach ($functions as $function) {
+            foreach ($callGraph->calleesOf($function->key) as $callee) {
+                $callers[$callee][$function->key] = true;
             }
         }
 
@@ -605,12 +621,12 @@ final class Scanner
      * handler holds the argument taint, and the helper's summary carries the
      * sink in the scanned callback back up to it.
      *
-     * @param list<FunctionContext> $contexts
-     * @param array<string, true>   $reference relative paths of reference files
+     * @param list<FunctionMeta>  $functions
+     * @param array<string, true> $reference relative paths of reference files
      *
      * @return array<string, true> function keys
      */
-    private function referenceCallersOfScannedCode(array $contexts, CallGraph $callGraph, array $reference): array
+    private function referenceCallersOfScannedCode(array $functions, CallGraph $callGraph, array $reference): array
     {
         if ($reference === []) {
             return [];
@@ -622,11 +638,11 @@ final class Scanner
         /** @var array<string, bool> $isReference function key => declared in a reference file */
         $isReference = [];
 
-        foreach ($contexts as $context) {
-            $isReference[$context->key] ??= isset($reference[$context->file->relativePath]);
+        foreach ($functions as $function) {
+            $isReference[$function->key] ??= isset($reference[$function->relativePath]);
 
-            foreach ($callGraph->calleesOf($context->key) as $callee) {
-                $callers[$callee][] = $context->key;
+            foreach ($callGraph->calleesOf($function->key) as $callee) {
+                $callers[$callee][] = $function->key;
             }
         }
 

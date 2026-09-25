@@ -67,11 +67,16 @@ final class InterproceduralResolver
          * round per level of a call chain.
          */
         private readonly ?CallGraph $callGraph = null,
+        /**
+         * Where a function's body comes from, when it is analysed. Every other
+         * step works on {@see FunctionMeta} and never holds a body.
+         */
+        private readonly ?FunctionBodies $bodies = null,
     ) {
     }
 
     /**
-     * @param list<FunctionContext> $functions
+     * @param list<FunctionMeta|FunctionContext> $functions
      *
      * @return array{summaries: SummaryTable, properties: PropertyTaintMap, scopes: ScopeTable, rounds: int,
      *     converged: bool}
@@ -223,7 +228,7 @@ final class InterproceduralResolver
     /**
      * One round over one shard of the function list.
      *
-     * @param list<FunctionContext> $ordered
+     * @param list<FunctionMeta|FunctionContext> $ordered
      *
      * @param array<string, true>|null        $dirty   the functions to analyse, or null for all of them
      * @param array<string, list<string>>     $readers ReadLog entry => the functions that read it last time
@@ -302,7 +307,8 @@ final class InterproceduralResolver
             $summary = null;
             $log->begin($key);
 
-            foreach ($group as $context) {
+            foreach ($group as $function) {
+                $context = $this->body($function);
                 $extracted = $this->extractor->extract($context, $visible, $roundProperties, $roundScopes);
                 $summary = $summary === null ? $extracted : $summary->union($extracted);
             }
@@ -323,10 +329,10 @@ final class InterproceduralResolver
                 }
             }
 
-            foreach ($group as $context) {
+            foreach ($group as $function) {
                 // A pass with no parameter seeded, purely so property writes in
                 // the body land in the map. Findings are discarded.
-                $this->analyzer->analyze($context, $visible, $roundProperties, $roundScopes, null, false);
+                $this->analyzer->analyze($this->body($function), $visible, $roundProperties, $roundScopes, null, false);
             }
         }
 
@@ -343,6 +349,28 @@ final class InterproceduralResolver
             'scopes' => $roundScopes,
             'reads' => $log->all(),
         ];
+    }
+
+    private static function isMain(FunctionMeta|FunctionContext $function): bool
+    {
+        return $function instanceof FunctionMeta ? $function->isMain : $function->isMain();
+    }
+
+    /**
+     * The body to analyse: the context itself, or the body the provider holds
+     * for this function.
+     */
+    private function body(FunctionMeta|FunctionContext $function): FunctionContext
+    {
+        if ($function instanceof FunctionContext) {
+            return $function;
+        }
+
+        if ($this->bodies === null) {
+            throw new \LogicException('A function given as metadata needs a body provider.');
+        }
+
+        return $this->bodies->context($function);
     }
 
     /**
@@ -383,17 +411,17 @@ final class InterproceduralResolver
      * Everything is visited in key order, so the result is deterministic, which
      * the round sharding depends on.
      *
-     * @param list<FunctionContext> $functions
+     * @param list<FunctionMeta|FunctionContext> $functions
      *
-     * @return list<FunctionContext>
+     * @return list<FunctionMeta|FunctionContext>
      */
     private static function callOrder(array $functions, ?CallGraph $callGraph): array
     {
         $ordered = $functions;
 
-        usort($ordered, static function (FunctionContext $a, FunctionContext $b): int {
+        usort($ordered, static function (FunctionMeta|FunctionContext $a, FunctionMeta|FunctionContext $b): int {
             // `{main}` bodies call into everything else, so they go last.
-            $mainOrder = ($a->isMain() ? 1 : 0) <=> ($b->isMain() ? 1 : 0);
+            $mainOrder = (self::isMain($a) ? 1 : 0) <=> (self::isMain($b) ? 1 : 0);
 
             if ($mainOrder !== 0) {
                 return $mainOrder;
@@ -406,7 +434,7 @@ final class InterproceduralResolver
             return $ordered;
         }
 
-        /** @var array<string, list<FunctionContext>> $byKey */
+        /** @var array<string, list<FunctionMeta|FunctionContext>> $byKey */
         $byKey = [];
 
         foreach ($ordered as $context) {

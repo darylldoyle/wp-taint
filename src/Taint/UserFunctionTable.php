@@ -6,34 +6,32 @@ namespace Enshrined\WpTaint\Taint;
 
 use Enshrined\WpTaint\Cfg\ParsedFile;
 use PHPCfg\Func;
-use SplObjectStorage;
 
 /**
  * Every function, method and closure in the scanned code, indexed for call
  * resolution.
  *
  * Interprocedural analysis crosses files, so this is built once for the whole
- * scan rather than per file.
+ * scan rather than per file. It holds each function's {@see FunctionMeta}, not
+ * its body: nothing here keeps a control flow graph alive. A body comes from
+ * {@see FunctionBodies}.
  */
 final class UserFunctionTable
 {
-    /** @var array<string, FunctionContext> */
+    /** @var array<string, FunctionMeta> */
     private array $byKey = [];
 
-    /** @var array<string, list<FunctionContext>> */
+    /** @var array<string, list<FunctionMeta>> */
     private array $byMethodName = [];
 
-    /** @var array<string, list<FunctionContext>> lowercased class => its own methods */
+    /** @var array<string, list<FunctionMeta>> lowercased class => its own methods */
     private array $byClass = [];
 
     /** @var array<string, true> */
     private array $definedMethodNames = [];
 
-    /** @var list<FunctionContext> */
+    /** @var list<FunctionMeta> */
     private array $all = [];
-
-    /** @var SplObjectStorage<Func, FunctionContext> */
-    private SplObjectStorage $byFunc;
 
     private DeclaredTypes $declared;
 
@@ -41,7 +39,6 @@ final class UserFunctionTable
 
     public function __construct()
     {
-        $this->byFunc = new SplObjectStorage();
         $this->hierarchy = new ClassHierarchy();
         $this->declared = new DeclaredTypes($this->hierarchy);
     }
@@ -72,50 +69,41 @@ final class UserFunctionTable
     {
         $this->declared->observeFile($file);
         $this->hierarchy->observeFile($file);
-        $this->add(FunctionContext::create($file->script->main, $file));
+        $this->add(FunctionContext::create($file->script->main, $file), null);
 
-        foreach ($file->script->functions as $func) {
+        foreach (array_values($file->script->functions) as $position => $func) {
             if (! $func instanceof Func) {
                 continue;
             }
 
-            $this->add(FunctionContext::create($func, $file));
+            $this->add(FunctionContext::create($func, $file), $position);
         }
     }
 
-    private function add(FunctionContext $context): void
+    private function add(FunctionContext $context, ?int $position): void
     {
+        $meta = FunctionMeta::of($context, $position);
+
         // A duplicate key means the same function is declared twice across the
         // scanned tree — a conditionally-defined shim, or a vendored copy. The
         // first declaration wins, deterministically, because files are walked
         // in sorted order.
-        $this->byKey[$context->key] ??= $context;
+        $this->byKey[$meta->key] ??= $meta;
         $this->declared->observeFunction($context);
-        $this->all[] = $context;
-        $this->byFunc[$context->func] = $context;
+        $this->all[] = $meta;
 
-        if ($context->className === null) {
+        if ($meta->className === null) {
             return;
         }
 
-        $this->byClass[strtolower(ltrim($context->className, '\\'))][] = $context;
+        $this->byClass[strtolower(ltrim($meta->className, '\\'))][] = $meta;
 
-        $method = strtolower($context->func->name);
-        $this->byMethodName[$method][] = $context;
+        $method = strtolower($meta->name);
+        $this->byMethodName[$method][] = $meta;
         $this->definedMethodNames[$method] = true;
     }
 
-    /**
-     * The context for a `Func` we already hold, used to resolve a closure back
-     * to its summary key once the closure operand has been traced to its
-     * declaration.
-     */
-    public function forFunc(Func $func): ?FunctionContext
-    {
-        return $this->byFunc->contains($func) ? $this->byFunc[$func] : null;
-    }
-
-    public function get(string $key): ?FunctionContext
+    public function get(string $key): ?FunctionMeta
     {
         return $this->byKey[strtolower($key)] ?? null;
     }
@@ -176,7 +164,7 @@ final class UserFunctionTable
      * Every method a class has, its own and those it inherits, in PHP's
      * lookup order.
      *
-     * @return list<FunctionContext>
+     * @return list<FunctionMeta>
      */
     public function methodsOf(string $class): array
     {
@@ -194,7 +182,7 @@ final class UserFunctionTable
     /**
      * Every method with this name, on any class.
      *
-     * @return list<FunctionContext>
+     * @return list<FunctionMeta>
      */
     public function methodsNamed(string $method): array
     {
@@ -204,7 +192,7 @@ final class UserFunctionTable
     /**
      * The single method with this name, when the codebase declares exactly one.
      */
-    public function uniqueMethodNamed(string $method): ?FunctionContext
+    public function uniqueMethodNamed(string $method): ?FunctionMeta
     {
         $candidates = $this->byMethodName[strtolower($method)] ?? [];
 
@@ -212,7 +200,7 @@ final class UserFunctionTable
     }
 
     /**
-     * @return list<FunctionContext>
+     * @return list<FunctionMeta>
      */
     public function all(): array
     {
