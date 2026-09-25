@@ -6,6 +6,7 @@ namespace Enshrined\WpTaint\Taint;
 
 use Enshrined\WpTaint\Cfg\CfgBuilder;
 use Enshrined\WpTaint\Cfg\ParsedFile;
+use Enshrined\WpTaint\Support\CycleCollector;
 use LogicException;
 use PHPCfg\Func;
 
@@ -49,6 +50,11 @@ final class FunctionBodies
     public function __construct(
         private readonly ?CfgBuilder $builder = null,
         private readonly ?int $budget = null,
+        /**
+         * Ticked each time a file arrives or a body is handed out, which is
+         * between two units of the scan's work in every phase.
+         */
+        private readonly ?CycleCollector $collector = null,
     ) {
     }
 
@@ -57,11 +63,13 @@ final class FunctionBodies
      */
     public function add(ParsedFile $file): void
     {
+        $this->collector?->tick();
         $this->admit($file, self::estimatedSize($file));
     }
 
     public function context(FunctionMeta $meta): FunctionContext
     {
+        $this->collector?->tick();
         $slot = $meta->position ?? 'main';
 
         if (isset($this->contexts[$meta->path][$slot])) {
@@ -106,6 +114,7 @@ final class FunctionBodies
      */
     public function fileWithAst(string $path): ParsedFile
     {
+        $this->collector?->tick();
         $held = $this->files[$path] ?? null;
 
         if ($held !== null && $held->hasAst()) {

@@ -173,7 +173,7 @@ again each time it is needed. The findings do not change. Referencing fewer
 trees still reduces peak memory more than anything else.
 
 To see where the memory goes, add `--debug-memory`. It prints PHP's own heap
-figures at each phase and each round. Trust those over Activity Monitor or
+figures at each phase and each round, and the time PHP's cycle collector took. Trust those over Activity Monitor or
 `ps`: macOS compresses and swaps a large scan, so its resident size can read a
 few hundred megabytes while PHP holds several gigabytes.
 

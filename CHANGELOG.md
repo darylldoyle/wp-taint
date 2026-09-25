@@ -246,6 +246,13 @@ Further precision changes from corpus adjudication of the new attribute rule:
 
 ### Changed
 
+- The scan runs PHP's cycle collector itself, when the heap has grown by
+  256MB, instead of every time ten thousand possible roots gather. The
+  automatic collector walked the scan's live graphs over and over and freed
+  almost nothing: on the client configuration's reference trees it took 58 of
+  the first 85 seconds of parsing. Parsing jetpack went from 39 to 14 seconds.
+  Findings are unchanged. `--debug-memory` shows the collector's time for each
+  phase and round.
 - Each round of the fixed point analyses functions grouped by file, with files
   ordered callees first, so a round needs each file at most once. The findings
   are unchanged. Over the 50-plugin corpus, 5 findings in 2 plugins show a

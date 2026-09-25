@@ -335,6 +335,25 @@ make sense later only if the time cost of a small budget turns out to be too
 high in practice. They can be built on top of the first design, one function
 shape at a time.
 
+## What the first client run found
+
+The first run of the 17-tree configuration at a 4GB budget took 1,430 seconds
+to parse the reference trees, against about 420 expected. PHP's cycle
+collector took most of it. PHP collects whenever ten thousand possible roots
+have gathered, and each run walks what they reach, which in this scan is a
+large part of the live graphs. Measured on the first 6,000 reference files:
+
+| Configuration | Parse time | Collector time |
+|---|---|---|
+| No budget, automatic collector | 85s | 58s |
+| 256MB budget, automatic collector | 57s | 29s |
+| 256MB budget, collected every 500 files | 30s | 2.6s |
+
+The collector was already costing today's engine most of its parse time. The
+scan now turns automatic collection off and collects when the heap has grown by
+256MB, checked between units of work. That lets up to 256MB of garbage wait for
+the next collection, on top of the budget.
+
 ## Plan
 
 Each step lands on its own, keeps findings byte-identical, and is checked

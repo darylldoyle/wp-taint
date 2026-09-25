@@ -28,9 +28,13 @@ final class MemoryScanProgress implements ScanProgress
 
     private int $phaseStartedAt;
 
+    /** Seconds the cycle collector had spent when this phase or round began. */
+    private float $collectedAtPhaseStart;
+
     public function __construct(private readonly OutputInterface $output)
     {
         $this->startedAt = $this->phaseStartedAt = self::now();
+        $this->collectedAtPhaseStart = self::collectorSeconds();
     }
 
     public function phase(string $label, ?int $total = null): void
@@ -79,13 +83,17 @@ final class MemoryScanProgress implements ScanProgress
             return;
         }
 
+        $collected = self::collectorSeconds();
+
         $this->output->writeln(sprintf(
-            '[memory] %-40s %8.1fs  heap %9s  peak %9s',
+            '[memory] %-40s %8.1fs  heap %9s  peak %9s  gc %7.1fs',
             $this->label . ($detail === null ? '' : ', ' . $detail),
             (self::now() - $this->phaseStartedAt) / 1e9,
             self::megabytes(memory_get_usage()),
             self::megabytes(memory_get_peak_usage()),
+            $collected - $this->collectedAtPhaseStart,
         ));
+        $this->collectedAtPhaseStart = $collected;
     }
 
     /**
@@ -95,6 +103,17 @@ final class MemoryScanProgress implements ScanProgress
     private static function now(): int
     {
         return (int) hrtime(true);
+    }
+
+    /**
+     * Time PHP has spent collecting cycles, which a large scan can lose most of
+     * its time to. PHP 8.3 reports it; earlier versions read as zero.
+     */
+    private static function collectorSeconds(): float
+    {
+        // PHPStan checks against PHP 8.2, the oldest supported, which has no
+        // timings in gc_status().
+        return gc_status()['collector_time'] ?? 0.0; // @phpstan-ignore nullCoalesce.offset
     }
 
     private static function megabytes(int $bytes): string

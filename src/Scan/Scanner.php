@@ -27,6 +27,7 @@ use Enshrined\WpTaint\Rules\Wordpress\MissingRestPermissionCallback;
 use Enshrined\WpTaint\Rules\Wordpress\NonceWithoutAction;
 use Enshrined\WpTaint\Rules\Wordpress\SettingWithoutSanitizeCallback;
 use Enshrined\WpTaint\Rules\Wordpress\WrongContextEscape;
+use Enshrined\WpTaint\Support\CycleCollector;
 use Enshrined\WpTaint\Support\PathHelper;
 use Enshrined\WpTaint\Taint\AnalysisOptions;
 use Enshrined\WpTaint\Taint\AnalysisWarning;
@@ -139,6 +140,24 @@ final class Scanner
      */
     public function scan(array $files): ScanResult
     {
+        // PHP's own collector spends most of a large scan walking graphs that
+        // are still in use. This one collects when the heap has grown instead;
+        // see {@see CycleCollector}.
+        $collector = new CycleCollector();
+        $collector->start();
+
+        try {
+            return $this->scanFiles($files, $collector);
+        } finally {
+            $collector->stop();
+        }
+    }
+
+    /**
+     * @param list<string> $files
+     */
+    private function scanFiles(array $files, CycleCollector $collector): ScanResult
+    {
         $startedAt = hrtime(true);
 
         $builder = new CfgBuilder($this->root);
@@ -147,7 +166,7 @@ final class Scanner
         // Every body the scan analyses comes from here: held while the budget
         // allows, rebuilt from source when it does not. Nothing else keeps a
         // parsed file. See docs/design/two-pass-engine.md.
-        $bodies = new FunctionBodies($builder, $this->processBudget());
+        $bodies = new FunctionBodies($builder, $this->processBudget(), $collector);
 
         /** @var list<string> $parsedPaths every file that parsed, scanned first, for the theme roots */
         $parsedPaths = [];
