@@ -105,6 +105,30 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `$request['id']` is read as the REST parameter it is. `WP_REST_Request`
+  implements ArrayAccess over its parameters, and the array form was not a
+  source at all, so the commonest way to read a REST parameter reached a sink
+  as a parameter of unknown origin, at `low`.
+- REST parameter accessors carry every request kind `$_GET` does. `object_id`
+  and `csv` were added to the superglobals and never reached the REST
+  accessors, and `ldap` and `xpath` never had, so `wp_delete_post(
+  $request->get_param( 'id' ) )` reported nothing. The raw body,
+  `get_body()` and `php://input`, carries the same set. A test now holds every
+  whole-request source to `$_GET`'s kinds.
+- An unresolved callee is assumed to write back where it could: into any
+  variable passed to it, and into and out of its receiver, when nothing about it
+  can be seen. `$cb( $_GET['a'], $out ); echo $out;` reported nothing. Where
+  the scan can say what the callee might be, it does: a named method on an
+  untyped receiver is one of the methods of that name, and a computed name on a
+  receiver of known class, `$this->{ 'validate_' . $type }( … )`, is one of that
+  class's methods, so only a position one of them takes by reference is
+  written back. A dispatcher such as `call_user_func()` passes copies and
+  writes back nothing.
+- A strict `in_array()` against an allowlist held in a variable is credited as
+  a guard. Only a list written inline in the call counted, so `$allowed =
+  array( … ); if ( ! in_array( $name, $allowed, true ) ) return;` left
+  `update_option( $name, … )` reported as an arbitrary option write.
+
 - A callback registered as `array( $this, 'method' )` in a base class reaches
   every subclass override. `$this` is whatever class the object really is, so a
   base that registers the callback in its constructor runs the child's method
@@ -212,6 +236,23 @@ Further precision changes from corpus adjudication of the new attribute rule:
 
 ### Changed
 
+- A REST route's `permission_callback` is credited by
+  `wp.authz.object-id-from-request`. WordPress runs the route's callback only
+  once the permission callback allows the request, so a callback whose
+  permission callback allows only behind an entitling check, an object
+  capability with the id or a site-wide one, is entitled, as is every function
+  only entitled code calls. A role capability, `__return_true` or a missing
+  callback still is not.
+- `CapabilityGuard` follows a compound guard, `if ( ! current_user_can( … ) ||
+  … )`, which php-cfg compiles to a branch on a phi and which was never
+  credited, in a permission callback or in a handler. A permission callback
+  returning a value `is_wp_error()` has just proved to be an error is refusing,
+  not allowing.
+- A REST route's `args` schema narrows its parameters in the route's callback,
+  as `WP_REST_Request::sanitize_params()` does: a `sanitize_callback` in any
+  callable form, or core's `rest_parse_request_arg()` when only a `type` is
+  declared, with `enum`, the numeric types and string formats applied as core
+  applies them.
 - Fixed-point rounds after the first re-analyse only the functions that read
   something the previous round changed. Every read of a summary, property or
   scope entry is recorded as it happens, so a function whose reads did not

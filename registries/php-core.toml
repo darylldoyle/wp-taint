@@ -54,7 +54,7 @@ note = "HTTP_* keys are request headers verbatim. Other keys are set by the web 
 function = "file_get_contents"
 arg = 0
 arg_literal_contains = "php://input"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "storage"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "object_id", "csv", "storage"]
 note = "The raw request body. Only a source for the php:// wrapper; every other argument makes this a path sink."
 
 [[sources]]

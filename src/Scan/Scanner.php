@@ -14,6 +14,8 @@ use Enshrined\WpTaint\Cfg\ThemeRoots;
 use Enshrined\WpTaint\Finding\Finding;
 use Enshrined\WpTaint\Finding\FindingCollection;
 use Enshrined\WpTaint\Hooks\HookGraphBuilder;
+use Enshrined\WpTaint\Hooks\RestRouteCollector;
+use Enshrined\WpTaint\Hooks\RestRouteTable;
 use Enshrined\WpTaint\Registry\Registry;
 use Enshrined\WpTaint\Rules\RuleContext;
 use Enshrined\WpTaint\Rules\StructuralRule;
@@ -33,6 +35,7 @@ use Enshrined\WpTaint\Taint\CallableResolver;
 use Enshrined\WpTaint\Taint\CallGraph;
 use Enshrined\WpTaint\Taint\CallGraphBuilder;
 use Enshrined\WpTaint\Taint\CallResolver;
+use Enshrined\WpTaint\Taint\CapabilityGuard;
 use Enshrined\WpTaint\Taint\FunctionContext;
 use Enshrined\WpTaint\Taint\InterproceduralResolver;
 use Enshrined\WpTaint\Taint\IntraproceduralAnalyzer;
@@ -307,6 +310,8 @@ final class Scanner
             ))->build($contexts)
             : null;
 
+        $restRoutes = $this->restRoutes($contexts, $callables, $receivers, $functions, $callGraph);
+
         $analyzer = new IntraproceduralAnalyzer(
             $this->registry,
             $functions,
@@ -316,6 +321,7 @@ final class Scanner
             $callGraph,
             $hooks->shortcodeCallbackKeys(),
             $hooks->printedReturnCallbacks(),
+            $restRoutes,
         );
         $extractor = new SummaryExtractor($analyzer, $this->options);
         $interprocedural = new InterproceduralResolver($analyzer, $extractor, $this->options, $this->jobs, $callGraph);
@@ -481,6 +487,113 @@ final class Scanner
             referenceFiles: count($reference),
             referenceParseFailures: $referenceParseFailures,
         );
+    }
+
+    /**
+     * Every REST route, and which callbacks their permission callbacks entitle.
+     *
+     * A callback is entitled when every route it handles has a permission
+     * callback, every body that callback resolves to allows a request only
+     * behind an entitling check, and none of it is a function the scan cannot
+     * see into. `__return_true`, a callback that will not resolve, and a route
+     * with no permission callback all leave it unentitled.
+     *
+     * @param list<FunctionContext> $contexts
+     */
+    private function restRoutes(
+        array $contexts,
+        CallableResolver $callables,
+        ReceiverResolver $receivers,
+        UserFunctionTable $functions,
+        CallGraph $callGraph,
+    ): RestRouteTable {
+        $table = (new RestRouteCollector($callables, $receivers))->collect($contexts);
+        $guard = new CapabilityGuard($this->registry, $callGraph);
+
+        foreach ($table->callbackKeys() as $key) {
+            $entitled = true;
+
+            foreach ($table->routesFor($key) as $route) {
+                if ($route->permission === null || $route->permission === []) {
+                    $entitled = false;
+
+                    break;
+                }
+
+                foreach ($route->permission as $permission) {
+                    $context = $permission->dynamic || $permission->userFunctionKey === null
+                        ? null
+                        : $functions->get($permission->userFunctionKey);
+
+                    if ($context === null || ! $guard->permitsOnlyWhenEntitled($context)) {
+                        $entitled = false;
+
+                        break 2;
+                    }
+                }
+            }
+
+            if ($entitled) {
+                $table->markEntitled($key);
+            }
+        }
+
+        $this->entitleCallees($table, $contexts, $callGraph);
+
+        return $table;
+    }
+
+    /**
+     * Carry a route's entitlement into what its callback calls.
+     *
+     * WordPress checked the permission before the callback ran, so it holds in
+     * every function the callback calls, and in theirs: a controller method
+     * that reads `$request['id']` itself, called from the closure registered as
+     * the route's callback, is as entitled as the closure. A function counts
+     * once every caller the call graph knows of is entitled; one with no known
+     * caller is an entry point in its own right and does not.
+     *
+     * On the suppressing side, like the rest of the authorization rules: a
+     * caller the graph cannot see, a callable it could not resolve, is not a
+     * caller here.
+     *
+     * @param list<FunctionContext> $contexts
+     */
+    private function entitleCallees(RestRouteTable $table, array $contexts, CallGraph $callGraph): void
+    {
+        /** @var array<string, array<string, true>> $callers */
+        $callers = [];
+
+        foreach ($contexts as $context) {
+            foreach ($callGraph->calleesOf($context->key) as $callee) {
+                $callers[$callee][$context->key] = true;
+            }
+        }
+
+        do {
+            $changed = false;
+
+            foreach ($callers as $key => $from) {
+                if ($table->isEntitled($key)) {
+                    continue;
+                }
+
+                $all = true;
+
+                foreach (array_keys($from) as $caller) {
+                    if ($caller === $key || ! $table->isEntitled($caller)) {
+                        $all = false;
+
+                        break;
+                    }
+                }
+
+                if ($all) {
+                    $table->markEntitled($key);
+                    $changed = true;
+                }
+            }
+        } while ($changed);
     }
 
     /**

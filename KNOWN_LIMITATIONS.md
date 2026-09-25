@@ -82,6 +82,7 @@ badge:
 | [A by-reference call cannot clear its argument](#references-are-followed-and-never-cleared) | Over-reports |
 | [A closure capture](#a-closure-capture-crosses-in-both-directions) | Neither |
 | [What a REST callback returns is not treated as output](#a-rest-callbacks-return-is-not-output) | Misses |
+| [A route's schema narrows a parameter only in the route's callback](#a-rest-parameter-is-read-through-its-routes-schema) | Over-reports |
 | [`wp_json_encode()` is treated as clearing `html`](#wp_json_encode-context-sensitivity-is-approximated) | Misses |
 | [Loops are not unrolled](#loops-are-analysed-to-a-fixed-point-not-unrolled) | Over-reports |
 
@@ -632,6 +633,28 @@ about which way to be wrong.
 | `propagate` *(default)* | passes its arguments to its return value | the callee escapes them |
 | `tainted` | returns everything tainted | almost always, deliberately |
 
+Under `propagate` and `tainted`, an unresolved call may also write back. The
+arguments' taint is added to every argument that names a variable, since any of
+them could be a by-reference parameter, and to a method's receiver, whose state
+the callee could have changed; the receiver is an input to the return as well.
+All of that applies only where nothing about the callee can be seen: a callable
+whose name is unknown, `$cb()`, `new $class()`, a computed method name on a
+receiver of unknown class, or a method no class in the scan declares. Two cases are narrower, because the scan can
+answer them:
+
+- **A method the scan can name candidates for** is one of them: a named method
+  on an untyped receiver is one of the methods of that name, and a computed name
+  on a receiver of known class is one of that class's methods, narrowed by the
+  name's literal prefix. It writes back only through a position some candidate
+  takes by reference, and its receiver is neither written nor read: that shape is
+  nearly always a lookup, and `$form = wpcf7_contact_form( $_POST['id'] );
+  echo $form->title();` would otherwise make a stored title as attacker-chosen
+  as the id that found it.
+- **A callable a dispatcher runs**, `call_user_func( $cb, $a, $b )` and the rest,
+  gets copies of its arguments, so nothing is written back.
+  `call_user_func_array()` can pass references held in the array itself; that
+  shape is rare and not modelled.
+
 `propagate` is the default because an unresolved callee is nearly always code
 in the same project, and code in the same project transforms its arguments
 rather than conjuring request data out of nothing. `tainted` is the upper bound
@@ -1174,7 +1197,21 @@ attack when post 7 is someone else's.
 What discharges it is a dominating capability check that ties the caller to the
 object: an object-scoped meta capability with the id in hand
 (`current_user_can( 'delete_post', $id )`), or a site-wide grant
-(`manage_options`). What does not: a role capability (`edit_posts`), a nonce of
+(`manage_options`). On a REST route the check usually lives in the
+`permission_callback`, and WordPress runs the route's callback only when that
+returns something truthy, so it counts: the callback is entitled when every
+route it handles has a permission callback whose every allowing `return` is an
+entitling check, sits behind one, or is a refusal (`false`, `null`, a
+`WP_Error`, or a value just proved to be one by `is_wp_error()`). A guard may be
+a compound condition, `! current_user_can( … ) || …`. The entitlement carries
+into every function whose every known caller is entitled, so a controller
+method the callback calls is entitled too. That last step is on the suppressing
+side: a caller the call graph cannot see is not counted, so a helper reached
+both from an entitled route and from an unresolvable call elsewhere is treated
+as entitled. Any callable form resolves, as everywhere else.
+A route with no permission callback, `__return_true`, one that will not
+resolve, or one route among several that does not entitle, leaves it
+unentitled. What does not: a role capability (`edit_posts`), a nonce of
 any spelling, or a meta capability called with no id, the last of which
 `wp.authz.meta-cap-without-object` reports in its own right.
 
@@ -1268,6 +1305,34 @@ as unresolved rather than guessed at.
 
 That is deliberately a constant fold and not a dataflow analysis: a wrong answer
 in this rule is an authorization bypass either reported or missed.
+
+### A REST parameter is read through its route's schema
+
+`$request['id']` and `$request->get_param( 'id' )` are the same read, and both
+are request data in every context. In a route's callback, the route's `args`
+schema narrows it the way `WP_REST_Request::sanitize_params()` does before the
+callback runs:
+
+- a `sanitize_callback`, in any callable form, is applied: a catalogue
+  sanitizer by its catalogue entry, a function of the scan's by its summary
+- no `sanitize_callback` key and a `type` runs core's `rest_parse_request_arg()`:
+  an `enum` admits only the values listed, `integer`, `number` and `boolean` are
+  cast, and a string `format` runs its sanitizer
+- an empty `sanitize_callback` runs nothing, and neither does a plain string
+
+A callback on several routes is sanitised only as far as every one of them
+sanitises the parameter, and a route whose `args` are built by a method call,
+as `WP_REST_Controller` subclasses build theirs, sanitises nothing. A
+`validate_callback` of the plugin's own is not credited; which values it lets
+through is not something the schema states.
+
+**Direction:** over-reporting, in three places. The schema narrows a read only in
+the route's own callback: a helper handed the whole request reads the parameter
+unsanitised, because nothing there says which route the request came through. A
+`sanitize_callback` whose clearing depends on its own arguments, a catalogue
+`clears_by` strategy, is credited with nothing, since WordPress hands it the
+value, the request and the key rather than the arguments the strategy reads.
+And `get_params()[ 'id' ]` and the other whole-array accessors are not narrowed.
 
 ---
 

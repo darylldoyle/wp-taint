@@ -10,6 +10,7 @@ use Enshrined\WpTaint\Finding\Fingerprint;
 use Enshrined\WpTaint\Finding\Severity;
 use Enshrined\WpTaint\Finding\TraceStep;
 use Enshrined\WpTaint\Finding\TraceVerb;
+use Enshrined\WpTaint\Hooks\RestRouteTable;
 use Enshrined\WpTaint\Registry\ArgumentSelector;
 use Enshrined\WpTaint\Registry\DispatchReturn;
 use Enshrined\WpTaint\Registry\Matcher;
@@ -181,6 +182,8 @@ final class FunctionAnalysis
 
     private TraceBuilder $traces;
 
+    private RestParameterSanitizer $restParameters;
+
     /** @var list<Block> */
     private array $blocks;
 
@@ -203,8 +206,10 @@ final class FunctionAnalysis
         private readonly array $shortcodeCallbacks = [],
         /** @var array<string, string> */
         private readonly array $printedReturns = [],
+        private readonly ?RestRouteTable $restRoutes = null,
     ) {
         $this->state = new TaintState();
+        $this->restParameters = new RestParameterSanitizer($registry, $summaries);
         $this->types = new ClassTypeMap();
         $this->queryShapes = new QueryShapeInspector(
             $literals,
@@ -1449,6 +1454,22 @@ final class FunctionAnalysis
 
         $key = $op->dim === null ? null : OperandHelper::literalKey($op->dim);
 
+        // `$request['id']` is `$request->get_param( 'id' )`: WP_REST_Request
+        // implements ArrayAccess over the same parameters. It was not a source
+        // at all, so the commonest way to read a REST parameter reached a sink
+        // as a parameter of unknown origin, at low.
+        if ($this->isRestRequest($op->var)) {
+            $read = $this->transferRestParameter($op, $op->var, is_string($key) ? $key : null, sprintf(
+                '%s[%s] is a REST request parameter, which is user-supplied data.',
+                OperandHelper::describe($op->var),
+                is_string($key) ? "'" . $key . "'" : '…',
+            ));
+
+            if ($read !== null) {
+                return $read;
+            }
+        }
+
         if ($this->readsUntaintedSubKey($op, $key)) {
             return $this->state->set($op->result, TaintSet::empty());
         }
@@ -1462,6 +1483,103 @@ final class FunctionAnalysis
             $op->var,
             sprintf('Read out of %s.', OperandHelper::describe($op->var)),
         );
+    }
+
+    /**
+     * A REST parameter read, narrowed by the route's schema where one applies.
+     *
+     * The schema applies only to the request WordPress hands a route's
+     * callback, read in that callback. Anywhere else nothing says which route
+     * the request came through, so the parameter is read as it arrives.
+     *
+     * Null when the catalogue has no REST source to read it as.
+     */
+    private function transferRestParameter(Op\Expr $op, Operand $request, ?string $name, string $description): ?bool
+    {
+        $source = $this->registry->source(Matcher::method('WP_REST_Request', 'get_param'));
+
+        if ($source === null) {
+            return null;
+        }
+
+        $kinds = $source->kinds;
+
+        if ($name !== null && $this->isRouteRequest($request) && $this->restRoutes !== null) {
+            $routes = $this->restRoutes->routesFor($this->context->key);
+            $sanitized = $this->restParameters->sanitize($kinds, $name, $routes);
+
+            if (! $sanitized->equals($kinds)) {
+                $description .= sprintf(
+                    ' The route\'s args schema sanitises \'%s\' before the callback runs, which leaves %s.',
+                    $name,
+                    $sanitized->isEmpty() ? 'nothing' : $sanitized->describe(),
+                );
+            }
+
+            $kinds = $sanitized;
+        }
+
+        if ($kinds->isEmpty()) {
+            return $this->writeResult($op->result, TaintSet::empty());
+        }
+
+        return $this->writeResult(
+            $op->result,
+            $kinds,
+            new Provenance(TraceVerb::Source, $op, $description),
+        );
+    }
+
+    /**
+     * Whether an operand is a `WP_REST_Request`, by its declared type or
+     * because it is the request a route's callback was handed.
+     */
+    private function isRestRequest(Operand $operand): bool
+    {
+        if ($this->isRouteRequest($operand)) {
+            return true;
+        }
+
+        $class = $this->receivers->classOf($operand, $this->context, $this->types);
+
+        if ($class === null) {
+            return false;
+        }
+
+        return in_array('wp_rest_request', $this->functions->classHierarchy()->lookupOrder($class), true)
+            || strtolower(ltrim($class, '\\')) === 'wp_rest_request';
+    }
+
+    /**
+     * Whether an operand is the first parameter of a REST route's callback,
+     * which WordPress fills with the route's request.
+     */
+    private function isRouteRequest(Operand $operand): bool
+    {
+        if ($this->restRoutes === null || ! $this->restRoutes->handles($this->context->key)) {
+            return false;
+        }
+
+        $parameter = $this->context->func->params[0] ?? null;
+
+        if (! $parameter instanceof Op\Expr\Param) {
+            return false;
+        }
+
+        $name = OperandHelper::literalString($parameter->name);
+
+        return $name !== null && OperandHelper::variableName($operand) === $name;
+    }
+
+    /**
+     * Whether the caller is proved entitled here: by a check in this body, or
+     * because this is a REST route's callback and WordPress only runs it once
+     * the route's permission callback has entitled the caller.
+     */
+    private function callerIsEntitled(): bool
+    {
+        return $this->capabilityGuards->isEntitled($this->currentBlock)
+            || ($this->restRoutes?->isEntitled($this->context->key) ?? false);
     }
 
     /**
@@ -2541,6 +2659,22 @@ final class FunctionAnalysis
             $source = $this->registry->source($matcher);
 
             if ($source !== null && $this->sourceApplies($source, $call)) {
+                if (
+                    $op instanceof Op\Expr\MethodCall
+                    && strtolower($matcher->key()) === 'method:wp_rest_request::get_param'
+                    && $this->isRouteRequest($op->var)
+                ) {
+                    $name = OperandHelper::literalString($call->argument(0));
+                    $read = $this->transferRestParameter($op, $op->var, $name, sprintf(
+                        '%s returns user-supplied data.',
+                        $matcher->describe(),
+                    ));
+
+                    if ($read !== null) {
+                        return $read || $changed;
+                    }
+                }
+
                 // A read of a key the scan watched being written carries the
                 // write's taint and trace on top of the stored baseline — the
                 // proven second-order flow, at the severity of what actually
@@ -2759,32 +2893,10 @@ final class FunctionAnalysis
             $this->imprecise = true;
         }
 
-        $cleared = $sanitizer->clearsBy === null
-            ? $sanitizer->apply($incoming)
-            : $incoming->without($this->strategyClears($sanitizer, $call));
-
-        // Applying any sanitizer settles two questions whatever else it did or
-        // did not clear: where the value came from, and whether anyone cleaned
-        // it before storing it. Propagators settle neither, which is what keeps
-        // `trim()` and `wp_unslash()` from passing for sanitisers.
-        $cleared = $cleared->without(TaintSet::of(TaintKind::Unknown, TaintKind::Storage));
-
-        // No sanitizer settles whose row an id names. absint() clears `*`
-        // because it ends every payload, and an object id is not a payload:
-        // `7` is a complete attack when post 7 is someone else's. Authorization
-        // is CapabilityGuard's question, asked at the sink.
-        if ($incoming->has(TaintKind::ObjectId)) {
-            $cleared = $cleared->union(TaintSet::of(TaintKind::ObjectId));
-        }
-
-        // A quote-escaper does not remove the danger, it moves it: the value is
-        // safe between quotes and no safer than before without them. Trading
-        // `sql` for `sql_unquoted` is what lets the sink tell those apart, and
-        // what keeps a table name from a helper — which never carried `sql` —
-        // out of it entirely.
-        if ($sanitizer->quotedOnly && $incoming->has(TaintKind::Sql)) {
-            $cleared = $cleared->union(TaintSet::of(TaintKind::SqlUnquoted));
-        }
+        $cleared = $sanitizer->transform(
+            $incoming,
+            $sanitizer->clearsBy === null ? null : $this->strategyClears($sanitizer, $call),
+        );
 
         // Remember that this value has been escaped, so that a filter standing
         // between here and the echo can be seen to have voided it — and clear
@@ -3402,19 +3514,26 @@ final class FunctionAnalysis
     {
         $this->imprecise = true;
 
-        return match ($this->options->dynamicCalls) {
-            DynamicCallPolicy::Clean => $this->writeResult($op->result, TaintSet::empty()),
-            DynamicCallPolicy::Propagate => $this->transferUnion(
-                $op,
-                $call->arguments,
-                sprintf(
-                    'Call to %s could not be resolved, so %s.',
-                    $call->name(),
-                    DynamicCallPolicy::Propagate->describe(),
-                ),
-                imprecise: true,
-            ),
-            DynamicCallPolicy::Tainted => $this->writeResult(
+        // A method's receiver is an input too: an unknown method can return
+        // what its object holds, and without this a value stored into an
+        // object by one unknown call could never come back out of another.
+        //
+        // Not for a method the scan declares, on a receiver whose class it
+        // could not find: that is one of those declarations, and the engine
+        // cannot say which, but it can say none of them is unknown. The call is
+        // usually a lookup, and `$form = wpcf7_contact_form( $_POST['id'] );
+        // $form->title()` would make a form's stored title as attacker-chosen
+        // as the id used to find it. Only when nothing about the callee can be
+        // seen, its name unknown or declared nowhere in the scan.
+        $receiver = $op instanceof Op\Expr\MethodCall && $this->calleeUnseen($call) ? $op->var : null;
+        $inputs = $receiver === null ? $call->arguments : [...$call->arguments, $receiver];
+
+        if ($this->options->dynamicCalls === DynamicCallPolicy::Clean) {
+            return $this->writeResult($op->result, TaintSet::empty());
+        }
+
+        if ($this->options->dynamicCalls === DynamicCallPolicy::Tainted) {
+            $changed = $this->writeResult(
                 $op->result,
                 TaintSet::allDataflowKinds(),
                 new Provenance(
@@ -3428,8 +3547,158 @@ final class FunctionAnalysis
                     $call->arguments,
                     imprecise: true,
                 ),
+            );
+
+            return $this->applyUnknownCalleeEffects($op, $call, $receiver, TaintSet::allDataflowKinds()) || $changed;
+        }
+
+        $changed = $this->transferUnion(
+            $op,
+            $inputs,
+            sprintf(
+                'Call to %s could not be resolved, so %s.',
+                $call->name(),
+                DynamicCallPolicy::Propagate->describe(),
             ),
-        };
+            imprecise: true,
+        );
+
+        $passed = TaintSet::empty();
+
+        foreach ($call->arguments as $argument) {
+            $passed = $passed->union($this->state->effectiveTaintOf($argument));
+        }
+
+        return $this->applyUnknownCalleeEffects($op, $call, $receiver, $passed) || $changed;
+    }
+
+    /**
+     * Which argument positions an unresolved call could write back through, or
+     * null for any of them.
+     *
+     * None, when a dispatcher runs the callee: `call_user_func()` and its
+     * relatives pass arguments by value. Any, when nothing about the callee can
+     * be seen: its name is unknown, or
+     * it is a method no class in the scan declares. A named method the scan
+     * does declare, on a receiver whose class could not be found, is one of
+     * those declarations, and PHP writes back only through a parameter
+     * declared by reference, so only a position some declaration takes by
+     * reference counts. Treating every argument of `$generator->add( $name,
+     * $title, $callback, $options )` as written back spread each argument's
+     * taint into the other three, and `$this->{ 'validate_' . $type }( $value,
+     * $setting )` wrote the value into `$setting` through a method that takes
+     * it by value.
+     *
+     * @return array<int, true>|null
+     */
+    private function byReferencePositions(CallTarget $call): ?array
+    {
+        // `call_user_func( $cb, $contact_form, $options )` hands `$cb` copies.
+        if ($call->passesByValue) {
+            return [];
+        }
+
+        if ($this->calleeUnseen($call)) {
+            return null;
+        }
+
+        $positions = [];
+
+        foreach ($call->candidates as $key) {
+            $method = $this->functions->get($key);
+
+            if ($method === null) {
+                continue;
+            }
+
+            foreach (array_values($method->func->params) as $index => $parameter) {
+                if (! $parameter instanceof Op\Expr\Param || ! $parameter->byRef) {
+                    continue;
+                }
+
+                if (! $parameter->variadic) {
+                    $positions[$index] = true;
+
+                    continue;
+                }
+
+                // A variadic by-reference parameter takes every argument from
+                // its position on.
+                for ($position = $index; $position < count($call->arguments); $position++) {
+                    $positions[$position] = true;
+                }
+            }
+        }
+
+        return $positions;
+    }
+
+    /**
+     * Whether nothing about an unresolved callee can be seen: the scan has no
+     * candidate for it. A named method has the methods of that name, and a
+     * computed name on a receiver of known class has that class's methods; a
+     * callable whose name is unknown, or a method no class in the scan
+     * declares, has none.
+     */
+    private function calleeUnseen(CallTarget $call): bool
+    {
+        return $call->candidates === [];
+    }
+
+    /**
+     * What an unknown callee may do besides return: write into its object, and
+     * write back through any argument it takes by reference.
+     *
+     * Which parameters are by reference is part of the signature the engine
+     * could not find, so every argument that names a variable is treated as
+     * one, except where the scan's own declarations of a named method say
+     * otherwise; see {@see byReferencePositions()}. That over-approximates, the
+     * right side for a callee nothing is known about: `$cb( $_GET['a'], $out );
+     * echo $out;` reported nothing.
+     * Added as element taint, the same slot a known out-parameter is written
+     * to, and never cleared, because SSA gives the write no operand of its own.
+     */
+    private function applyUnknownCalleeEffects(Op\Expr $op, CallTarget $call, ?Operand $receiver, TaintSet $taint): bool
+    {
+        if ($taint->isEmpty()) {
+            return false;
+        }
+
+        $targets = [];
+        $byReference = $this->byReferencePositions($call);
+
+        foreach ($call->arguments as $index => $argument) {
+            $writable = $byReference === null || isset($byReference[$index]);
+
+            if ($writable && OperandHelper::variableName($argument) !== null) {
+                $targets[] = $argument;
+            }
+        }
+
+        if ($receiver !== null) {
+            $targets[] = $receiver;
+        }
+
+        $changed = false;
+
+        foreach ($targets as $target) {
+            $provenance = new Provenance(
+                TraceVerb::Propagate,
+                $op,
+                sprintf(
+                    'Call to %s could not be resolved, so it may have written %s into %s.',
+                    $call->name(),
+                    $taint->describe(),
+                    OperandHelper::describe($target),
+                ),
+                $call->arguments,
+                imprecise: true,
+            );
+
+            $changed = $this->state->addContainerTaint($target, $taint, $provenance) || $changed;
+        }
+
+        return $changed;
     }
 
     private function transferUserCall(Op\Expr $op, CallTarget $call): bool
@@ -3635,7 +3904,7 @@ final class FunctionAnalysis
             // frame that holds the check.
             if (
                 $reference->kind === TaintKind::ObjectId
-                && $this->capabilityGuards->isEntitled($this->currentBlock)
+                && $this->callerIsEntitled()
             ) {
                 continue;
             }
@@ -3998,7 +4267,7 @@ final class FunctionAnalysis
         // discharges it is a dominating check that entitles the caller to the
         // object — see {@see CapabilityGuard}.
         if ($sink->kind === TaintKind::ObjectId) {
-            if ($this->capabilityGuards->isEntitled($this->currentBlock)) {
+            if ($this->callerIsEntitled()) {
                 return;
             }
         } elseif ($this->guards->isGuarded($operand, $this->currentBlock)) {

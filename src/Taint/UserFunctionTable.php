@@ -23,6 +23,9 @@ final class UserFunctionTable
     /** @var array<string, list<FunctionContext>> */
     private array $byMethodName = [];
 
+    /** @var array<string, list<FunctionContext>> lowercased class => its own methods */
+    private array $byClass = [];
+
     /** @var array<string, true> */
     private array $definedMethodNames = [];
 
@@ -95,6 +98,8 @@ final class UserFunctionTable
             return;
         }
 
+        $this->byClass[strtolower(ltrim($context->className, '\\'))][] = $context;
+
         $method = strtolower($context->func->name);
         $this->byMethodName[$method][] = $context;
         $this->definedMethodNames[$method] = true;
@@ -165,6 +170,35 @@ final class UserFunctionTable
     public function definesMethodNamed(string $method): bool
     {
         return isset($this->definedMethodNames[strtolower($method)]);
+    }
+
+    /**
+     * Every method a class has, its own and those it inherits, in PHP's
+     * lookup order.
+     *
+     * @return list<FunctionContext>
+     */
+    public function methodsOf(string $class): array
+    {
+        $methods = [];
+
+        foreach ($this->hierarchy->lookupOrder($class) as $candidate) {
+            foreach ($this->byClass[$candidate] ?? [] as $context) {
+                $methods[] = $context;
+            }
+        }
+
+        return $methods;
+    }
+
+    /**
+     * Every method with this name, on any class.
+     *
+     * @return list<FunctionContext>
+     */
+    public function methodsNamed(string $method): array
+    {
+        return $this->byMethodName[strtolower($method)] ?? [];
     }
 
     /**

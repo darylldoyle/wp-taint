@@ -156,7 +156,7 @@ final class CallResolver
             // without even marking it imprecise.
             return $dispatcher->returns === DispatchReturn::Own
                 ? [$direct]
-                : [CallTarget::dynamic($direct->arguments, $direct->name())];
+                : [CallTarget::dynamicDispatch($direct->arguments, $direct->name())];
         }
 
         $mode = match ($dispatcher->returns) {
@@ -440,11 +440,16 @@ final class CallResolver
             $method = count($names) === 1 ? $names[0] : null;
         }
 
+        $class = $this->receiverClass($op->var, $context, $types);
+
         if ($method === null) {
-            return CallTarget::dynamic($arguments, OperandHelper::describe($op->var) . '->{dynamic}()');
+            return CallTarget::dynamic(
+                $arguments,
+                OperandHelper::describe($op->var) . '->{dynamic}()',
+                $class === null ? [] : $this->methodsMatching($class, $op->name),
+            );
         }
 
-        $class = $this->receiverClass($op->var, $context, $types);
 
         if ($class !== null) {
             return CallTarget::resolved(
@@ -479,7 +484,11 @@ final class CallResolver
                 return CallTarget::resolved($arguments, null, $unique->key, $unique->displayName . '()');
             }
 
-            return CallTarget::dynamic($arguments, OperandHelper::describe($op->var) . '->' . $method . '()');
+            return CallTarget::dynamic(
+                $arguments,
+                OperandHelper::describe($op->var) . '->' . $method . '()',
+                $this->keysOf($this->functions->methodsNamed($method)),
+            );
         }
 
         foreach ($this->registryMethodClassesFor($method) as $class) {
@@ -491,7 +500,51 @@ final class CallResolver
             );
         }
 
-        return CallTarget::dynamic($arguments, OperandHelper::describe($op->var) . '->' . $method . '()');
+        return CallTarget::dynamic(
+            $arguments,
+            OperandHelper::describe($op->var) . '->' . $method . '()',
+            $this->keysOf($this->functions->methodsNamed($method)),
+        );
+    }
+
+    /**
+     * A class's methods a computed name could name: those its literal prefix
+     * begins, or all of them when it has none.
+     *
+     * `$this->{ 'validate_setting_' . $type . '_field' }( … )` is one of the
+     * class's `validate_setting_*` methods, which is enough to say what it can
+     * and cannot do to its arguments.
+     *
+     * @return list<string>
+     */
+    private function methodsMatching(string $class, Operand $name): array
+    {
+        $prefixes = array_map('strtolower', $this->values->prefixes($name));
+        $matching = [];
+
+        foreach ($this->functions->methodsOf($class) as $method) {
+            $lower = strtolower($method->func->name);
+
+            foreach ($prefixes === [] ? [''] : $prefixes as $prefix) {
+                if (str_starts_with($lower, $prefix)) {
+                    $matching[] = $method;
+
+                    break;
+                }
+            }
+        }
+
+        return $this->keysOf($matching);
+    }
+
+    /**
+     * @param list<FunctionContext> $contexts
+     *
+     * @return list<string>
+     */
+    private function keysOf(array $contexts): array
+    {
+        return array_values(array_unique(array_map(static fn (FunctionContext $c): string => $c->key, $contexts)));
     }
 
     /**

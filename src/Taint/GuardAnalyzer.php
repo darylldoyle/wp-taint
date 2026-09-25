@@ -294,9 +294,15 @@ final class GuardAnalyzer
     /**
      * An array whose every element is a literal, so the set is knowable.
      */
-    private function isLiteralArray(Operand $operand): bool
+    private function isLiteralArray(Operand $operand, int $depth = 0): bool
     {
         $definition = OperandHelper::definingOp($operand);
+
+        // `$allowed = array( … ); in_array( $x, $allowed, true )` is how an
+        // allowlist is usually written, and only the inline literal counted.
+        if ($definition instanceof Op\Expr\Assign && $depth < 8) {
+            return $this->isLiteralArray($definition->expr, $depth + 1);
+        }
 
         if (! $definition instanceof Op\Expr\Array_ || $definition->values === []) {
             return false;

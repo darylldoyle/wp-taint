@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Enshrined\WpTaint\Taint;
 
 use Enshrined\WpTaint\Cfg\IncludeGraph;
+use Enshrined\WpTaint\Hooks\RestRouteTable;
 use Enshrined\WpTaint\Registry\Registry;
 
 /**
@@ -41,6 +42,11 @@ final class IntraproceduralAnalyzer
          * @var array<string, string>
          */
         private readonly array $printedReturns = [],
+        /**
+         * The scan's REST routes: which callbacks a permission callback
+         * entitles, and what each route's schema does to its parameters.
+         */
+        private readonly ?RestRouteTable $restRoutes = null,
     ) {
     }
 
@@ -82,6 +88,7 @@ final class IntraproceduralAnalyzer
             $this->callGraph,
             $this->shortcodeCallbacks,
             $this->printedReturns,
+            $this->restRoutes,
         ))->run();
     }
 }
