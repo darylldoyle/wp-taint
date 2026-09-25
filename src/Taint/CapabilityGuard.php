@@ -88,6 +88,12 @@ final class CapabilityGuard
     /** @var SplObjectStorage<Block, SplObjectStorage<Block, true>>|null dominators, per function */
     private ?SplObjectStorage $dominators = null;
 
+    /** @var SplObjectStorage<Op, Block>|null the block each op of the current function sits in */
+    private ?SplObjectStorage $blockOf = null;
+
+    /** @var SplObjectStorage<Block, null>|null blocks {@see isEntitled()} is part-way through */
+    private ?SplObjectStorage $asking = null;
+
     public function __construct(
         private readonly Registry $registry,
         private readonly ?CallGraph $callGraph,
@@ -102,6 +108,13 @@ final class CapabilityGuard
     public function forFunction(array $blocks): void
     {
         $this->dominators = $blocks === [] ? null : BlockDominators::compute($blocks);
+        $this->blockOf = new SplObjectStorage();
+
+        foreach ($blocks as $block) {
+            foreach ([...$block->phi, ...$block->children] as $op) {
+                $this->blockOf[$op] = $block;
+            }
+        }
     }
 
     /**
@@ -119,6 +132,30 @@ final class CapabilityGuard
             return false;
         }
 
+        // A phi's inputs are asked about in turn, and in a loop one of them can
+        // lead back here. A block already being asked about is not entitled on
+        // that path, which is the answer that cannot suppress a finding.
+        $this->asking ??= new SplObjectStorage();
+
+        if ($this->asking->contains($block)) {
+            return false;
+        }
+
+        $this->asking->attach($block);
+
+        try {
+            return $this->entitledByDominator($block);
+        } finally {
+            $this->asking->detach($block);
+        }
+    }
+
+    private function entitledByDominator(Block $block): bool
+    {
+        if ($this->dominators === null) {
+            return false;
+        }
+
         /** @var SplObjectStorage<Block, true> $dominating */
         $dominating = $this->dominators[$block];
 
@@ -128,6 +165,167 @@ final class CapabilityGuard
 
                 if ($terminal instanceof Op\Stmt\JumpIf && $this->entitlesOnEdge($terminal, $candidate)) {
                     return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Does this permission callback allow a request only once the caller is
+     * entitled?
+     *
+     * WordPress runs a REST route's callback only when its
+     * `permission_callback` returns something truthy, so a callback whose
+     * every allowing `return` sits behind an entitling check hands the route
+     * its entitlement. Each `return` must be one of:
+     *
+     * - in a block an entitling check dominates, as in the guard-clause shape
+     *   `if ( ! current_user_can( 'delete_post', $id ) ) { return false; }
+     *   return true;`
+     * - the result of an entitling check, `return current_user_can( … );`,
+     *   directly or through assignments, or a phi every one of whose values
+     *   qualifies, which is how `a && b` reaches a return
+     * - a refusal: `false`, `null`, `0`, `''`, or a `WP_Error`
+     *
+     * The capability rules are the ones a check in the handler meets: a role
+     * capability entitles nothing, an object capability needs its object.
+     * A callback with no `return` at all allows nothing and entitles nothing.
+     */
+    public function permitsOnlyWhenEntitled(FunctionContext $permission): bool
+    {
+        $blocks = BlockOrder::of($permission->func->cfg);
+
+        if ($blocks === []) {
+            return false;
+        }
+
+        $saved = [$this->dominators, $this->blockOf];
+        $this->forFunction($blocks);
+        /** @var SplObjectStorage<Op, Block> $blockOf */
+        $blockOf = $this->blockOf ?? new SplObjectStorage();
+
+        try {
+            $returns = 0;
+
+            foreach ($blocks as $block) {
+                foreach ($block->children as $op) {
+                    if (! $op instanceof Op\Terminal\Return_) {
+                        continue;
+                    }
+
+                    $returns++;
+
+                    if ($this->isEntitled($block)) {
+                        continue;
+                    }
+
+                    if ($op->expr !== null && $this->isProvenError($op->expr, $block)) {
+                        continue;
+                    }
+
+                    if ($op->expr === null || ! $this->allowsOnlyWhenEntitled($op->expr, $blockOf)) {
+                        return false;
+                    }
+                }
+            }
+
+            return $returns > 0;
+        } finally {
+            [$this->dominators, $this->blockOf] = $saved;
+        }
+    }
+
+    /**
+     * @param SplObjectStorage<Op, Block> $blockOf
+     */
+    private function allowsOnlyWhenEntitled(Operand $value, SplObjectStorage $blockOf, int $depth = 0): bool
+    {
+        if ($value instanceof Operand\Literal) {
+            return ! $value->value;
+        }
+
+        if ($depth > self::MAX_DEPTH) {
+            return false;
+        }
+
+        $definition = OperandHelper::definingOp($value);
+
+        if ($definition === null) {
+            return false;
+        }
+
+        if ($blockOf->contains($definition) && $this->isEntitled($blockOf[$definition])) {
+            return true;
+        }
+
+        if ($definition instanceof Op\Expr\Assign) {
+            return $this->allowsOnlyWhenEntitled($definition->expr, $blockOf, $depth + 1);
+        }
+
+        if ($definition instanceof Op\Phi) {
+            foreach ($definition->vars as $var) {
+                if (! $var instanceof Operand || ! $this->allowsOnlyWhenEntitled($var, $blockOf, $depth + 1)) {
+                    return false;
+                }
+            }
+
+            return $definition->vars !== [];
+        }
+
+        if ($definition instanceof Op\Expr\New_) {
+            $class = OperandHelper::literalString($definition->class);
+
+            return $class !== null && strtolower(ltrim($class, '\\')) === 'wp_error';
+        }
+
+        if ($definition instanceof Op\Expr\ConstFetch) {
+            $name = OperandHelper::literalString($definition->name);
+
+            return $name !== null && in_array(strtolower(ltrim($name, '\\')), ['false', 'null'], true);
+        }
+
+        return $this->entitles($definition);
+    }
+
+    /**
+     * `if ( is_wp_error( $review ) ) { return $review; }`: the value returned
+     * is an error on every path here, so returning it refuses the request.
+     */
+    private function isProvenError(Operand $value, Block $block): bool
+    {
+        if ($this->dominators === null || ! $this->dominators->contains($block)) {
+            return false;
+        }
+
+        $name = OperandHelper::variableName($value);
+
+        /** @var SplObjectStorage<Block, true> $dominating */
+        $dominating = $this->dominators[$block];
+
+        foreach ($dominating as $candidate) {
+            foreach ($candidate->parents as $parent) {
+                $jump = $parent->children[count($parent->children) - 1] ?? null;
+
+                if (! $jump instanceof Op\Stmt\JumpIf || $jump->if !== $candidate) {
+                    continue;
+                }
+
+                $check = OperandHelper::definingOp($jump->cond);
+
+                if (
+                    ($check instanceof Op\Expr\FuncCall || $check instanceof Op\Expr\NsFuncCall)
+                    && strtolower(ltrim(OperandHelper::literalString($check->name) ?? '', '\\')) === 'is_wp_error'
+                ) {
+                    $checked = $check->args[0] ?? null;
+
+                    if (
+                        $checked === $value || ($name !== null && $checked instanceof Operand
+                        && OperandHelper::variableName($checked) === $name)
+                    ) {
+                        return true;
+                    }
                 }
             }
         }
@@ -157,6 +355,17 @@ final class CapabilityGuard
                 continue;
             }
 
+            // `if ( ! current_user_can( … ) || $other ) { return; }` branches
+            // on a phi: `true` when the check failed, `$other` otherwise. The
+            // value the phi has on the edge we arrived by rules some of its
+            // inputs out, and every input still possible must have come from
+            // an entitled block.
+            if ($definition instanceof Op\Phi) {
+                $value = ($arrivedAt === $jump->if) === $positive;
+
+                return $this->phiProvesEntitled($definition, $value);
+            }
+
             if ($definition === null || ! $this->entitles($definition)) {
                 return false;
             }
@@ -165,6 +374,44 @@ final class CapabilityGuard
 
             return $wanted === $arrivedAt;
         }
+    }
+
+    /**
+     * Whether a phi that holds `$value` could only have got it by a path the
+     * caller was entitled on.
+     */
+    private function phiProvesEntitled(Op\Phi $phi, bool $value): bool
+    {
+        $possible = 0;
+
+        foreach ($phi->vars as $var) {
+            if (! $var instanceof Operand) {
+                return false;
+            }
+
+            if ($var instanceof Operand\Literal) {
+                // A literal that cannot be `$value` is a path not taken.
+                if ((bool) $var->value !== $value) {
+                    continue;
+                }
+
+                return false;
+            }
+
+            $possible++;
+            $definition = OperandHelper::definingOp($var);
+
+            if (
+                $definition === null
+                || $this->blockOf === null
+                || ! $this->blockOf->contains($definition)
+                || ! $this->isEntitled($this->blockOf[$definition])
+            ) {
+                return false;
+            }
+        }
+
+        return $possible > 0;
     }
 
     private function entitles(Op $definition): bool

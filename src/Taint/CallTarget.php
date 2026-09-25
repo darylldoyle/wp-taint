@@ -33,6 +33,22 @@ final class CallTarget
         public readonly ?string $displayName,
         public readonly bool $dynamic,
         public readonly CallResultMode $resultMode = CallResultMode::Value,
+        /**
+         * For a dynamic target: the functions in the scan it could be, as far
+         * as the scan can say. A named method on an untyped receiver is one of
+         * the methods of that name; a computed name on a receiver whose class
+         * is known is one of that class's methods. Empty when nothing about the
+         * callee can be seen.
+         *
+         * @var list<string>
+         */
+        public readonly array $candidates = [],
+        /**
+         * For a dynamic target: a dispatcher runs it, and dispatchers such as
+         * `call_user_func()` and `array_map()` pass their arguments by value,
+         * so the callee cannot write back through them whatever it is.
+         */
+        public readonly bool $passesByValue = false,
     ) {
     }
 
@@ -51,6 +67,8 @@ final class CallTarget
             $this->displayName,
             $this->dynamic,
             $mode,
+            $this->candidates,
+            $this->passesByValue,
         );
     }
 
@@ -69,9 +87,23 @@ final class CallTarget
     /**
      * @param list<Operand> $arguments
      */
-    public static function dynamic(array $arguments, string $displayName): self
+    /**
+     * @param list<Operand> $arguments
+     * @param list<string>  $candidates see {@see $candidates}
+     */
+    public static function dynamic(array $arguments, string $displayName, array $candidates = []): self
     {
-        return new self($arguments, null, null, $displayName, true);
+        return new self($arguments, null, null, $displayName, true, CallResultMode::Value, $candidates);
+    }
+
+    /**
+     * A callable a dispatcher runs that could not be pinned down.
+     *
+     * @param list<Operand> $arguments
+     */
+    public static function dynamicDispatch(array $arguments, string $displayName): self
+    {
+        return new self($arguments, null, null, $displayName, true, CallResultMode::Value, [], true);
     }
 
     public function isResolved(): bool
@@ -127,6 +159,8 @@ final class CallTarget
             $this->displayName,
             $this->dynamic,
             $this->resultMode,
+            $this->candidates,
+            $this->passesByValue,
         );
     }
 }

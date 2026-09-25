@@ -28,35 +28,40 @@ safe_database_identifiers = [
 # SOURCES — request layer
 # =============================================================================
 
+# A REST parameter is request data exactly as `$_GET` is, so the accessors below
+# carry the same kinds. They drifted once: `object_id` and `csv` were added to
+# the superglobals and not here, so `wp_delete_post( $request->get_param( 'id' ) )`
+# reported nothing. RequestSourceKindsTest holds the lists equal.
+
 [[sources]]
 class = "WP_REST_Request"
 method = "get_param"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "identifier", "storage"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "object_id", "csv", "storage"]
 
 [[sources]]
 class = "WP_REST_Request"
 method = "get_params"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "identifier", "storage"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "object_id", "csv", "storage"]
 
 [[sources]]
 class = "WP_REST_Request"
 method = "get_json_params"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "identifier", "storage"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "object_id", "csv", "storage"]
 
 [[sources]]
 class = "WP_REST_Request"
 method = "get_query_params"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "identifier", "storage"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "object_id", "csv", "storage"]
 
 [[sources]]
 class = "WP_REST_Request"
 method = "get_body_params"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "identifier", "storage"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "object_id", "csv", "storage"]
 
 [[sources]]
 class = "WP_REST_Request"
 method = "get_body"
-kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "identifier", "storage"]
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "object_id", "csv", "storage"]
 
 [[sources]]
 class = "WP_REST_Request"
