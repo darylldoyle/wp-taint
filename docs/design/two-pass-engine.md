@@ -351,8 +351,21 @@ large part of the live graphs. Measured on the first 6,000 reference files:
 
 The collector was already costing today's engine most of its parse time. The
 scan now turns automatic collection off and collects when the heap has grown by
-256MB, checked between units of work. That lets up to 256MB of garbage wait for
-the next collection, on top of the budget.
+a fixed step, checked between units of work.
+
+The step was 256MB at first. On the 168-tree configuration, a sample of the
+running scan showed about 65% of its time in the collector during the first
+round, because each file rebuilt and dropped is garbage, and each collection
+also walks the cached graphs the analysis has just touched. A 40-tree scan
+measured both steps:
+
+| Step | Parsing the reference trees | Collector time there | Peak heap |
+|---|---|---|---|
+| 256MB | 406s | 266s | 5.1GB |
+| 1GB | 273s | 112s | 5.7GB |
+
+The step is now 1GB. Up to 1GB of garbage can wait for the next collection, on
+top of the budget.
 
 ## Plan
 

@@ -21,6 +21,49 @@ final class BlockDominators
     private const MAX_ROUNDS = 32;
 
     /**
+     * The block list the last answer was computed for. Held, so its blocks
+     * stay alive and the identity check in {@see compute()} cannot match a
+     * different list whose blocks reused the same objects' memory.
+     *
+     * @var list<Block>
+     */
+    private static array $lastBlocks = [];
+
+    /** @var SplObjectStorage<Block, SplObjectStorage<Block, true>>|null */
+    private static ?SplObjectStorage $lastAnswer = null;
+
+    /**
+     * Each block's dominators, remembered for the last block list asked about.
+     *
+     * The same list is asked about four times in a row: by
+     * {@see GuardAnalyzer} and {@see CapabilityGuard}, in the summary pass and
+     * again in the property pass. On a 40-tree scan that was 1.2 million
+     * computations and a ninth of the fixed point's time. The answer is copied
+     * for each caller, because callers iterate it and a shared iterator would
+     * move under one caller while another walks it.
+     *
+     * @param list<Block> $blocks
+     *
+     * @return SplObjectStorage<Block, SplObjectStorage<Block, true>>
+     */
+    public static function compute(array $blocks): SplObjectStorage
+    {
+        if (self::$lastAnswer === null || $blocks !== self::$lastBlocks) {
+            self::$lastAnswer = self::computeFresh($blocks);
+            self::$lastBlocks = $blocks;
+        }
+
+        /** @var SplObjectStorage<Block, SplObjectStorage<Block, true>> $copy */
+        $copy = new SplObjectStorage();
+
+        foreach (self::$lastAnswer as $block) {
+            $copy->attach($block, clone self::$lastAnswer[$block]);
+        }
+
+        return $copy;
+    }
+
+    /**
      * The textbook iterative formulation: a block is dominated by itself and by
      * everything that dominates all of its predecessors. Started pessimistically
      * with every block dominating every block, and narrowed until it settles.
@@ -29,7 +72,7 @@ final class BlockDominators
      *
      * @return SplObjectStorage<Block, SplObjectStorage<Block, true>>
      */
-    public static function compute(array $blocks): SplObjectStorage
+    private static function computeFresh(array $blocks): SplObjectStorage
     {
         $entry = $blocks[0] ?? null;
 

@@ -18,13 +18,19 @@ namespace Enshrined\WpTaint\Support;
  *
  * So the scan turns automatic collection off and calls {@see tick()} between
  * units of work: a file parsed, a body handed out. A tick collects once the
- * heap has grown by {@see $step} since the last collection. Nothing the
+ * heap has grown by {@see $step} since the last collection.
+ *
+ * The step is 1GB, not less. Each collection also walks the cached graphs the
+ * analysis has just touched, so its cost is mostly the size of what is live,
+ * and a small step pays that cost too often. At 256MB, a 40-tree scan spent
+ * 266 of 406 seconds of reference parsing in the collector; at 1GB, 112 of
+ * 273. The price is up to a gigabyte of garbage waiting for the next run. Nothing the
  * analysis computes depends on when memory is freed, only on what is alive,
  * and a tick never runs while a unit of work is half done.
  */
 final class CycleCollector
 {
-    public const DEFAULT_STEP = 256 * 1024 * 1024;
+    public const DEFAULT_STEP = 1024 * 1024 * 1024;
 
     private int $collectAt;
 
