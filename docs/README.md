@@ -32,3 +32,4 @@
 |----------|----------|
 | [php-cfg API notes](php-cfg-api-notes.md) | The CFG library's shape, for engine work |
 | [Name resolution](resolution.md) | Which of the five resolvers answers what, and why |
+| [Design: a two-pass engine](design/two-pass-engine.md) | Proposal to cut peak memory by rebuilding graphs on demand |
