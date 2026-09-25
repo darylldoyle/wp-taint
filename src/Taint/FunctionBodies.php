@@ -35,7 +35,7 @@ final class FunctionBodies
     /** @var array<string, array<int|string, FunctionContext>> path => position => context */
     private array $contexts = [];
 
-    /** Heap the held files take, as measured when each was built or added. */
+    /** Heap the held files take, as {@see estimatedSize()} estimates it. */
     private int $held = 0;
 
     private int $rebuilds = 0;
@@ -50,9 +50,9 @@ final class FunctionBodies
     }
 
     /**
-     * Offer a file that has just been built. `$size` is the heap it takes.
+     * Offer a file that has just been built.
      */
-    public function add(ParsedFile $file, int $size = 0): void
+    public function add(ParsedFile $file): void
     {
         if ($this->budget === null) {
             $this->files[$file->path] = $file;
@@ -60,7 +60,7 @@ final class FunctionBodies
             return;
         }
 
-        $this->admit($file, $size);
+        $this->admit($file, self::estimatedSize($file));
     }
 
     public function context(FunctionMeta $meta): FunctionContext
@@ -102,6 +102,43 @@ final class FunctionBodies
     }
 
     /**
+     * A file with its AST, for the structural rules, which read the syntax.
+     *
+     * The held file when it still has one; otherwise rebuilt, used and
+     * dropped, never admitted, because nothing else needs the AST.
+     */
+    public function fileWithAst(string $path): ParsedFile
+    {
+        $held = $this->files[$path] ?? null;
+
+        if ($held !== null && $held->hasAst()) {
+            return $held;
+        }
+
+        if ($this->builder === null) {
+            throw new LogicException('No file with its AST is held for ' . $path . ' and nothing can rebuild it.');
+        }
+
+        $result = $this->builder->buildFromFile($path);
+
+        if (! $result->isSuccess()) {
+            throw new LogicException($path . ' parsed once and then failed to rebuild.');
+        }
+
+        $this->rebuilds++;
+
+        return $result->file();
+    }
+
+    /**
+     * Drop a held file's AST, once nothing will read it again.
+     */
+    public function releaseAst(string $path): void
+    {
+        ($this->files[$path] ?? null)?->releaseAst();
+    }
+
+    /**
      * How many files have been rebuilt from source.
      */
     public function rebuilds(): int
@@ -133,7 +170,6 @@ final class FunctionBodies
             throw new LogicException('No body is held for ' . $meta->relativePath . ' and nothing can rebuild it.');
         }
 
-        $before = memory_get_usage();
         $result = $this->builder->buildFromFile($meta->path);
 
         // It parsed the first time, and the same source parses the same way.
@@ -145,11 +181,31 @@ final class FunctionBodies
         $file->releaseAst();
         $this->rebuilds++;
 
-        if (! $this->admit($file, max(0, memory_get_usage() - $before))) {
+        if (! $this->admit($file, self::estimatedSize($file))) {
             $this->transient = $this->budget === 0 ? null : $file;
         }
 
         return $file;
+    }
+
+    /**
+     * The heap a parsed file holds, estimated from its source.
+     *
+     * Estimated rather than measured. The difference in heap usage around a
+     * build includes whatever the garbage collector frees during it, which
+     * makes a file come out small or negative, and a file measured at nothing
+     * is admitted however full the cache is: that let a 512MB cache hold more
+     * than a gigabyte. Turning the collector off for the build is worse, since
+     * cycles that arrive while it is off can never be collected. The factors
+     * are measured: across the 17-tree client configuration's 19,008 files, a
+     * graph with its AST released holds about 60 times its source, and the AST
+     * adds about as much again as 40 of those.
+     */
+    public static function estimatedSize(ParsedFile $file): int
+    {
+        $source = @filesize($file->path);
+
+        return ($source === false ? 0 : $source) * ($file->hasAst() ? 100 : 60);
     }
 
     private function admit(ParsedFile $file, int $size): bool

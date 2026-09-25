@@ -74,9 +74,9 @@ final class HookGraphBuilder
     }
 
     /**
-     * @param list<FunctionContext> $contexts
+     * @param iterable<FunctionContext> $contexts
      */
-    public function build(array $contexts): HookGraph
+    public function build(iterable $contexts): HookGraph
     {
         $graph = new HookGraph();
 

@@ -45,9 +45,9 @@ final class ConstantTableBuilder
     }
 
     /**
-     * @param list<FunctionContext> $contexts
+     * @param iterable<FunctionContext> $contexts
      */
-    public function build(array $contexts): ConstantTable
+    public function build(iterable $contexts): ConstantTable
     {
         return $this->buildBoth($contexts)['constants'];
     }
@@ -59,11 +59,11 @@ final class ConstantTableBuilder
      * function's return is routinely built from a constant. Two passes over
      * both, with each pass reading the last one's answers.
      *
-     * @param list<FunctionContext> $contexts
+     * @param iterable<FunctionContext> $contexts
      *
      * @return array{constants: ConstantTable, returns: ConstantReturnTable}
      */
-    public function buildBoth(array $contexts): array
+    public function buildBoth(iterable $contexts): array
     {
         $table = new ConstantTable();
         $returns = new ConstantReturnTable();
