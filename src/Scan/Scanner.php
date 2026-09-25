@@ -107,6 +107,14 @@ final class Scanner
          * otherwise — see {@see NullScanProgress}.
          */
         private readonly ScanProgress $progress = new NullScanProgress(),
+        /**
+         * Bytes of parsed files pass 2 may hold, or null for no limit. A file
+         * it does not hold is rebuilt from source when one of its functions is
+         * analysed, which costs time and changes nothing else. Zero rebuilds
+         * every time, which is how the tests prove that. See
+         * {@see FunctionBodies}.
+         */
+        private readonly ?int $memoryBudget = null,
     ) {
         // Structural rules are pure AST shape checks over one file. They exist
         // for the bugs that are an absence — a missing capability check, a
@@ -330,13 +338,18 @@ final class Scanner
             $restRoutes,
         );
         $extractor = new SummaryExtractor($analyzer, $this->options);
+        // Pass 2's bodies. Until pass 1 streams its files, every file is still
+        // held for the builders above, so a budget only changes where the
+        // resolver and the findings pass get their bodies from.
+        $analysed = $this->memoryBudget === null ? $bodies : new FunctionBodies($builder, $this->memoryBudget);
+
         $interprocedural = new InterproceduralResolver(
             $analyzer,
             $extractor,
             $this->options,
             $this->jobs,
             $callGraph,
-            $bodies,
+            $analysed,
         );
 
         $resolution = $interprocedural->resolve($metas, $this->progress);
@@ -392,7 +405,7 @@ final class Scanner
                 int $shardCount
             ) use (
                 $metas,
-                $bodies,
+                $analysed,
                 $analyzer,
                 $resolution,
                 $graph,
@@ -425,7 +438,7 @@ final class Scanner
                         continue;
                     }
 
-                    $context = $bodies->context($meta);
+                    $context = $analysed->context($meta);
                     $result = $analyzer->analyze(
                         $context,
                         $resolution['summaries'],
