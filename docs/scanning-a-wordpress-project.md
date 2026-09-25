@@ -154,6 +154,39 @@ Every key in that output should be a directory you wrote, or a filename if you
 scanned a single directory. If a referenced tree appears, it is in the targets
 list by mistake.
 
+## Scan a large site
+
+A client site with many reference trees needs more memory than `bin/wp-taint`
+allows by default. It raises PHP's `memory_limit` to 2GB, and the graph cache
+alone can hold 4GB. Raise the limit to 8GB for a large site, or 12GB if you
+also raise the budget:
+
+```bash
+WP_TAINT_MEMORY_LIMIT=8G vendor/bin/wp-taint scan --config=wp-taint.toml
+WP_TAINT_MEMORY_LIMIT=12G vendor/bin/wp-taint scan --config=wp-taint.toml --memory-budget=8G
+```
+
+Two settings are involved, and they do different jobs:
+
+- **`WP_TAINT_MEMORY_LIMIT`** is PHP's hard limit. A scan that reaches it
+  stops with a fatal error.
+- **`--memory-budget`** is how much of that memory the scan spends on parsed
+  files. Any file it cannot hold is parsed again whenever it is needed. A
+  smaller budget uses less memory and takes longer. It never changes a
+  finding.
+
+The limit has to cover the budget plus the scan's own tables, which grow with
+the number of functions. Measured on a client site of 1,337 files:
+
+| Reference trees | Budget | Peak heap | Time |
+|---|---|---|---|
+| 17 | 4GB, the default | 6.1GB | 14 minutes |
+| 17 | `unlimited` | 8.1GB | 8 minutes |
+
+If the machine has the memory, a larger budget is faster. If a scan runs out of
+memory, lower the budget before you remove reference trees. `--debug-memory`
+shows how full the cache is and how many files it parsed again.
+
 ## Speed it up
 
 - `--jobs=4` runs the fixed point across worker processes. Needs `ext-pcntl`.

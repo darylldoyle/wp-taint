@@ -30,11 +30,13 @@ if (! $loaded) {
 }
 
 /**
- * Interprocedural taint crosses files, so the whole scan is held in memory at
- * once: roughly 400MB for a 300-file plugin, and it scales with the tree.
+ * Interprocedural taint crosses files, so the scan keeps what it learns about
+ * every function in memory, plus up to --memory-budget of parsed files: roughly
+ * 400MB for a 300-file plugin, and it scales with the tree.
  *
  * The default is raised to 2G, which covers everything in the WordPress.org top
- * fifty. It is only ever raised, never lowered — an explicit `php -d
+ * fifty. A client site with many reference trees needs 8 to 12GB; see
+ * docs/scanning-a-wordpress-project.md. It is only ever raised, never lowered — an explicit `php -d
  * memory_limit=...` or a higher `php.ini` always wins. Override with
  * `WP_TAINT_MEMORY_LIMIT`, or set it to `-1` for no limit.
  */
