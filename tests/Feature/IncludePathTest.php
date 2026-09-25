@@ -203,3 +203,81 @@ it('carries taint through a method inherited from the referenced tree', function
     expect($findings[0]->ruleId)->toBe('wp.xss.unescaped-output');
     expect($findings[0]->file)->toContain('widget.php');
 });
+
+it('reports a scanned hook callback fed by a dispatch in the referenced tree', function (): void {
+    // The plugin's do_action() is the callback's caller, so the callback is not
+    // an entry point and its parameter is not seeded. The flow is found while
+    // analysing the caller. Skipping every reference function in the findings
+    // pass lost it: referencing the plugin turned a finding into none at all.
+    $result = scanWithReferences([
+        'app/client.php' => <<<'PHP'
+            <?php
+            function acme_after_submission( $entry ) {
+                echo $entry;
+            }
+            add_action( 'vendor_forms_after_submission', 'acme_after_submission' );
+            PHP,
+        'vendor/forms.php' => <<<'PHP'
+            <?php
+            function vendor_forms_submit() {
+                vendor_forms_notify( $_POST['entry'] );
+            }
+            function vendor_forms_notify( $entry ) {
+                do_action( 'vendor_forms_after_submission', $entry );
+            }
+            add_action( 'init', 'vendor_forms_submit' );
+            PHP,
+    ], ['vendor']);
+
+    $findings = $result->findings->all();
+
+    // Through a helper, so the caller that holds the taint is two steps up.
+    expect($findings)->toHaveCount(1);
+    expect($findings[0]->ruleId)->toBe('wp.xss.unescaped-output');
+    expect($findings[0]->file)->toBe('client.php');
+});
+
+it('credits a dispatch in the referenced tree that passes an escaped value', function (): void {
+    $result = scanWithReferences([
+        'app/client.php' => <<<'PHP'
+            <?php
+            function acme_after_submission( $entry ) {
+                echo $entry;
+            }
+            add_action( 'vendor_forms_after_submission', 'acme_after_submission' );
+            PHP,
+        'vendor/forms.php' => <<<'PHP'
+            <?php
+            function vendor_forms_submit() {
+                do_action( 'vendor_forms_after_submission', esc_html( $_POST['entry'] ) );
+            }
+            add_action( 'init', 'vendor_forms_submit' );
+            PHP,
+    ], ['vendor']);
+
+    expect($result->findings)->toBeEmpty();
+});
+
+it('still reports nothing inside a referenced caller of scanned code', function (): void {
+    // Analysing the caller for the scanned callback's sake must not surface the
+    // caller's own bugs.
+    $result = scanWithReferences([
+        'app/client.php' => <<<'PHP'
+            <?php
+            function acme_after_submission( $entry ) {
+                echo esc_html( $entry );
+            }
+            add_action( 'vendor_forms_after_submission', 'acme_after_submission' );
+            PHP,
+        'vendor/forms.php' => <<<'PHP'
+            <?php
+            function vendor_forms_submit() {
+                echo $_GET['own'];
+                do_action( 'vendor_forms_after_submission', $_POST['entry'] );
+            }
+            add_action( 'init', 'vendor_forms_submit' );
+            PHP,
+    ], ['vendor']);
+
+    expect($result->findings)->toBeEmpty();
+});

@@ -64,6 +64,17 @@ final class AnalysisOptions
          * context.
          */
         public readonly bool $followIncludes = true,
+        /**
+         * Whether a fixed-point round re-analyses only the functions that read
+         * something the previous round changed.
+         *
+         * Exact, not a heuristic: what a function read is recorded as it runs
+         * (see {@see ReadLog}), and a function none of whose reads moved would
+         * produce what it produced last time. Off re-analyses every function
+         * every round, which is what the engine always did; it stays for the
+         * tests that hold the two to identical results.
+         */
+        public readonly bool $incrementalRounds = true,
     ) {
     }
 

@@ -7,7 +7,7 @@ namespace Enshrined\WpTaint\Cfg;
 use Enshrined\WpTaint\Support\PathHelper;
 use PHPCfg\Parser as CfgParser;
 use PHPCfg\Traverser;
-use PHPCfg\Visitor\Simplifier;
+use PHPCfg\Visitor\Simplifier as UpstreamSimplifier;
 use PhpParser\Error as PhpParserError;
 use PhpParser\NodeTraverser;
 use PhpParser\Parser as AstParser;
@@ -26,8 +26,16 @@ final class CfgBuilder
 {
     private readonly AstParser $astParser;
 
-    public function __construct(private readonly string $projectRoot)
-    {
+    /**
+     * @param bool $upstreamSimplifier php-cfg's own simplifier rather than
+     *                                 {@see Simplifier}. Only for
+     *                                 `tools/compare-simplifier.php`, which
+     *                                 checks the two build the same graphs.
+     */
+    public function __construct(
+        private readonly string $projectRoot,
+        private readonly bool $upstreamSimplifier = false,
+    ) {
         $this->astParser = (new ParserFactory())->createForNewestSupportedVersion();
     }
 
@@ -83,7 +91,7 @@ final class CfgBuilder
             $script = $cfgParser->parseAst($ast, $path);
 
             $cfgTraverser = new Traverser();
-            $cfgTraverser->addVisitor(new Simplifier());
+            $cfgTraverser->addVisitor($this->upstreamSimplifier ? new UpstreamSimplifier() : new Simplifier());
             $cfgTraverser->traverse($script);
         } catch (PhpParserError $error) {
             return ParseResult::failure(new ParseError(

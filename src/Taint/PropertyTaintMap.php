@@ -70,13 +70,31 @@ final class PropertyTaintMap
      */
     private array $origins = [];
 
+    /**
+     * Shared with every copy made by clone or {@see sealed()}: a probe run
+     * reads through a sealed copy, and those reads are the function's too.
+     */
+    private ?ReadLog $log = null;
+
+    /**
+     * Record every read from now on. See {@see ReadLog}.
+     */
+    public function recordReadsInto(?ReadLog $log): void
+    {
+        $this->log = $log;
+    }
+
     public function get(?string $class, string $property): TaintSet
     {
+        $this->log?->record('p:' . self::key($class, $property));
+
         return $this->taint[self::key($class, $property)] ?? TaintSet::empty();
     }
 
     public function isTracked(?string $class, string $property): bool
     {
+        $this->log?->record('p:' . self::key($class, $property));
+
         return isset($this->tracked[self::key($class, $property)]);
     }
 
@@ -97,6 +115,8 @@ final class PropertyTaintMap
      */
     public function isCleanEverywhere(string $property): bool
     {
+        $this->log?->record('p*:' . $property);
+
         $suffix = '::' . $property;
         $seen = false;
 
@@ -123,6 +143,8 @@ final class PropertyTaintMap
      */
     public function originOf(?string $class, string $property): array
     {
+        $this->log?->record('p:' . self::key($class, $property));
+
         return $this->origins[self::key($class, $property)] ?? [];
     }
 
@@ -137,6 +159,8 @@ final class PropertyTaintMap
      */
     public function isAnchored(?string $class, string $property): bool
     {
+        $this->log?->record('p:' . self::key($class, $property));
+
         return $this->anchored[self::key($class, $property)] ?? true;
     }
 
@@ -224,12 +248,22 @@ final class PropertyTaintMap
      */
     public function mergeFrom(self $other): bool
     {
-        $changed = false;
+        return $this->mergeChangedKeys($other) !== [];
+    }
+
+    /**
+     * Merge, and say which entries moved, as `class::property` keys.
+     *
+     * @return list<string>
+     */
+    public function mergeChangedKeys(self $other): array
+    {
+        $changed = [];
 
         foreach (array_keys($other->tracked) as $key) {
             if (! isset($this->tracked[$key])) {
                 $this->tracked[$key] = true;
-                $changed = true;
+                $changed[$key] = true;
             }
         }
 
@@ -244,7 +278,7 @@ final class PropertyTaintMap
             // settle.
             if (self::signature($preferred) !== self::signature($current)) {
                 $this->origins[$key] = $preferred;
-                $changed = true;
+                $changed[$key] = true;
             }
         }
 
@@ -254,7 +288,7 @@ final class PropertyTaintMap
 
             if (! $merged->equals($existing)) {
                 $this->taint[$key] = $merged;
-                $changed = true;
+                $changed[$key] = true;
             }
         }
 
@@ -269,11 +303,11 @@ final class PropertyTaintMap
 
             if ($merged !== ($this->anchored[$key] ?? true)) {
                 $this->anchored[$key] = $merged;
-                $changed = true;
+                $changed[$key] = true;
             }
         }
 
-        return $changed;
+        return array_keys($changed);
     }
 
     /**

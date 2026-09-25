@@ -13,6 +13,12 @@ parameters:
     excludePaths:
         analyse:
             - tests/Fixtures
+            # php-cfg's own Simplifier, copied so its trivial-phi removal could
+            # be made linear. Kept as close to upstream as possible, so that a
+            # diff against vendor/ircmaxell/php-cfg shows the whole change, and
+            # upstream is untyped. tools/compare-simplifier.php checks what it
+            # builds; PHPStan would only be checking php-cfg.
+            - src/Cfg/Simplifier.php
 
     tmpDir: build/phpstan
 

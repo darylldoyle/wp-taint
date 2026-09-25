@@ -92,11 +92,23 @@ final class ScopeTable
      */
     private const MAX_NAMES = 128;
 
+    private ?ReadLog $log = null;
+
+    /**
+     * Record every read from now on. See {@see ReadLog}.
+     */
+    public function recordReadsInto(?ReadLog $log): void
+    {
+        $this->log = $log;
+    }
+
     /**
      * @return array<string, TaintSet>
      */
     public function scopeInto(string $key): array
     {
+        $this->log?->record('si:' . $key);
+
         return $this->in[$key] ?? [];
     }
 
@@ -105,6 +117,8 @@ final class ScopeTable
      */
     public function scopeOutOf(string $key): array
     {
+        $this->log?->record('so:' . $key);
+
         return $this->out[$key] ?? [];
     }
 
@@ -126,20 +140,28 @@ final class ScopeTable
      */
     public function keyedInto(string $key): array
     {
+        $this->log?->record('sk:' . $key);
+
         return $this->keyed[$key] ?? [];
     }
 
     /**
      * @param array<string, array<array-key, TaintSet>> $keyed
      */
-    private function recordKeyed(string $key, array $keyed): void
+    private function recordKeyed(string $key, array $keyed): bool
     {
+        $changed = false;
+
         foreach ($keyed as $name => $keys) {
             foreach ($keys as $index => $taint) {
                 $existing = $this->keyed[$key][$name][$index] ?? TaintSet::empty();
-                $this->keyed[$key][$name][$index] = $existing->union($taint);
+                $merged = $existing->union($taint);
+                $changed = $changed || ! isset($this->keyed[$key][$name][$index]) || ! $merged->equals($existing);
+                $this->keyed[$key][$name][$index] = $merged;
             }
         }
+
+        return $changed;
     }
 
     /**
@@ -161,14 +183,18 @@ final class ScopeTable
      */
     public function originOf(string $key, string $name): array
     {
+        $this->log?->record('sg:' . $key);
+
         return $this->origins[$key][$name] ?? [];
     }
 
     /**
      * @param array<string, list<TraceStep>> $origins
      */
-    private function recordOrigins(string $key, array $origins): void
+    private function recordOrigins(string $key, array $origins): bool
     {
+        $changed = false;
+
         foreach ($origins as $name => $origin) {
             if ($origin === []) {
                 continue;
@@ -181,8 +207,11 @@ final class ScopeTable
             // flows through a cycle, and an include chain can be one.
             if ($current === [] || self::signature($origin) < self::signature($current)) {
                 $this->origins[$key][$name] = $origin;
+                $changed = true;
             }
         }
+
+        return $changed;
     }
 
     /**
@@ -205,25 +234,52 @@ final class ScopeTable
      */
     public function mergeFrom(self $other): bool
     {
+        return $this->mergeChanges($other)['changed'];
+    }
+
+    /**
+     * Merge, and say which entries moved.
+     *
+     * `changed` is what it always was: whether a scope's variables grew, which
+     * is what keeps the fixed point going. Origins and keyed entries never
+     * counted towards that, and still do not, so the loop ends exactly where
+     * it did. They are in `entries` all the same, as {@see ReadLog} keys,
+     * because a function that read one reads something different now.
+     *
+     * @return array{changed: bool, entries: list<string>}
+     */
+    public function mergeChanges(self $other): array
+    {
         $changed = false;
+        $entries = [];
 
         foreach ($other->in as $key => $scope) {
-            $changed = $this->addInto($key, $scope) || $changed;
+            if (self::merge($this->in, $key, $scope)) {
+                $changed = true;
+                $entries['si:' . $key] = true;
+            }
         }
 
         foreach ($other->out as $key => $scope) {
-            $changed = $this->addOutOf($key, $scope) || $changed;
+            if (self::merge($this->out, $key, $scope)) {
+                $changed = true;
+                $entries['so:' . $key] = true;
+            }
         }
 
         foreach ($other->origins as $key => $origins) {
-            $this->recordOrigins($key, $origins);
+            if ($this->recordOrigins($key, $origins)) {
+                $entries['sg:' . $key] = true;
+            }
         }
 
         foreach ($other->keyed as $key => $keyed) {
-            $this->recordKeyed($key, $keyed);
+            if ($this->recordKeyed($key, $keyed)) {
+                $entries['sk:' . $key] = true;
+            }
         }
 
-        return $changed;
+        return ['changed' => $changed, 'entries' => array_keys($entries)];
     }
 
     public function count(): int

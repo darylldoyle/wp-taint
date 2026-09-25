@@ -30,8 +30,10 @@ use Enshrined\WpTaint\Support\PathHelper;
 use Enshrined\WpTaint\Taint\AnalysisOptions;
 use Enshrined\WpTaint\Taint\AnalysisWarning;
 use Enshrined\WpTaint\Taint\CallableResolver;
+use Enshrined\WpTaint\Taint\CallGraph;
 use Enshrined\WpTaint\Taint\CallGraphBuilder;
 use Enshrined\WpTaint\Taint\CallResolver;
+use Enshrined\WpTaint\Taint\FunctionContext;
 use Enshrined\WpTaint\Taint\InterproceduralResolver;
 use Enshrined\WpTaint\Taint\IntraproceduralAnalyzer;
 use Enshrined\WpTaint\Taint\ReceiverResolver;
@@ -152,6 +154,17 @@ final class Scanner
             $parseErrors[] = $result->error();
         }
 
+        // Indexed before the reference trees are parsed, so the symbol table
+        // sees the scanned files first, exactly as it did when everything was
+        // parsed and then indexed in one list.
+        $this->progress->phase('Indexing symbols', count($parsed));
+        $functions = new UserFunctionTable();
+
+        foreach ($parsed as $file) {
+            $this->progress->advance();
+            $functions->addFile($file);
+        }
+
         // Reference trees, parsed after the real ones so a file appearing in
         // both is analysed as the user's own.
         $referenceParseFailures = 0;
@@ -192,21 +205,22 @@ final class Scanner
                 continue;
             }
 
+            // Indexed and stripped of its AST straight away. Indexing is the
+            // only thing that reads a reference file's AST, since structural
+            // rules skip reference trees, and the AST is about 40% of a parsed
+            // file. Holding every one until the structural rules ran put them
+            // all in memory at the peak for nothing.
+            $functions->addFile($result->file());
+            $result->file()->releaseAst();
+
             $parsed[] = $result->file();
             $reference[$result->file()->relativePath] = true;
         }
 
-        $this->progress->phase('Indexing symbols', count($parsed));
-        $functions = new UserFunctionTable();
         $ruleContext = new RuleContext();
 
         /** @var list<Finding> $findings */
         $findings = [];
-
-        foreach ($parsed as $file) {
-            $this->progress->advance();
-            $functions->addFile($file);
-        }
 
         $receivers = new ReceiverResolver($functions->declaredTypes());
         $contexts = $functions->all();
@@ -304,7 +318,7 @@ final class Scanner
             $hooks->printedReturnCallbacks(),
         );
         $extractor = new SummaryExtractor($analyzer, $this->options);
-        $interprocedural = new InterproceduralResolver($analyzer, $extractor, $this->options, $this->jobs);
+        $interprocedural = new InterproceduralResolver($analyzer, $extractor, $this->options, $this->jobs, $callGraph);
 
         $resolution = $interprocedural->resolve($contexts, $this->progress);
 
@@ -341,6 +355,12 @@ final class Scanner
             );
         }
 
+        $referenceCallers = $this->referenceCallersOfScannedCode($contexts, $callGraph, $reference);
+
+        // No total: with --jobs the work happens in the workers, which cannot
+        // report back to this bar.
+        $this->progress->phase('Collecting findings', null);
+
         // A graph dump needs the live taint state, which cannot cross a process
         // boundary, so it forces the serial path.
         $graph = $this->taintGraphPath === null ? null : new TaintGraphWriter();
@@ -357,6 +377,7 @@ final class Scanner
                 $resolution,
                 $graph,
                 $reference,
+                $referenceCallers,
             ): array {
                 $shardFindings = [];
                 $shardWarnings = [];
@@ -371,7 +392,16 @@ final class Scanner
                     // again for findings would report bugs in code the reader
                     // did not write and cannot fix, and cost the time of a
                     // second whole-program pass to do it.
-                    if (isset($reference[$context->file->relativePath])) {
+                    //
+                    // Except where it calls into the scanned code. A plugin's
+                    // `do_action()` is the caller of the scanned callback, so
+                    // the callback is not an entry point and its parameters are
+                    // not seeded. The flow is reported while analysing the
+                    // caller, at the sink inside the callee, and skipping the
+                    // caller lost the finding altogether.
+                    $isReference = isset($reference[$context->file->relativePath]);
+
+                    if ($isReference && ! isset($referenceCallers[$context->key])) {
                         continue;
                     }
 
@@ -383,6 +413,18 @@ final class Scanner
                         null,
                         true,
                     );
+
+                    // From a reference caller, only what lands in scanned code.
+                    // Its warnings are about code the reader cannot change.
+                    if ($isReference) {
+                        foreach ($result->findings as $finding) {
+                            if (! isset($reference[$finding->file])) {
+                                $shardFindings[] = $finding;
+                            }
+                        }
+
+                        continue;
+                    }
 
                     $shardFindings = [...$shardFindings, ...$result->findings];
                     $shardWarnings = [...$shardWarnings, ...$result->warnings];
@@ -439,6 +481,64 @@ final class Scanner
             referenceFiles: count($reference),
             referenceParseFailures: $referenceParseFailures,
         );
+    }
+
+    /**
+     * Reference functions that call into the scanned code, directly or through
+     * other reference functions.
+     *
+     * Walked upward from every scanned function, so a chain such as a form
+     * handler calling a helper that fires `do_action()` is found whole: the
+     * handler holds the argument taint, and the helper's summary carries the
+     * sink in the scanned callback back up to it.
+     *
+     * @param list<FunctionContext> $contexts
+     * @param array<string, true>   $reference relative paths of reference files
+     *
+     * @return array<string, true> function keys
+     */
+    private function referenceCallersOfScannedCode(array $contexts, CallGraph $callGraph, array $reference): array
+    {
+        if ($reference === []) {
+            return [];
+        }
+
+        /** @var array<string, list<string>> $callers */
+        $callers = [];
+
+        /** @var array<string, bool> $isReference function key => declared in a reference file */
+        $isReference = [];
+
+        foreach ($contexts as $context) {
+            $isReference[$context->key] ??= isset($reference[$context->file->relativePath]);
+
+            foreach ($callGraph->calleesOf($context->key) as $callee) {
+                $callers[$callee][] = $context->key;
+            }
+        }
+
+        $queue = [];
+
+        foreach ($isReference as $key => $inReference) {
+            if (! $inReference) {
+                $queue[] = $key;
+            }
+        }
+
+        $found = [];
+
+        while ($queue !== []) {
+            $key = array_pop($queue);
+
+            foreach ($callers[$key] ?? [] as $caller) {
+                if (($isReference[$caller] ?? false) && ! isset($found[$caller])) {
+                    $found[$caller] = true;
+                    $queue[] = $caller;
+                }
+            }
+        }
+
+        return $found;
     }
 
     /**

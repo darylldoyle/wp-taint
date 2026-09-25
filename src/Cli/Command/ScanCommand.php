@@ -12,6 +12,7 @@ use Enshrined\WpTaint\Cli\Application;
 use Enshrined\WpTaint\Cli\ConsoleScanProgress;
 use Enshrined\WpTaint\Cli\ExitCode;
 use Enshrined\WpTaint\Cli\InputReader;
+use Enshrined\WpTaint\Cli\MemoryScanProgress;
 use Enshrined\WpTaint\Cli\ProjectScanConfig;
 use Enshrined\WpTaint\Cli\ScanConfiguration;
 use Enshrined\WpTaint\Finding\Finding;
@@ -168,6 +169,12 @@ final class ScanCommand extends Command
             )
             ->addOption('trace-full', null, InputOption::VALUE_NONE, 'Never collapse the middle of a long trace')
             ->addOption('jobs', 'j', InputOption::VALUE_REQUIRED, 'Number of worker processes', '1')
+            ->addOption(
+                'debug-memory',
+                null,
+                InputOption::VALUE_NONE,
+                'Print heap use and time per phase and per round to stderr, in place of the progress bar',
+            )
             ->setHelp(<<<'HELP'
               <info>wp-taint scan ./src</info>
 
@@ -193,7 +200,11 @@ final class ScanCommand extends Command
         // itself seconds of silence on a WordPress install, and a progress
         // object that only exists afterwards cannot report the part that felt
         // like a hang.
-        $progress = $stderr->isDecorated() ? new ConsoleScanProgress($stderr) : new NullScanProgress();
+        $progress = match (true) {
+            $reader->bool('debug-memory') => new MemoryScanProgress($stderr),
+            $stderr->isDecorated() => new ConsoleScanProgress($stderr),
+            default => new NullScanProgress(),
+        };
 
         try {
             $configuration = $this->buildConfiguration($reader);

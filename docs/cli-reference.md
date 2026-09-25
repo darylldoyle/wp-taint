@@ -125,6 +125,7 @@ another tool or an agent: it carries the full trace and is self-describing.
 | Option | Default | Effect |
 |--------|---------|--------|
 | `-j, --jobs=N` | `1` | Worker processes. Needs `ext-pcntl`. |
+| `--debug-memory` | off | Print heap use and time per phase and per round to stderr, in place of the progress bar |
 
 ### Exit codes
 
