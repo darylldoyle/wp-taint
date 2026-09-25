@@ -9,6 +9,16 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `--memory-budget` and the `memory_budget` project option cap the memory held
+  by parsed files, at 4GB by default. The scan used to hold every file's control
+  flow graph from parsing to the end. It now keeps a table of what each function
+  is, and up to the budget of parsed files. A file it cannot hold is parsed again
+  whenever one of its functions is needed. That costs time and changes no
+  finding. `unlimited` holds every file, as before. `--debug-memory` reports how
+  much the cache holds and how many files it rebuilt.
+  See docs/design/two-pass-engine.md.
+- `tools/compare-budget.php` scans each target with no budget and with one, and
+  reports any difference in findings, traces or warnings.
 - `--debug-memory` prints PHP's heap in use, the peak so far and the elapsed
   time at every phase and every fixed-point round, in place of the progress
   bar. The operating system's figures are no use for this on macOS, which
@@ -236,6 +246,12 @@ Further precision changes from corpus adjudication of the new attribute rule:
 
 ### Changed
 
+- Each round of the fixed point analyses functions grouped by file, with files
+  ordered callees first, so a round needs each file at most once. The findings
+  are unchanged. Over the 50-plugin corpus, 5 findings in 2 plugins show a
+  different trace, because the trace kept for a stored value can depend on the
+  order of analysis. `--jobs` already had the same effect. See
+  KNOWN_LIMITATIONS.md.
 - A REST route's `permission_callback` is credited by
   `wp.authz.object-id-from-request`. WordPress runs the route's callback only
   once the permission callback allows the request, so a callback whose

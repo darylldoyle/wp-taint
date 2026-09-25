@@ -196,11 +196,23 @@ fixed point, because the transfer functions are monotone and the fixed point
 does not depend on the order. The order can change how many rounds it takes,
 and the comparison tool checks both the result and the round count.
 
+One thing does depend on the order: the trace kept for a stored value. A
+property or an option written in several places keeps the trace with the
+smallest signature among every trace offered for it, and some are offered
+before the analysis settles. Measured when step 4 landed, the new order changed
+5 traces in 2 of the 42 corpus plugins with findings, and nothing else. On
+`main`, `--jobs=4` against `--jobs=1` already changed 10 traces in 4 plugins,
+including those 2. So the order exposes an existing quirk rather than adding
+one. KNOWN_LIMITATIONS.md records it. A budget never changes the order, so a
+budgeted scan and an unbudgeted one still match byte for byte.
+
 ### Workers
 
 `--jobs` forks after pass 1. Each worker gets its own cache. The budget applies
 per scan, so it's divided between the workers, and each rebuilds what it needs
-from source.
+from source. The parent holds its equal part too. A worker starts with a copy
+of the parent's cache and its count, so once that part is full the worker only
+rebuilds.
 
 ### Why this is exact
 

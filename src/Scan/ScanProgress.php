@@ -33,6 +33,12 @@ interface ScanProgress
     public function advance(int $steps = 1): void;
 
     /**
+     * A figure worth reporting that is not a phase: how full the graph cache
+     * is, how many files it rebuilt. Only `--debug-memory` shows it.
+     */
+    public function note(string $message): void;
+
+    /**
      * Every phase is finished; take the display down.
      */
     public function finish(): void;

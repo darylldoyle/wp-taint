@@ -276,7 +276,9 @@ Read the resolved catalogue with `wp-taint registry:dump`.
 ## Speed
 
 A plugin is the unit: interprocedural taint crosses files, so the whole scan is
-parsed and held in memory at once.
+parsed before analysis starts. Up to 4GB of parsed files stay in memory, and
+any file beyond that is parsed again when it is needed. `--memory-budget`
+changes the 4GB.
 
 | Plugin | Lines | Time | Peak RSS |
 | --- | ---: | ---: | ---: |
@@ -287,8 +289,9 @@ parsed and held in memory at once.
 
 Single-threaded, on macOS 15 (arm64), PHP 8.3.32. Roughly 10 seconds per 50k lines.
 `--jobs=4` roughly halves that (parsing stays serial, so it is not linear) and
-produces byte-identical output, which is enforced by a test rather than hoped
-for.
+produces the same findings, which is enforced by a test rather than hoped for.
+A finding's trace can differ; see
+[KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md#the-trace-shown-can-depend-on-the-order-of-analysis).
 
 A first-party plugin or theme is a much smaller unit than any of these: a client
 theme of 926 files scans in 15 seconds.

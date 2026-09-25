@@ -35,6 +35,7 @@ use Yosymfony\Toml\Toml;
  * [scan.options]
  * jobs = 4
  * fail_on = "high"
+ * memory_budget = "4G"
  * ```
  *
  * `paths` are analysed together as one program and reported on. `reference` is
@@ -60,7 +61,15 @@ final class ProjectScanConfig
 {
     private const KEYS = ['paths', 'reference', 'bootstrap', 'exclude', 'options'];
 
-    private const OPTION_KEYS = ['jobs', 'fail_on', 'min_severity', 'format', 'baseline', 'stored_taint_writes'];
+    private const OPTION_KEYS = [
+        'jobs',
+        'fail_on',
+        'min_severity',
+        'format',
+        'baseline',
+        'stored_taint_writes',
+        'memory_budget',
+    ];
 
     /**
      * @param list<string> $paths
@@ -89,6 +98,8 @@ final class ProjectScanConfig
         public readonly ?string $format,
         public readonly ?string $baseline,
         public readonly ?bool $storedTaintWrites,
+        /** `4G`, `512M`, `0` or `unlimited`; see {@see ScanConfiguration::memoryBudget()}. */
+        public readonly ?string $memoryBudget = null,
     ) {
     }
 
@@ -155,6 +166,7 @@ final class ProjectScanConfig
                 ? null
                 : self::resolve($baseline, $root),
             self::flag($file, 'stored_taint_writes', $options['stored_taint_writes'] ?? null),
+            self::text($file, 'memory_budget', $options['memory_budget'] ?? null),
         );
     }
 

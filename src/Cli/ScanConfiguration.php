@@ -22,6 +22,18 @@ use RuntimeException;
 final class ScanConfiguration
 {
     /**
+     * 4GB for the graph cache, on top of what the scan needs anyway.
+     *
+     * Chosen for a 32GB machine scanning a client site with its whole plugins
+     * directory as reference: that scan's tables take about 5GB, and every
+     * graph together about 21GB. With 4GB of them held, the peak is about 9GB
+     * and the scan rebuilds about two and a half graphs per file. A project
+     * that fits whole in 4GB never rebuilds anything. See
+     * docs/design/two-pass-engine.md.
+     */
+    public const DEFAULT_MEMORY_BUDGET = 4 * 1024 * 1024 * 1024;
+
+    /**
      * @param list<string> $paths
      * @param list<string> $excludes
      * @param list<string> $includePaths analysed for symbols, never reported on
@@ -44,6 +56,11 @@ final class ScanConfiguration
         public readonly int $jobs,
         public readonly array $includePaths = [],
         public readonly bool $honorPhpcsSuppressions = true,
+        /**
+         * Bytes of parsed files the scan may hold, or null for no limit. See
+         * {@see self::DEFAULT_MEMORY_BUDGET}.
+         */
+        public readonly ?int $memoryBudget = self::DEFAULT_MEMORY_BUDGET,
     ) {
     }
 
@@ -76,6 +93,7 @@ final class ScanConfiguration
         bool $structuralRules,
         int $jobs,
         bool $honorPhpcsSuppressions = true,
+        ?string $memoryBudget = null,
     ): self {
         if ($paths === []) {
             throw new InvalidArgumentException('At least one path to scan is required.');
@@ -129,7 +147,37 @@ final class ScanConfiguration
                 array_values($includePaths),
             )),
             $honorPhpcsSuppressions,
+            $memoryBudget === null ? self::DEFAULT_MEMORY_BUDGET : self::memoryBudget($memoryBudget),
         );
+    }
+
+    /**
+     * Bytes from `4G`, `512M`, `750K` or a plain number, or null from
+     * `unlimited`.
+     */
+    public static function memoryBudget(string $value): ?int
+    {
+        $value = strtolower(trim($value));
+
+        if ($value === 'unlimited') {
+            return null;
+        }
+
+        if (preg_match('/^(\d+)([kmg]?)b?$/', $value, $match) !== 1) {
+            throw new InvalidArgumentException(sprintf(
+                'Unknown memory budget "%s". Expected a size such as 4G, 512M or 0, or "unlimited".',
+                $value,
+            ));
+        }
+
+        $multiplier = match ($match[2]) {
+            'k' => 1024,
+            'm' => 1024 * 1024,
+            'g' => 1024 * 1024 * 1024,
+            default => 1,
+        };
+
+        return (int) $match[1] * $multiplier;
     }
 
     /**

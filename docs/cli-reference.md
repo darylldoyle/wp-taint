@@ -125,6 +125,7 @@ another tool or an agent: it carries the full trace and is self-describing.
 | Option | Default | Effect |
 |--------|---------|--------|
 | `-j, --jobs=N` | `1` | Worker processes. Needs `ext-pcntl`. |
+| `--memory-budget=SIZE` | `4G` | Memory for parsed files held between uses, such as `512M`. A file the budget cannot hold is parsed again whenever it is needed, which costs time and changes no finding. `unlimited` holds every file. With `--jobs`, each process gets an equal part. |
 | `--debug-memory` | off | Print heap use and time per phase and per round to stderr, in place of the progress bar |
 
 ### Exit codes
@@ -195,6 +196,7 @@ min_severity        = "low"
 format              = "console"
 baseline            = "wp-taint-baseline.json"
 stored_taint_writes = false
+memory_budget       = "4G"
 ```
 
 | Key | Equivalent flag |
@@ -209,6 +211,7 @@ stored_taint_writes = false
 | `options.format` | `--format` |
 | `options.baseline` | `--baseline` |
 | `options.stored_taint_writes` | `--stored-taint-writes` |
+| `options.memory_budget` | `--memory-budget` |
 
 Unknown keys are a hard error rather than a silent typo. Anything on the command
 line wins, and paths given as arguments replace the configured ones.

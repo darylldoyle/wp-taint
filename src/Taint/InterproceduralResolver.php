@@ -444,7 +444,9 @@ final class InterproceduralResolver
         $rank = array_flip(array_keys($byKey));
         $result = [];
 
-        foreach (self::componentsCalleesFirst(array_keys($byKey), $callGraph) as $component) {
+        $calls = static fn (string $key): array => $callGraph->calleesOf($key);
+
+        foreach (self::componentsCalleesFirst(array_keys($byKey), $calls) as $component) {
             usort($component, static fn (string $a, string $b): int => ($rank[$a] ?? 0) <=> ($rank[$b] ?? 0));
 
             foreach ($component as $key) {
@@ -454,7 +456,83 @@ final class InterproceduralResolver
             }
         }
 
+        return self::groupedByFile($result, $byKey, $calls);
+    }
+
+    /**
+     * The same order, with each file's functions together.
+     *
+     * A body is analysed from its file's graph, and a graph the memory budget
+     * cannot hold is rebuilt when it is needed. In callees-first order a round
+     * moves from file to file and back, rebuilding the same file many times.
+     * So files are ordered callees first by the file-level call graph, and
+     * each file's functions keep their callees-first order inside it: a round
+     * then builds each file at most once. The fixed point is the same whatever
+     * the order, because the transfer functions are monotone; only the number
+     * of rounds it takes can change. A function declared in several files
+     * stays with the first, as its group is analysed together.
+     *
+     * @param list<FunctionMeta|FunctionContext>                $ordered
+     * @param array<string, list<FunctionMeta|FunctionContext>> $byKey
+     * @param callable(string): list<string>                    $calls
+     *
+     * @return list<FunctionMeta|FunctionContext>
+     */
+    private static function groupedByFile(array $ordered, array $byKey, callable $calls): array
+    {
+        /** @var array<string, string> $fileOf function key => the file its group is analysed from */
+        $fileOf = [];
+
+        /** @var array<string, list<string>> $keysIn file => its function keys, in callees-first order */
+        $keysIn = [];
+
+        foreach ($ordered as $function) {
+            if (isset($fileOf[$function->key])) {
+                continue;
+            }
+
+            $file = self::fileOf($function);
+            $fileOf[$function->key] = $file;
+            $keysIn[$file][] = $function->key;
+        }
+
+        $calledFiles = static function (string $file) use ($keysIn, $fileOf, $calls): array {
+            $files = [];
+
+            foreach ($keysIn[$file] ?? [] as $key) {
+                foreach ($calls($key) as $callee) {
+                    $target = $fileOf[$callee] ?? null;
+
+                    if ($target !== null && $target !== $file) {
+                        $files[$target] = true;
+                    }
+                }
+            }
+
+            return array_keys($files);
+        };
+
+        $rank = array_flip(array_keys($keysIn));
+        $result = [];
+
+        foreach (self::componentsCalleesFirst(array_keys($keysIn), $calledFiles) as $component) {
+            usort($component, static fn (string $a, string $b): int => ($rank[$a] ?? 0) <=> ($rank[$b] ?? 0));
+
+            foreach ($component as $file) {
+                foreach ($keysIn[$file] ?? [] as $key) {
+                    foreach ($byKey[$key] ?? [] as $function) {
+                        $result[] = $function;
+                    }
+                }
+            }
+        }
+
         return $result;
+    }
+
+    private static function fileOf(FunctionMeta|FunctionContext $function): string
+    {
+        return $function instanceof FunctionMeta ? $function->relativePath : $function->file->relativePath;
     }
 
     /**
@@ -462,11 +540,12 @@ final class InterproceduralResolver
      * deep PHP stack. Components come out callees first, which is the order
      * Tarjan emits them in.
      *
-     * @param list<string> $keys
+     * @param list<string>                   $keys
+     * @param callable(string): list<string> $calleesOf
      *
      * @return list<list<string>>
      */
-    private static function componentsCalleesFirst(array $keys, CallGraph $callGraph): array
+    private static function componentsCalleesFirst(array $keys, callable $calleesOf): array
     {
         $known = array_flip($keys);
         $index = [];
@@ -482,7 +561,7 @@ final class InterproceduralResolver
             }
 
             /** @var list<array{0: string, 1: list<string>, 2: int}> $work key, callees, next callee position */
-            $work = [[$root, self::knownCallees($root, $callGraph, $known), 0]];
+            $work = [[$root, self::knownCallees($root, $calleesOf, $known), 0]];
             $index[$root] = $low[$root] = $next++;
             $stack[] = $root;
             $onStack[$root] = true;
@@ -500,7 +579,7 @@ final class InterproceduralResolver
                         $index[$callee] = $low[$callee] = $next++;
                         $stack[] = $callee;
                         $onStack[$callee] = true;
-                        $work[] = [$callee, self::knownCallees($callee, $callGraph, $known), 0];
+                        $work[] = [$callee, self::knownCallees($callee, $calleesOf, $known), 0];
                     } elseif (isset($onStack[$callee])) {
                         $low[$key] = min($low[$key] ?? 0, $index[$callee]);
                     }
@@ -540,14 +619,15 @@ final class InterproceduralResolver
     }
 
     /**
-     * @param array<string, int> $known
+     * @param callable(string): list<string> $calleesOf
+     * @param array<string, int>              $known
      *
      * @return list<string>
      */
-    private static function knownCallees(string $key, CallGraph $callGraph, array $known): array
+    private static function knownCallees(string $key, callable $calleesOf, array $known): array
     {
         $callees = array_values(array_unique(array_filter(
-            $callGraph->calleesOf($key),
+            $calleesOf($key),
             static fn (string $callee): bool => isset($known[$callee]),
         )));
         sort($callees);

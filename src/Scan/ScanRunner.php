@@ -55,6 +55,7 @@ final class ScanRunner
             $this->configuration->jobs,
             $this->configuration->includePaths,
             $progress,
+            $this->configuration->memoryBudget,
         ))->scan($files);
     }
 }

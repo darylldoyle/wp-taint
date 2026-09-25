@@ -157,16 +157,20 @@ expect, an `--exclude` is catching more than intended.
 PHP Fatal error: Allowed memory size of 536870912 bytes exhausted
 ```
 
-**Cause.** The default `memory_limit` is not enough for a large tree. The whole
-program is held in memory at once, by design, because taint crosses files.
+**Cause.** The default `memory_limit` is not enough for a large tree. The scan
+keeps what it learns about every function in memory, because taint crosses
+files. It also keeps up to `--memory-budget` of parsed files, 4GB by default.
 
 **Solution.**
 
 ```bash
-php -d memory_limit=4G vendor/bin/wp-taint scan ./src
+php -d memory_limit=12G vendor/bin/wp-taint scan ./src
 ```
 
-Referencing fewer trees reduces peak memory more than anything else.
+Give `memory_limit` the budget plus room for the rest. A lower budget, such as
+`--memory-budget=1G`, trades memory for time: any file it cannot hold is parsed
+again each time it is needed. The findings do not change. Referencing fewer
+trees still reduces peak memory more than anything else.
 
 To see where the memory goes, add `--debug-memory`. It prints PHP's own heap
 figures at each phase and each round. Trust those over Activity Monitor or

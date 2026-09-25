@@ -35,6 +35,9 @@ final class FunctionBodies
     /** @var array<string, array<int|string, FunctionContext>> path => position => context */
     private array $contexts = [];
 
+    /** @var array<string, int> absolute path => its estimated size when last counted */
+    private array $sizes = [];
+
     /** Heap the held files take, as {@see estimatedSize()} estimates it. */
     private int $held = 0;
 
@@ -54,12 +57,6 @@ final class FunctionBodies
      */
     public function add(ParsedFile $file): void
     {
-        if ($this->budget === null) {
-            $this->files[$file->path] = $file;
-
-            return;
-        }
-
         $this->admit($file, self::estimatedSize($file));
     }
 
@@ -135,7 +132,20 @@ final class FunctionBodies
      */
     public function releaseAst(string $path): void
     {
-        ($this->files[$path] ?? null)?->releaseAst();
+        $file = $this->files[$path] ?? null;
+
+        if ($file === null || ! $file->hasAst()) {
+            return;
+        }
+
+        $file->releaseAst();
+
+        // The file now takes less, and the room it gave back is the budget's
+        // again. Counting it at its size with the AST left most of a cache
+        // filled during parsing empty for the rest of the scan.
+        $size = self::estimatedSize($file);
+        $this->held -= ($this->sizes[$path] ?? 0) - $size;
+        $this->sizes[$path] = $size;
     }
 
     /**
@@ -212,6 +222,7 @@ final class FunctionBodies
     {
         if ($this->budget === null || ($this->budget > 0 && $this->held + $size <= $this->budget)) {
             $this->files[$file->path] = $file;
+            $this->sizes[$file->path] = $size;
             $this->held += $size;
 
             return true;

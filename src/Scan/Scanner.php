@@ -147,7 +147,7 @@ final class Scanner
         // Every body the scan analyses comes from here: held while the budget
         // allows, rebuilt from source when it does not. Nothing else keeps a
         // parsed file. See docs/design/two-pass-engine.md.
-        $bodies = new FunctionBodies($builder, $this->memoryBudget);
+        $bodies = new FunctionBodies($builder, $this->processBudget());
 
         /** @var list<string> $parsedPaths every file that parsed, scanned first, for the theme roots */
         $parsedPaths = [];
@@ -310,11 +310,9 @@ final class Scanner
                 foreach ($this->structuralRules as $rule) {
                     $findings = [...$findings, ...$rule->analyse($file, $this->registry, $ruleContext)];
                 }
-
-                $file->releaseAst();
-            } else {
-                $bodies->releaseAst($path);
             }
+
+            $bodies->releaseAst($path);
         }
 
         unset($file);
@@ -363,7 +361,9 @@ final class Scanner
             $analysed,
         );
 
+        $this->progress->note($this->describeCache('after setup', $bodies));
         $resolution = $interprocedural->resolve($metas, $this->progress);
+        $this->progress->note($this->describeCache('after resolution', $bodies));
 
         // Findings a structural rule could not decide alone. The rule recorded
         // what it would emit and which callback settles it; the summary — which
@@ -490,6 +490,8 @@ final class Scanner
             $warnings = [...$warnings, ...$shardResult['warnings']];
         }
 
+        $this->progress->note($this->describeCache('after findings', $bodies));
+
         if ($graph !== null && $this->taintGraphPath !== null) {
             file_put_contents($this->taintGraphPath, $graph->render());
         }
@@ -525,6 +527,36 @@ final class Scanner
             $unresolvedHooks,
             referenceFiles: count($reference),
             referenceParseFailures: $referenceParseFailures,
+        );
+    }
+
+    /**
+     * The graph cache's share of the budget in this process.
+     *
+     * Workers fork from this process and start with its cache, so a budget
+     * held whole here would be held again in every worker as soon as it read
+     * the pages. Each process gets an equal part instead, and the scan's cache
+     * stays near the budget whatever --jobs is.
+     */
+    private function processBudget(): ?int
+    {
+        if ($this->memoryBudget === null || $this->jobs <= 1) {
+            return $this->memoryBudget;
+        }
+
+        return intdiv($this->memoryBudget, $this->jobs);
+    }
+
+    private function describeCache(string $when, FunctionBodies $bodies): string
+    {
+        $budget = $this->processBudget();
+
+        return sprintf(
+            'graph cache %s: %s held of %s, %d files rebuilt in this process',
+            $when,
+            number_format($bodies->held() / 1_048_576) . 'MB',
+            $budget === null ? 'no limit' : number_format($budget / 1_048_576) . 'MB',
+            $bodies->rebuilds(),
         );
     }
 

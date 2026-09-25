@@ -170,6 +170,13 @@ final class ScanCommand extends Command
             ->addOption('trace-full', null, InputOption::VALUE_NONE, 'Never collapse the middle of a long trace')
             ->addOption('jobs', 'j', InputOption::VALUE_REQUIRED, 'Number of worker processes', '1')
             ->addOption(
+                'memory-budget',
+                null,
+                InputOption::VALUE_REQUIRED,
+                'Memory for held control flow graphs, such as 512M; any other graph is rebuilt when needed. '
+                    . '"unlimited" holds every graph [default: "4G"]',
+            )
+            ->addOption(
                 'debug-memory',
                 null,
                 InputOption::VALUE_NONE,
@@ -353,6 +360,7 @@ final class ScanCommand extends Command
             ! $reader->bool('no-structural-rules'),
             $reader->int('jobs', $project->jobs ?? 1),
             honorPhpcsSuppressions: ! $reader->bool('no-phpcs-suppressions'),
+            memoryBudget: $reader->nullableString('memory-budget') ?? $project->memoryBudget,
         );
     }
 

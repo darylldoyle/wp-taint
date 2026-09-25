@@ -57,6 +57,11 @@ final class MemoryScanProgress implements ScanProgress
         $this->round += $steps;
     }
 
+    public function note(string $message): void
+    {
+        $this->output->writeln('[memory] ' . $message);
+    }
+
     public function finish(): void
     {
         $this->report($this->round > 0 ? sprintf('round %d', $this->round) : null);
