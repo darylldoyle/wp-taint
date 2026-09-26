@@ -43,6 +43,22 @@ final class CallResolver
     }
 
     /**
+     * Every method of a name, as keys, by lowercased name.
+     *
+     * A call on a receiver of unknown class names every method of that name
+     * in the scan, and that list was built again for every such call op on
+     * every pass of every analysis. On 168 reference trees a name like `set`
+     * or `parse` has hundreds of methods behind it. The table only changes
+     * while files are parsed, and the cache records how many functions it
+     * held, so a table that grew is asked again.
+     *
+     * @var array<string, list<string>>
+     */
+    private array $methodKeysByName = [];
+
+    private int $methodKeysFor = -1;
+
+    /**
      * The value resolver this resolver folds names through, for components
      * that need the same folding outside a call position — the query-shape
      * inspector reads quote state from fragments only it can fold.
@@ -487,7 +503,7 @@ final class CallResolver
             return CallTarget::dynamic(
                 $arguments,
                 OperandHelper::describe($op->var) . '->' . $method . '()',
-                $this->keysOf($this->functions->methodsNamed($method)),
+                $this->methodKeysNamed($method),
             );
         }
 
@@ -503,8 +519,23 @@ final class CallResolver
         return CallTarget::dynamic(
             $arguments,
             OperandHelper::describe($op->var) . '->' . $method . '()',
-            $this->keysOf($this->functions->methodsNamed($method)),
+            $this->methodKeysNamed($method),
         );
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function methodKeysNamed(string $method): array
+    {
+        $size = count($this->functions->all());
+
+        if ($size !== $this->methodKeysFor) {
+            $this->methodKeysByName = [];
+            $this->methodKeysFor = $size;
+        }
+
+        return $this->methodKeysByName[strtolower($method)] ??= $this->keysOf($this->functions->methodsNamed($method));
     }
 
     /**

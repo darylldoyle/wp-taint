@@ -32,6 +32,9 @@ use PHPCfg\Operand;
  */
 final class RestRouteCollector
 {
+    /** The table being built by {@see accept()}, until {@see finish()} hands it over. */
+    private ?RestRouteTable $building = null;
+
     private const REGISTRAR = 'register_rest_route';
 
     /** How many plain assignments to follow back to an array literal. */
@@ -48,21 +51,41 @@ final class RestRouteCollector
      */
     public function collect(iterable $contexts): RestRouteTable
     {
-        $table = new RestRouteTable();
-
         foreach ($contexts as $context) {
-            $types = new ClassTypeMap();
+            $this->accept($context);
+        }
 
-            foreach (BlockOrder::of($context->func->cfg) as $block) {
-                foreach ($block->children as $op) {
-                    $isCall = $op instanceof Op\Expr\FuncCall || $op instanceof Op\Expr\NsFuncCall;
+        return $this->finish();
+    }
 
-                    if ($isCall && self::isRegistrar($op)) {
-                        $this->record($table, $op, $context, $types);
-                    }
+    /**
+     * Record one function's route registrations. The scan feeds every function
+     * to this collector and to the hook and include graph builders in one
+     * sweep, so a body the budget does not hold is rebuilt once for all three.
+     */
+    public function accept(FunctionContext $context): void
+    {
+        $table = $this->building ??= new RestRouteTable();
+        $types = new ClassTypeMap();
+
+        foreach (BlockOrder::of($context->func->cfg) as $block) {
+            foreach ($block->children as $op) {
+                $isCall = $op instanceof Op\Expr\FuncCall || $op instanceof Op\Expr\NsFuncCall;
+
+                if ($isCall && self::isRegistrar($op)) {
+                    $this->record($table, $op, $context, $types);
                 }
             }
         }
+    }
+
+    /**
+     * The table every accepted function built, and a fresh start after it.
+     */
+    public function finish(): RestRouteTable
+    {
+        $table = $this->building ?? new RestRouteTable();
+        $this->building = null;
 
         return $table;
     }

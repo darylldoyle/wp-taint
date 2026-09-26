@@ -29,6 +29,9 @@ use PHPCfg\Operand;
  */
 final class HookGraphBuilder
 {
+    /** The graph being built by {@see accept()}, until {@see finish()} hands it over. */
+    private ?HookGraph $building = null;
+
     /**
      * The two registration functions, and the argument layout they share.
      *
@@ -78,11 +81,30 @@ final class HookGraphBuilder
      */
     public function build(iterable $contexts): HookGraph
     {
-        $graph = new HookGraph();
-
         foreach ($contexts as $context) {
-            $this->collect($graph, $context);
+            $this->accept($context);
         }
+
+        return $this->finish();
+    }
+
+    /**
+     * Record one function's registrations. The scan feeds every function to
+     * this builder and to the include graph and REST route builders in one
+     * sweep, so a body the budget does not hold is rebuilt once for all three.
+     */
+    public function accept(FunctionContext $context): void
+    {
+        $this->collect($this->building ??= new HookGraph(), $context);
+    }
+
+    /**
+     * The graph every accepted function built, and a fresh start after it.
+     */
+    public function finish(): HookGraph
+    {
+        $graph = $this->building ?? new HookGraph();
+        $this->building = null;
 
         return $graph;
     }
