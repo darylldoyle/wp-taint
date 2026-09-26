@@ -165,7 +165,9 @@ final class Scanner
         // Every body the scan analyses comes from here: held while the budget
         // allows, rebuilt from source when it does not. Nothing else keeps a
         // parsed file. See docs/design/two-pass-engine.md.
-        $bodies = new FunctionBodies($builder, $this->processBudget(), $collector);
+        // A taint graph dump keeps every analysis's state, and the graph
+        // objects in it, so it is the one case that must not take files apart.
+        $bodies = new FunctionBodies($builder, $this->processBudget(), $collector, $this->taintGraphPath === null);
 
         /** @var list<string> $parsedPaths every file that parsed, scanned first, for the theme roots */
         $parsedPaths = [];
@@ -347,6 +349,7 @@ final class Scanner
 
         foreach ($scannedPaths as $path) {
             $this->progress->advance();
+            $bodies->reclaim();
             // Structural rules are pure AST shape checks over one file, so they
             // run before the whole-program taint pass, which is what lets the
             // AST go early. Reference trees are skipped: a missing
@@ -494,6 +497,7 @@ final class Scanner
                         continue;
                     }
 
+                    $analysed->reclaim();
                     $context = $analysed->context($meta);
                     $result = $analyzer->analyze(
                         $context,
@@ -639,6 +643,8 @@ final class Scanner
                     $meta = $permission->dynamic || $permission->userFunctionKey === null
                         ? null
                         : $functions->get($permission->userFunctionKey);
+
+                    $bodies->reclaim();
 
                     if ($meta === null || ! $guard->permitsOnlyWhenEntitled($bodies->context($meta))) {
                         $entitled = false;

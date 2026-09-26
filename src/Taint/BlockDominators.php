@@ -92,6 +92,14 @@ final class BlockDominators
     }
 
     /**
+     * Let go of the last answer, and the blocks it holds.
+     */
+    public static function forget(): void
+    {
+        self::$last = null;
+    }
+
+    /**
      * Whether this block is one of the function's.
      */
     public function covers(Block $block): bool
