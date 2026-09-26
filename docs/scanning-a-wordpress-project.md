@@ -159,10 +159,12 @@ list by mistake.
 A client site with many reference trees needs more memory than `bin/wp-taint`
 allows by default. It raises PHP's `memory_limit` to 2GB, and the graph cache
 alone can hold 4GB. Give the limit at least 4GB more than the budget: 8GB at
-the default budget, and 16GB if you raise the budget to 8GB:
+the default budget for a site with a few dozen reference trees, 10GB for one
+with over a hundred, and 16GB if you raise the budget to 8GB:
 
 ```bash
 WP_TAINT_MEMORY_LIMIT=8G vendor/bin/wp-taint scan --config=wp-taint.toml
+WP_TAINT_MEMORY_LIMIT=10G vendor/bin/wp-taint scan --config=wp-taint.toml   # 100+ reference trees
 WP_TAINT_MEMORY_LIMIT=16G vendor/bin/wp-taint scan --config=wp-taint.toml --memory-budget=8G
 ```
 
@@ -182,8 +184,15 @@ of memory at a 12GB limit. Measured on a client site of 1,337 files:
 
 | Reference trees | Budget | Peak heap | Time |
 |---|---|---|---|
-| 17 | 4GB, the default | 6.1GB | 14 minutes |
+| 17 | 4GB, the default | 6.2GB | 13 minutes |
 | 17 | `unlimited` | 8.1GB | 8 minutes |
+| 168 | 4GB, the default | 7.4GB | hours; see below |
+
+With all 168 reference trees scanned without excludes, a scan that needed
+about 40GB before memory was budgeted peaked at 7.4GB. It was slow for one
+reason: a single 3,000-line function in one plugin, whose authorization check
+recursed without remembering its answers, took over an hour a round. That is
+fixed in the release after this one.
 
 If the machine has the memory, a larger budget is faster. If a scan runs out of
 memory, lower the budget before you remove reference trees. `--debug-memory`
