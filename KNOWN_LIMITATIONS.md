@@ -81,6 +81,7 @@ badge:
 | [An unmodelled function returns clean](#an-unmodelled-function-returns-clean) | Misses |
 | [A by-reference call cannot clear its argument](#references-are-followed-and-never-cleared) | Over-reports |
 | [A closure capture](#a-closure-capture-crosses-in-both-directions) | Neither |
+| [A closure called by its maker cannot write back to the maker's later reads](#a-closure-capture-crosses-in-both-directions) | Misses |
 | [What a REST callback returns is not treated as output](#a-rest-callbacks-return-is-not-output) | Misses |
 | [A route's schema narrows a parameter only in the route's callback](#a-rest-parameter-is-read-through-its-routes-schema) | Over-reports |
 | [`wp_json_encode()` is treated as clearing `html`](#wp_json_encode-context-sensitivity-is-approximated) | Misses |
@@ -997,6 +998,30 @@ way a property write is: the probe run records "parameter reaches capture
 it actually passed, through helper chains, since a probe applying a callee's
 summary re-records the capture into its own. The run that publishes directly
 is still the one that seeds nothing.
+
+The same holds for the other two ways a function hands its variables outward:
+the scope a file it includes sees, and the `$args` a template it loads with
+`get_template_part()` receives. The summary records which of them each
+parameter reaches, and each caller publishes what it passed. A helper that
+renders a view is reported for the callers that pass it request data, and not
+for the ones that pass literals.
+
+One shape is missed. A closure that writes its own parameter into a
+by-reference capture, called by the function that made it, does not reach that
+function's later reads:
+
+```php
+function acme_collect() {
+    $out = '';
+    $set = function ( $x ) use ( &$out ) { $out = $x; };
+    $set( $_GET['a'] );
+    echo $out;                     // not reported
+}
+```
+
+The read of `$out` after the call is the same value as the assignment before
+it, as far as the graph can tell. Nothing in it says the call wrote to `$out`,
+so the write-back arrives in the scope table but never at the `echo`.
 
 **Direction:** was under-approximating at a parameter-fed capture; now carried.
 

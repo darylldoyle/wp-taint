@@ -65,7 +65,49 @@ final class FunctionSummary
          * @var array<int, list<array{0: string, 1: string}>>
          */
         public readonly array $paramToCapture = [],
+        /**
+         * Shared scopes each parameter reaches.
+         *
+         * The scope counterpart to {@see $paramToCapture}, for the three ways
+         * a function hands its variables to code outside it: a file it
+         * includes sees its whole scope (`in`, the included file's `::{main}`
+         * key, the variable's name, no array key); a template loaded with
+         * `get_template_part()` sees `$args` (`in`, the template's key,
+         * `args`, and the array key when the argument had one); and a closure
+         * writes a by-reference capture back to the function that made it
+         * (`out`, the closure's key, the captured name). A probe run records
+         * these instead of publishing its seed, and the call site publishes
+         * the caller's actual taint.
+         *
+         * @var array<int, list<array{0: string, 1: string, 2: string, 3: int|string|null}>>
+         */
+        public readonly array $paramToScope = [],
     ) {
+    }
+
+    /**
+     * @return list<array{0: string, 1: string, 2: string, 3: int|string|null}>
+     */
+    public function scopesFor(int $parameterIndex): array
+    {
+        return $this->paramToScope[$parameterIndex] ?? [];
+    }
+
+    /**
+     * One shared-scope reference as a string, for deduplicating and comparing.
+     *
+     * @param array{0: string, 1: string, 2: string, 3: int|string|null} $reference
+     */
+    public static function scopeKey(array $reference): string
+    {
+        [$table, $key, $name, $arrayKey] = $reference;
+
+        return implode("\0", [
+            $table,
+            $key,
+            $name,
+            $arrayKey === null ? '-' : (is_int($arrayKey) ? 'i' : 's') . $arrayKey,
+        ]);
     }
 
     /**
@@ -194,11 +236,12 @@ final class FunctionSummary
             $this->returnAnchored && $other->returnAnchored,
             self::mergeReferences($this->paramToProperty, $other->paramToProperty, self::propertyKey(...)),
             self::mergeReferences($this->paramToCapture, $other->paramToCapture, self::captureKey(...)),
+            self::mergeReferences($this->paramToScope, $other->paramToScope, self::scopeKey(...)),
         );
     }
 
     /**
-     * @template T of array<int, string|null>
+     * @template T of array<int, int|string|null>
      *
      * @param array<int, list<T>> $mine
      * @param array<int, list<T>> $theirs
@@ -334,6 +377,23 @@ final class FunctionSummary
         foreach ($this->paramToCapture as $index => $captures) {
             $mine = array_map(self::captureKey(...), $captures);
             $theirs = array_map(self::captureKey(...), $other->paramToCapture[$index] ?? []);
+
+            sort($mine);
+            sort($theirs);
+
+            if ($mine !== $theirs) {
+                return false;
+            }
+        }
+
+        // And the shared scopes, for the same reason as the captures.
+        if (array_keys($this->paramToScope) !== array_keys($other->paramToScope)) {
+            return false;
+        }
+
+        foreach ($this->paramToScope as $index => $scopes) {
+            $mine = array_map(self::scopeKey(...), $scopes);
+            $theirs = array_map(self::scopeKey(...), $other->paramToScope[$index] ?? []);
 
             sort($mine);
             sort($theirs);

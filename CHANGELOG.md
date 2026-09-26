@@ -115,6 +115,17 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A file included from a function, or a template loaded with
+  `get_template_part()`, was reported as receiving tainted input whenever the
+  function had a parameter, even when every caller passed a literal. The
+  summary's probe runs, which seed a parameter with every kind of taint to see
+  where it goes, published that seed into the scope the included file sees.
+  `function acme_render( $data ) { include 'tpl.php'; }` called only as
+  `acme_render( 'hello' )` was a high XSS finding in `tpl.php` with all sixteen
+  kinds. The probe now records where its seed would have gone, and each caller
+  publishes what it actually passed, as property writes and closure captures
+  already did. A caller passing request data is still reported, with its
+  source at the start of the trace and only the kinds it carries.
 - A function with thousands of blocks could take gigabytes of memory for its
   dominators alone. The algorithm starts with every block dominating every
   block, and held that as object sets, so a function of n blocks began with n²

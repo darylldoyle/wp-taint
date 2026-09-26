@@ -60,6 +60,14 @@ final class FunctionAnalysis
      */
     private array $capturesReached = [];
 
+    /**
+     * Shared scopes the seeded parameter reached, keyed so a loop or a later
+     * round records each once. See {@see AnalysisResult::$scopesReached}.
+     *
+     * @var array<string, array{0: string, 1: string, 2: string, 3: int|string|null}>
+     */
+    private array $scopesReached = [];
+
     private TaintState $state;
 
     private ClassTypeMap $types;
@@ -303,6 +311,7 @@ final class FunctionAnalysis
             $this->returnAnchored ?? false,
             array_values($this->propertiesReached),
             array_values($this->capturesReached),
+            array_values($this->scopesReached),
         );
     }
 
@@ -340,6 +349,23 @@ final class FunctionAnalysis
         }
 
         $named = $this->namedScopeWithOrigins();
+
+        // A probe run of a closure seeds one of its parameters with every
+        // kind of taint. Written back to the function that made the closure,
+        // that seed became an assertion about the maker's variables, whatever
+        // the closure was later called with. Recorded here; the call site
+        // publishes what it actually passed. File-level code has no
+        // parameters, so it is never probed.
+        if ($this->seedParameterIndex !== null) {
+            foreach ($named['taint'] as $name => $taint) {
+                if (isset($assigned[$name]) && ! $taint->isEmpty()) {
+                    $this->recordScopeReference('out', $this->context->key, $name);
+                }
+            }
+
+            return;
+        }
+
         $scope = [];
         $origins = [];
 
@@ -586,6 +612,23 @@ final class FunctionAnalysis
         $changed = false;
         $visible = $this->namedScopeWithOrigins();
 
+        // A probe run's seed is a question, not a value the code holds, and
+        // publishing it told the included file that every variable derived
+        // from the parameter carried every kind of taint, even when every
+        // caller passed a literal. Recorded instead, and published by each
+        // caller with what it passed; see {@see applySummaryScopes}.
+        if ($this->seedParameterIndex !== null) {
+            foreach ($targets as $target) {
+                foreach ($visible['taint'] as $name => $taint) {
+                    if (! $taint->isEmpty()) {
+                        $this->recordScopeReference('in', strtolower($target . '::{main}'), $name);
+                    }
+                }
+            }
+
+            return false;
+        }
+
         foreach ($targets as $target) {
             $changed = $this->scopes->addInto(
                 strtolower($target . '::{main}'),
@@ -595,6 +638,20 @@ final class FunctionAnalysis
         }
 
         return $changed;
+    }
+
+    /**
+     * Note that the seeded parameter reached a shared scope. See
+     * {@see FunctionSummary::$paramToScope} for what the four parts mean.
+     */
+    private function recordScopeReference(
+        string $table,
+        string $key,
+        string $name,
+        int|string|null $arrayKey = null,
+    ): void {
+        $reference = [$table, $key, $name, $arrayKey];
+        $this->scopesReached[FunctionSummary::scopeKey($reference)] = $reference;
     }
 
     /**
@@ -2824,6 +2881,35 @@ final class FunctionAnalysis
         }
 
         $args = $loader->argsArgument === null ? null : $call->argument($loader->argsArgument);
+
+        // As for an include: a probe run records where the seed would have
+        // gone, key by key when the argument has keys, and the caller
+        // publishes what it passed.
+        if ($this->seedParameterIndex !== null) {
+            if ($args === null) {
+                return false;
+            }
+
+            $flat = $this->state->effectiveTaintOf($args);
+            $byKey = $this->state->keyedTaintMapOf($args);
+
+            foreach ($targets as $target) {
+                $key = strtolower($target . '::{main}');
+
+                if (! $flat->isEmpty()) {
+                    $this->recordScopeReference('in', $key, 'args');
+                }
+
+                foreach ($byKey as $arrayKey => $taint) {
+                    if (! $taint->isEmpty()) {
+                        $this->recordScopeReference('in', $key, 'args', $arrayKey);
+                    }
+                }
+            }
+
+            return false;
+        }
+
         $scope = [];
         $origins = [];
         $keyed = [];
@@ -3046,6 +3132,88 @@ final class FunctionAnalysis
         }
 
         return $changed;
+    }
+
+    /**
+     * The shared scopes a callee's parameter reaches, fed with what this
+     * caller actually passed: the file the callee includes, the template it
+     * loads, the variable its closure writes back.
+     *
+     * A probe run re-records instead of publishing, which carries the scope
+     * through a helper chain exactly as it carries a capture: A's probe
+     * applying B's summary learns that A's parameter reaches the template B
+     * includes, and A's summary tells A's callers.
+     */
+    private function applySummaryScopes(
+        Op\Expr $op,
+        FunctionSummary $summary,
+        int $index,
+        Operand $argument,
+        TaintSet $argumentTaint,
+    ): bool {
+        $references = $summary->scopesFor($index);
+
+        if ($argumentTaint->isEmpty() || $references === []) {
+            return false;
+        }
+
+        if ($this->seedParameterIndex !== null) {
+            foreach ($references as [$table, $key, $name, $arrayKey]) {
+                $this->recordScopeReference($table, $key, $name, $arrayKey);
+            }
+
+            return false;
+        }
+
+        $changed = false;
+
+        foreach ($references as [$table, $key, $name, $arrayKey]) {
+            $origins = [$name => $this->scopeWriteTrace($op, $argument, $argumentTaint, $summary, $table, $name)];
+
+            $changed = ($table === 'out'
+                ? $this->scopes->addOutOf($key, [$name => $argumentTaint], $origins)
+                : $this->scopes->addInto(
+                    $key,
+                    [$name => $argumentTaint],
+                    $origins,
+                    $arrayKey === null ? [] : [$name => [$arrayKey => $argumentTaint]],
+                )) || $changed;
+        }
+
+        return $changed;
+    }
+
+    /**
+     * The trace of a scope write that happened inside a callee.
+     *
+     * @return list<TraceStep>
+     */
+    private function scopeWriteTrace(
+        Op\Expr $op,
+        Operand $argument,
+        TaintSet $taint,
+        FunctionSummary $summary,
+        string $table,
+        string $name,
+    ): array {
+        $kind = $taint->kinds()[0] ?? null;
+
+        if ($kind === null) {
+            return [];
+        }
+
+        $callee = $summary->displayName;
+        $description = match (true) {
+            $table === 'out' => sprintf('Passed to %s(), which writes it back to $%s.', $callee, $name),
+            $name === 'args' => sprintf('Passed to %s(), which hands it to a template as $args.', $callee),
+            default => sprintf('Passed to %s(), where an included file sees it as $%s.', $callee, $name),
+        };
+
+        return $this->traces->build(
+            $argument,
+            $kind,
+            $this->traces->step(TraceVerb::Propagate, $op, $taint, $description),
+        );
     }
 
     /**
@@ -3751,6 +3919,8 @@ final class FunctionAnalysis
             $changed = $this->applySummaryProperties($op, $summary, $index, $argument, $argumentTaint)
                 || $changed;
             $changed = $this->applySummaryCaptures($op, $summary, $index, $argument, $argumentTaint)
+                || $changed;
+            $changed = $this->applySummaryScopes($op, $summary, $index, $argument, $argumentTaint)
                 || $changed;
         }
 

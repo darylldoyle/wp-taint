@@ -42,6 +42,7 @@ final class SummaryExtractor
         $paramToParam = [];
         $paramToProperty = [];
         $paramToCapture = [];
+        $paramToScope = [];
         $imprecise = $parameterCount > $analysed;
 
         for ($index = 0; $index < $analysed; $index++) {
@@ -72,6 +73,12 @@ final class SummaryExtractor
             if ($result->capturesReached !== []) {
                 $paramToCapture[$index] = $result->capturesReached;
             }
+
+            // And the scopes it reaches: files it includes, templates it
+            // hands arguments to, closures that write it back. Same reason.
+            if ($result->scopesReached !== []) {
+                $paramToScope[$index] = $result->scopesReached;
+            }
         }
 
         // What the function returns with no parameter tainted at all: a wrapper
@@ -97,6 +104,7 @@ final class SummaryExtractor
             $baseline->returnAnchored,
             $paramToProperty,
             $paramToCapture,
+            $paramToScope,
         );
     }
 
