@@ -5,7 +5,7 @@ plugins around them for context without reporting on any of them.
 
 A WordPress checkout is mostly code you did not write. The interesting shape is
 two or three first-party directories inside an install of thousands of
-third-party files, and those directories usually reference each other: a client
+third-party files, and those directories usually reference each other: a
 platform plugin and the themes built against it are one program, not three
 scans.
 
@@ -20,14 +20,14 @@ together as one program, so a theme calling into a shared plugin resolves.
 WPC=/path/to/wp-content
 
 wp-taint scan \
-  $WPC/themes/client-org-theme \
-  $WPC/themes/client-news-theme \
-  $WPC/plugins/client-shared
+  $WPC/themes/acme-org-theme \
+  $WPC/themes/acme-news-theme \
+  $WPC/plugins/acme-shared
 ```
 
 The paths list is the reported set. Findings are anchored at the deepest
 directory common to all of them, so with the three targets above they read as
-`themes/client-org-theme/functions.php:12`. Scan a single directory and paths
+`themes/acme-org-theme/functions.php:12`. Scan a single directory and paths
 are relative to that directory instead.
 
 ## Add context without adding findings
@@ -37,8 +37,8 @@ never reported on. Repeat it once per tree.
 
 ```bash
 wp-taint scan \
-  $WPC/themes/client-org-theme \
-  $WPC/plugins/client-shared \
+  $WPC/themes/acme-org-theme \
+  $WPC/plugins/acme-shared \
   --include-path=$WPC/plugins/co-authors-plus \
   --include-path=$WPC/client-mu-plugins
 ```
@@ -66,16 +66,16 @@ A target may sit inside a referenced tree. Files already in the target set stay
 in the target set.
 
 ```bash
-wp-taint scan $WPC/plugins/client-shared --include-path=$WPC/plugins
+wp-taint scan $WPC/plugins/acme-shared --include-path=$WPC/plugins
 ```
 
-`client-shared` is still reported on. Every other plugin under `plugins/`
+`acme-shared` is still reported on. Every other plugin under `plugins/`
 supplies symbols only. You do not need to list them individually or exclude your
 own plugin from the reference.
 
 > **Warning**
 > Reference selectively. A full `wp-content/plugins` on a real install is tens
-> of thousands of files. On a measured client site, three referenced plugins
+> of thousands of files. On a measured production site, three referenced plugins
 > took a 50-second scan to 7 minutes 36 seconds. Reference the plugins your code
 > actually calls into, and nothing else.
 
@@ -101,7 +101,7 @@ scan or a referenced tree.
 
 ## Do not reference WordPress core
 
-Measured on a client theme: 310 files scan in 1.8 seconds alone and 163 seconds
+Measured on a production theme: 310 files scan in 1.8 seconds alone and 163 seconds
 with `wp-includes` referenced, and the ten extra findings were all false
 positives from core's block-template machinery.
 
@@ -115,7 +115,7 @@ Put `wp-taint.toml` at the root the paths are relative to, usually
 
 ```toml
 [scan]
-paths     = ["themes/client-org-theme", "themes/client-news-theme", "plugins/client-shared"]
+paths     = ["themes/acme-org-theme", "themes/acme-news-theme", "plugins/acme-shared"]
 reference = ["plugins/co-authors-plus", "client-mu-plugins"]
 exclude   = ["*/vendor/*", "*/node_modules/*", "*/dist/*"]
 
@@ -156,7 +156,7 @@ list by mistake.
 
 ## Scan a large site
 
-A client site with many reference trees needs more memory than `bin/wp-taint`
+A site with many reference trees needs more memory than `bin/wp-taint`
 allows by default. It raises PHP's `memory_limit` to 2GB, and the graph cache
 alone can hold 4GB. Give the limit at least 4GB more than the budget: 8GB at
 the default budget for a site with a few dozen reference trees, 10GB for one
@@ -180,7 +180,7 @@ Two settings are involved, and they do different jobs:
 The limit has to cover the budget, the scan's own tables, which grow with the
 number of functions, and up to 1GB of garbage waiting to be collected. The 4GB
 of room is a minimum. A site with 168 reference trees and an 8GB budget ran out
-of memory at a 12GB limit. Measured on a client site of 1,337 files:
+of memory at a 12GB limit. Measured on a site of about 1,300 scanned files:
 
 | Reference trees | Budget | Peak heap | Time |
 |---|---|---|---|

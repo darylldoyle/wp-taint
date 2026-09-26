@@ -20,7 +20,7 @@ use SplObjectStorage;
  * Each block's dominators are a bit set indexed by the block's position in the
  * list. They were object sets, and the algorithm starts with every block
  * dominating every block, so a function of n blocks began with n² entries. A
- * generated file in one of the client's 168 reference trees had a function big
+ * generated file in one site's 168 reference trees had a function big
  * enough to need several gigabytes for that alone, and the scan died there at
  * both an 8GB and a 12GB limit. As bits, n² costs n²/8 bytes. The iteration is
  * the same: the same order, the same test on each set's size, the same round

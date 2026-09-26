@@ -1525,7 +1525,7 @@ fail a build on its own.
 
 The argument for it is that a reader who knows a value is safe dismisses a `low`
 in a second, and a reader who is never shown it cannot. The argument against was
-that the eight it adds on a real client theme are one pattern, Gutenberg inner
+that the eight it adds on a real theme are one pattern, Gutenberg inner
 blocks, which are meant to be echoed raw, and that is a weak reason to withhold
 the other eleven true positives it finds on labelled code.
 
@@ -1600,14 +1600,14 @@ the rest is code. No HTML escaper protects it.
     register_block_type( 'acme/card', array( 'render_callback' => 'acme_render' ) );
 
 `render_callback` appears in 110 files across the fifty-plugin corpus and 205
-across two real client projects. WordPress calls it and prints what it returns,
+across two real production codebases. WordPress calls it and prints what it returns,
 so there is no `echo` in the plugin for a rule to find, the shortcode problem
 exactly, so it reuses that machinery. Only the lookup is new: the callback
 arrives under an array key rather than in a positional argument.
 
 Its parameters are deliberately not seeded, unlike a shortcode's. A block's
 inner content is already-rendered markup meant to be printed as it is, and a
-real client theme echoes that value four times over.
+real theme echoes that value four times over.
 
 ### What is left
 
@@ -1691,7 +1691,7 @@ unresolved includes split into 272 pointing at WordPress core (out of scan by
 design), ~100 crude-classifier noise, 38 genuinely dynamic, and the real
 mechanical gaps were elsewhere.
 
-**Theme constant chains** were the loudest failure on real client themes, not
+**Theme constant chains** were the loudest failure on real themes, not
 plugins. `get_template_directory()` is a runtime question with a static answer
 whenever the calling file is itself inside a theme in the scan:
 
@@ -1700,7 +1700,7 @@ whenever the calling file is itself inside a theme in the scan:
     require_once ACME_THEME_INC . 'core.php';
 
 One fold connects the chain. ThemeRoots reads the `themes/<name>/` convention
-from the scanned file list, never the filesystem, and a client theme went from
+from the scanned file list, never the filesystem, and a real theme went from
 17 unresolved includes to 9, the recovered nine being its entire `includes/`
 tree. A plugin calling it resolves only when the scan holds exactly one theme.
 

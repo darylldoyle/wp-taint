@@ -17,7 +17,7 @@ the whole run.
   keeps rebuilt graphs only up to a memory budget.
 
 The budget defaults to 4GB of graph cache. A scan whose graphs fit runs as fast
-as today. The 17-tree client configuration drops from 7.97GB to about 5.5GB,
+as today. The 17-tree configuration drops from 7.97GB to about 5.5GB,
 and the 168-tree one from about 26GB to about 9GB. The cost is time: about 2.1
 times the run time on 17 trees, from rebuilding graphs the cache could not keep.
 
@@ -36,7 +36,7 @@ body analysis needs a function's graph each time the function is analysed, and
 the fixed point analyses functions over several rounds, so today's design keeps
 them all.
 
-Measured on a client scan: 1,337 scanned files and 4 reference trees, 3,708
+Measured on a production scan: about 1,300 scanned files and 4 reference trees, 3,708
 files in total.
 
 | | Heap |
@@ -56,9 +56,9 @@ Memory grows with the number of files:
 
 | Configuration | Files | Peak |
 |---|---|---|
-| Client benchmark, 4 reference trees | 3,708 | 2.45GB, measured |
-| Client scan, 17 reference trees | 19,008 | 7.97GB, measured |
-| Client scan, 168 reference trees | 63,651 | about 26GB, projected |
+| Benchmark, 4 reference trees | 3,708 | 2.45GB, measured |
+| Production scan, 17 reference trees | 19,008 | 7.97GB, measured |
+| Production scan, 168 reference trees | 63,651 | about 26GB, projected |
 
 The last row is the case that motivated this. It does not fit in a 32GB
 machine with anything else running.
@@ -236,7 +236,7 @@ did: a comparison tool, and a test that forces a rebuild of every function.
 Resident memory becomes a floor, which is the function metadata and the shared
 tables, plus the graph cache, which the budget caps.
 
-The floor was measured on the 17-tree client configuration: 19,008 files and
+The floor was measured on the 17-tree configuration: 19,008 files and
 130,761 functions. The indexes and metadata held before resolution take about
 0.3GB. The shared tables take about 1.2GB in memory, which is about 8.5 times
 their serialised size of 130MB. The floor for the 168-tree configuration is
@@ -244,7 +244,7 @@ projected by function count, at 438,073 functions, 3.35 times as many.
 
 | Configuration | Graphs | Floor | Today's peak | With a 4GB budget |
 |---|---|---|---|---|
-| Client benchmark | 2.3GB | about 0.2GB | 2.45GB | 2.45GB, everything fits |
+| Benchmark | 2.3GB | about 0.2GB | 2.45GB | 2.45GB, everything fits |
 | 17 reference trees | 6.2GB | about 1.5GB | 7.97GB, measured | about 5.5GB |
 | 168 reference trees | about 20.7GB | about 5GB | about 26GB | about 9GB |
 
@@ -335,7 +335,7 @@ make sense later only if the time cost of a small budget turns out to be too
 high in practice. They can be built on top of the first design, one function
 shape at a time.
 
-## What the first client run found
+## What the first production run found
 
 The first run of the 17-tree configuration at a 4GB budget took 1,430 seconds
 to parse the reference trees, against about 420 expected. PHP's cycle
@@ -378,11 +378,11 @@ rebuilding files took most of the rest.
 
 The cost came from functions declared in several files. Plugins bundle their
 own copies of libraries, and reference trees are scanned without excludes, so
-mpdf appeared three times. The resolver analyses all of a function's bodies
+one PDF library appeared three times. The resolver analyses all of a function's bodies
 together, and it fetched each body twice a round, once for the summary pass
 and once for the property pass, with one rebuilt file kept at a time. So a
 class of m methods copied into k uncached files cost 2km rebuilds a round,
-where k would do. For mpdf, whose main file is 961KB of source, each method
+where k would do. For that library, whose main file is 961KB of source, each method
 cost 55 to 94 seconds.
 
 Two changes fix it, and neither changes the order of work:
@@ -413,7 +413,7 @@ before the next begins.
    mode, and add `tools/compare-budget.php`, modelled on
    `tools/compare-incremental.php`, to compare a zero budget with no budget
    finding by finding.
-   - **Gate:** identical on all 50 corpus plugins and the client benchmark.
+   - **Gate:** identical on all 50 corpus plugins and the benchmark.
 3. **Stream pass 1.** Split setup into the three sweeps. Drop each file's graph
    and AST when its sweep is done.
    - **Gate:** identical, and pass 1's peak measured with `--debug-memory`.
@@ -422,7 +422,7 @@ before the next begins.
    its 4GB default. Add a line to `--debug-memory` showing the floor, cache
    hits and rebuilds.
    - **Gate:** identical at several budgets. Record memory and time for the
-     benchmark, and for the 17-tree and 168-tree client configurations.
+     benchmark, and for the 17-tree and 168-tree configurations.
 5. **Shrink the floor.** Share one `TaintSet` instance per distinct value.
    `TaintSet` is an immutable object around one integer, and the tables hold a
    great many of them. Then measure which parts of the summaries remain

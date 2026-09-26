@@ -721,7 +721,7 @@ Three folds carry most of what used to fail:
   `get_stylesheet_directory()` fold to the theme the calling file is in, read
   from the `themes/<name>/` convention in the scanned file list. Themes hang
   their constant chains off these, `define( 'ACME_INC', get_template_directory()
-  . '/includes/' )`, so one fold connects the chain. A real client theme went
+  . '/includes/' )`, so one fold connects the chain. A real theme went
   from 17 unresolved includes to 9, the nine being its own `includes/` tree.
 - **Templated returns.** A helper returning `__DIR__ . "/views/$view"` called
   with a literal folds exactly; every return must produce the same template, and
@@ -1401,7 +1401,7 @@ on everything is a cache that misses whenever anything moves, and one that can
 go stale on a security tool is worse than none.
 
 It was removed rather than fixed. A scan is fast enough not to need it: 926
-files in 15 seconds on a real client theme.
+files in 15 seconds on a real theme.
 
 ### `--jobs` needs `pcntl`
 

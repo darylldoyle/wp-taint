@@ -1021,7 +1021,7 @@ no other context.
   "schemaVersion": "1.0",
   "tool": { "name": "wp-taint", "version": "0.1.0" },
   "scan": {
-    "root": "/Users/dd/Sites/client-plugin",
+    "root": "/Users/dd/Sites/acme-plugin",
     "registries": ["php-core", "wordpress"],
     "filesScanned": 412,
     "filesFailedToParse": 1,

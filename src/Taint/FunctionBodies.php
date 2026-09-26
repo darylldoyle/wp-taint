@@ -35,8 +35,8 @@ use PHPCfg\Func;
  * function declared in several files, a library several plugins each bundle,
  * has a body in each of them. With one transient file, every body of every
  * method of such a class rebuilt its file, twice: a class of m methods copied
- * into k uncached files cost 2km rebuilds a round where k would do. On the
- * client's 168 reference trees, three bundled copies of mpdf cost 55 to 94
+ * into k uncached files cost 2km rebuilds a round where k would do. On a site
+ * with 168 reference trees, three bundled copies of one PDF library cost 55 to 94
  * seconds a method, for hundreds of methods.
  *
  * So while the resolver works through one file's functions, every file rebuilt
@@ -309,7 +309,7 @@ final class FunctionBodies
      * is admitted however full the cache is: that let a 512MB cache hold more
      * than a gigabyte. Turning the collector off for the build is worse, since
      * cycles that arrive while it is off can never be collected. The factors
-     * are measured: across the 17-tree client configuration's 19,008 files, a
+     * are measured: across one 17-tree configuration's 19,008 files, a
      * graph with its AST released holds about 60 times its source, and the AST
      * adds about as much again as 40 of those.
      */

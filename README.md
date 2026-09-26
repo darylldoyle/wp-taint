@@ -293,12 +293,12 @@ produces the same findings, which is enforced by a test rather than hoped for.
 A finding's trace can differ; see
 [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md#the-trace-shown-can-depend-on-the-order-of-analysis).
 
-A first-party plugin or theme is a much smaller unit than any of these: a client
-theme of 926 files scans in 15 seconds.
+A first-party plugin or theme is a much smaller unit than any of these: a
+production theme of 926 files scans in 15 seconds.
 
 Memory is the real constraint. `bin/wp-taint` raises the limit to 2 GB, which
 covers everything in the WordPress.org top fifty except WooCommerce; for a tree
-that size set `WP_TAINT_MEMORY_LIMIT=4G`. A client site with many reference
+that size set `WP_TAINT_MEMORY_LIMIT=4G`. A site with many reference
 trees needs 8GB or more. See
 [Scan a large site](docs/scanning-a-wordpress-project.md#scan-a-large-site).
 

@@ -19,7 +19,7 @@ use PHPCfg\Operand;
  * file shows the whole of what differs.
  *
  * It exists because upstream's replaceVariables() re-walks the function for
- * every phi it removes. On the client scan that prompted this, the simplifier
+ * every phi it removes. On the production scan that prompted this, the simplifier
  * was 117 seconds of a 145-second parse. The graphs it produces are compared
  * against upstream's by `tools/compare-simplifier.php`, which must report no
  * difference over the corpus before this is changed.
@@ -219,7 +219,7 @@ final class Simplifier extends AbstractVisitor
      * Upstream walks every block reachable from the phi's block and visits
      * every op in them, once per trivial phi removed. That is phi count times
      * op count, and on real WordPress files it was most of the parse time:
-     * 89 million calls to replaceOpVariable() over 1,337 files.
+     * 89 million calls to replaceOpVariable() over about 1,300 files.
      *
      * The operand already lists the ops that read and write it, so only those
      * are visited. Restricted to ops in live blocks, which is what the walk
