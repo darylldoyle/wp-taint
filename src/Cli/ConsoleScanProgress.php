@@ -141,6 +141,11 @@ final class ConsoleScanProgress implements ScanProgress
         $this->output->write(sprintf("\r\033[K  %s… round %d", $this->label, $this->done));
     }
 
+    public function note(string $message): void
+    {
+        // A figure for someone debugging memory, not for the progress bar.
+    }
+
     public function finish(): void
     {
         $this->clear();

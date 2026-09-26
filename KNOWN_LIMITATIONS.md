@@ -107,6 +107,7 @@ badge:
 | [Six constructs are rewritten before analysis](#six-modern-constructs-are-lowered-before-analysis) | Neither |
 | [No result cache](#there-is-no-result-cache) | Neither |
 | [`--jobs` needs `pcntl`](#--jobs-needs-pcntl) | Neither |
+| [The trace shown can depend on the order of analysis](#the-trace-shown-can-depend-on-the-order-of-analysis) | Neither |
 
 **Not implemented**
 
@@ -1370,8 +1371,10 @@ Naturally. If a plugin builds PHP at runtime, whatever it builds is invisible.
 
 ### Analysis is whole-program, and a plugin is the natural unit
 
-Interprocedural taint crosses files, so every file in the scan is parsed and
-held in memory before any analysis runs. Scanning several unrelated plugins as a
+Interprocedural taint crosses files, so every file in the scan is parsed before
+any analysis runs. What the analysis learns from each file stays in memory, and
+so do up to `--memory-budget` of the parsed files; any other file is parsed
+again when it is needed. Scanning several unrelated plugins as a
 single program is neither realistic nor cheap, point wp-taint at one plugin or
 theme at a time.
 
@@ -1404,12 +1407,31 @@ files in 15 seconds on a real client theme.
 
 Parallelism forks after parsing, so children inherit the parsed CFGs through
 copy-on-write. Without the `pcntl` extension, which is CLI-only and absent on
-some hosts, `--jobs` silently falls back to serial. The output is identical
-either way; only the wall clock changes.
+some hosts, `--jobs` silently falls back to serial. The findings are identical
+either way. A finding's trace can differ, as the next section explains.
 
 Parsing stays serial: it is the phase that builds the shared function table, and
 it is cheap relative to the analysis. Expect roughly a 2x improvement rather
 than a linear one.
+
+### The trace shown can depend on the order of analysis
+
+A finding's trace is one path the taint took. When a stored value, a property or
+an option, is written in several places, the engine keeps one trace for it: the
+one with the smallest signature among every trace offered for it while the scan
+ran. Some traces are offered in an early round, before the analysis has settled.
+So which trace wins can depend on the order functions were analysed in, and
+that order changes with `--jobs`.
+
+Measured over the 50-plugin corpus, `--jobs=4` shows a different trace from
+`--jobs=1` for 10 findings in 4 plugins. The findings are the same: rule,
+severity, location and fingerprint all match, so a baseline is unaffected. Each
+trace shown is a real path. It may not be the most direct one. In
+wp-fastest-cache, one order shows an option read back and written again, and
+another shows the `$_POST` value that reaches it first.
+
+The kinds printed on a trace step can lag behind the finding's for the same
+reason: they are the kinds the step carried when its trace was first offered.
 
 ## Not implemented
 

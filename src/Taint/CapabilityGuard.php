@@ -85,8 +85,8 @@ final class CapabilityGuard
     /** How far to walk from a helper before giving up, matching the authorization rules. */
     private const MAX_DEPTH = 6;
 
-    /** @var SplObjectStorage<Block, SplObjectStorage<Block, true>>|null dominators, per function */
-    private ?SplObjectStorage $dominators = null;
+    /** Dominators, per function. */
+    private ?BlockDominators $dominators = null;
 
     /** @var SplObjectStorage<Op, Block>|null the block each op of the current function sits in */
     private ?SplObjectStorage $blockOf = null;
@@ -107,7 +107,7 @@ final class CapabilityGuard
      */
     public function forFunction(array $blocks): void
     {
-        $this->dominators = $blocks === [] ? null : BlockDominators::compute($blocks);
+        $this->dominators = BlockDominators::compute($blocks);
         $this->blockOf = new SplObjectStorage();
 
         foreach ($blocks as $block) {
@@ -128,7 +128,7 @@ final class CapabilityGuard
      */
     public function isEntitled(?Block $block): bool
     {
-        if ($block === null || $this->dominators === null || ! $this->dominators->contains($block)) {
+        if ($block === null || $this->dominators === null || ! $this->dominators->covers($block)) {
             return false;
         }
 
@@ -156,8 +156,7 @@ final class CapabilityGuard
             return false;
         }
 
-        /** @var SplObjectStorage<Block, true> $dominating */
-        $dominating = $this->dominators[$block];
+        $dominating = $this->dominators->of($block);
 
         foreach ($dominating as $candidate) {
             foreach ($candidate->parents as $parent) {
@@ -295,14 +294,13 @@ final class CapabilityGuard
      */
     private function isProvenError(Operand $value, Block $block): bool
     {
-        if ($this->dominators === null || ! $this->dominators->contains($block)) {
+        if ($this->dominators === null || ! $this->dominators->covers($block)) {
             return false;
         }
 
         $name = OperandHelper::variableName($value);
 
-        /** @var SplObjectStorage<Block, true> $dominating */
-        $dominating = $this->dominators[$block];
+        $dominating = $this->dominators->of($block);
 
         foreach ($dominating as $candidate) {
             foreach ($candidate->parents as $parent) {

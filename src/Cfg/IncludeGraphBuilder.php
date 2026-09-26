@@ -34,9 +34,9 @@ final class IncludeGraphBuilder
     }
 
     /**
-     * @param list<FunctionContext> $contexts
+     * @param iterable<FunctionContext> $contexts
      */
-    public function build(array $contexts): IncludeGraph
+    public function build(iterable $contexts): IncludeGraph
     {
         $graph = new IncludeGraph();
 

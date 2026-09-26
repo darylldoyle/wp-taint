@@ -28,6 +28,6 @@ it('reports each phase when the next one starts, and each round of the fixed poi
     expect($lines[4])->toStartWith('[memory] total ');
 
     foreach (array_slice($lines, 0, 4) as $line) {
-        expect($line)->toMatch('/heap +[\d,]+MB  peak +[\d,]+MB$/');
+        expect($line)->toMatch('/heap +[\d,]+MB  peak +[\d,]+MB  gc +[\d.]+s$/');
     }
 });

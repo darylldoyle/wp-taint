@@ -262,3 +262,42 @@ it('rejects a malformed explain location', function (): void {
     expect($result['exit'])->toBe(2);
     expect($result['stdout'] . $result['stderr'])->toContain('file.php:LINE');
 });
+
+it('takes its options from wp-taint.toml, and lets the command line override them', function (): void {
+    $directory = sys_get_temp_dir() . '/wp-taint-cli-' . bin2hex(random_bytes(6));
+    mkdir($directory, 0o755, true);
+    copy(projectRoot() . '/tests/Fixtures/vulnerable/xss-echo-direct.php', $directory . '/plugin.php');
+    file_put_contents($directory . '/wp-taint.toml', <<<'TOML'
+        [scan]
+        paths = ["."]
+
+        [scan.options]
+        format = "json"
+        fail_on = "critical"
+        min_severity = "low"
+        jobs = 1
+        TOML);
+
+    try {
+        // A high finding: under the file's fail_on it does not fail the build.
+        $fromFile = runCli(['scan', '--config=' . $directory . '/wp-taint.toml']);
+
+        expect($fromFile['exit'])->toBe(0);
+        expect(json_decode($fromFile['stdout'], true))->toBeArray();
+
+        $overridden = runCli([
+            'scan',
+            '--config=' . $directory . '/wp-taint.toml',
+            '--format=console',
+            '--fail-on=high',
+        ]);
+
+        expect($overridden['exit'])->toBe(1);
+        expect(json_decode($overridden['stdout'], true))->toBeNull();
+        expect($overridden['stdout'])->toContain('wp.xss.unescaped-output');
+    } finally {
+        unlink($directory . '/plugin.php');
+        unlink($directory . '/wp-taint.toml');
+        rmdir($directory);
+    }
+});

@@ -67,11 +67,16 @@ final class InterproceduralResolver
          * round per level of a call chain.
          */
         private readonly ?CallGraph $callGraph = null,
+        /**
+         * Where a function's body comes from, when it is analysed. Every other
+         * step works on {@see FunctionMeta} and never holds a body.
+         */
+        private readonly ?FunctionBodies $bodies = null,
     ) {
     }
 
     /**
-     * @param list<FunctionContext> $functions
+     * @param list<FunctionMeta|FunctionContext> $functions
      *
      * @return array{summaries: SummaryTable, properties: PropertyTaintMap, scopes: ScopeTable, rounds: int,
      *     converged: bool}
@@ -223,7 +228,7 @@ final class InterproceduralResolver
     /**
      * One round over one shard of the function list.
      *
-     * @param list<FunctionContext> $ordered
+     * @param list<FunctionMeta|FunctionContext> $ordered
      *
      * @param array<string, true>|null        $dirty   the functions to analyse, or null for all of them
      * @param array<string, list<string>>     $readers ReadLog entry => the functions that read it last time
@@ -302,7 +307,17 @@ final class InterproceduralResolver
             $summary = null;
             $log->begin($key);
 
-            foreach ($group as $context) {
+            // Every body of the group, fetched once for both passes below.
+            // Fetching each again for the second pass rebuilt every file the
+            // cache does not hold, twice per group. The groups are in order of
+            // the file that declares them first, so a class several plugins
+            // bundle has its methods' groups back to back, and the pool keeps
+            // the other copies' files while they run. An unbudgeted scan hands
+            // out the same body object every time already.
+            $this->bodies?->retainFor($group[0] instanceof FunctionMeta ? $group[0]->path : null);
+            $contexts = array_map($this->body(...), $group);
+
+            foreach ($contexts as $context) {
                 $extracted = $this->extractor->extract($context, $visible, $roundProperties, $roundScopes);
                 $summary = $summary === null ? $extracted : $summary->union($extracted);
             }
@@ -323,13 +338,16 @@ final class InterproceduralResolver
                 }
             }
 
-            foreach ($group as $context) {
+            foreach ($contexts as $context) {
                 // A pass with no parameter seeded, purely so property writes in
                 // the body land in the map. Findings are discarded.
                 $this->analyzer->analyze($context, $visible, $roundProperties, $roundScopes, null, false);
             }
         }
 
+        // The pool serves the fixed point only. The findings pass walks files
+        // in order and needs no more than the one transient file.
+        $this->bodies?->retainFor(null);
         $log->reader = null;
 
         // The log is this worker's, and would otherwise travel back to the
@@ -343,6 +361,28 @@ final class InterproceduralResolver
             'scopes' => $roundScopes,
             'reads' => $log->all(),
         ];
+    }
+
+    private static function isMain(FunctionMeta|FunctionContext $function): bool
+    {
+        return $function instanceof FunctionMeta ? $function->isMain : $function->isMain();
+    }
+
+    /**
+     * The body to analyse: the context itself, or the body the provider holds
+     * for this function.
+     */
+    private function body(FunctionMeta|FunctionContext $function): FunctionContext
+    {
+        if ($function instanceof FunctionContext) {
+            return $function;
+        }
+
+        if ($this->bodies === null) {
+            throw new \LogicException('A function given as metadata needs a body provider.');
+        }
+
+        return $this->bodies->context($function);
     }
 
     /**
@@ -383,17 +423,17 @@ final class InterproceduralResolver
      * Everything is visited in key order, so the result is deterministic, which
      * the round sharding depends on.
      *
-     * @param list<FunctionContext> $functions
+     * @param list<FunctionMeta|FunctionContext> $functions
      *
-     * @return list<FunctionContext>
+     * @return list<FunctionMeta|FunctionContext>
      */
     private static function callOrder(array $functions, ?CallGraph $callGraph): array
     {
         $ordered = $functions;
 
-        usort($ordered, static function (FunctionContext $a, FunctionContext $b): int {
+        usort($ordered, static function (FunctionMeta|FunctionContext $a, FunctionMeta|FunctionContext $b): int {
             // `{main}` bodies call into everything else, so they go last.
-            $mainOrder = ($a->isMain() ? 1 : 0) <=> ($b->isMain() ? 1 : 0);
+            $mainOrder = (self::isMain($a) ? 1 : 0) <=> (self::isMain($b) ? 1 : 0);
 
             if ($mainOrder !== 0) {
                 return $mainOrder;
@@ -406,7 +446,7 @@ final class InterproceduralResolver
             return $ordered;
         }
 
-        /** @var array<string, list<FunctionContext>> $byKey */
+        /** @var array<string, list<FunctionMeta|FunctionContext>> $byKey */
         $byKey = [];
 
         foreach ($ordered as $context) {
@@ -416,7 +456,9 @@ final class InterproceduralResolver
         $rank = array_flip(array_keys($byKey));
         $result = [];
 
-        foreach (self::componentsCalleesFirst(array_keys($byKey), $callGraph) as $component) {
+        $calls = static fn (string $key): array => $callGraph->calleesOf($key);
+
+        foreach (self::componentsCalleesFirst(array_keys($byKey), $calls) as $component) {
             usort($component, static fn (string $a, string $b): int => ($rank[$a] ?? 0) <=> ($rank[$b] ?? 0));
 
             foreach ($component as $key) {
@@ -426,7 +468,83 @@ final class InterproceduralResolver
             }
         }
 
+        return self::groupedByFile($result, $byKey, $calls);
+    }
+
+    /**
+     * The same order, with each file's functions together.
+     *
+     * A body is analysed from its file's graph, and a graph the memory budget
+     * cannot hold is rebuilt when it is needed. In callees-first order a round
+     * moves from file to file and back, rebuilding the same file many times.
+     * So files are ordered callees first by the file-level call graph, and
+     * each file's functions keep their callees-first order inside it: a round
+     * then builds each file at most once. The fixed point is the same whatever
+     * the order, because the transfer functions are monotone; only the number
+     * of rounds it takes can change. A function declared in several files
+     * stays with the first, as its group is analysed together.
+     *
+     * @param list<FunctionMeta|FunctionContext>                $ordered
+     * @param array<string, list<FunctionMeta|FunctionContext>> $byKey
+     * @param callable(string): list<string>                    $calls
+     *
+     * @return list<FunctionMeta|FunctionContext>
+     */
+    private static function groupedByFile(array $ordered, array $byKey, callable $calls): array
+    {
+        /** @var array<string, string> $fileOf function key => the file its group is analysed from */
+        $fileOf = [];
+
+        /** @var array<string, list<string>> $keysIn file => its function keys, in callees-first order */
+        $keysIn = [];
+
+        foreach ($ordered as $function) {
+            if (isset($fileOf[$function->key])) {
+                continue;
+            }
+
+            $file = self::fileOf($function);
+            $fileOf[$function->key] = $file;
+            $keysIn[$file][] = $function->key;
+        }
+
+        $calledFiles = static function (string $file) use ($keysIn, $fileOf, $calls): array {
+            $files = [];
+
+            foreach ($keysIn[$file] ?? [] as $key) {
+                foreach ($calls($key) as $callee) {
+                    $target = $fileOf[$callee] ?? null;
+
+                    if ($target !== null && $target !== $file) {
+                        $files[$target] = true;
+                    }
+                }
+            }
+
+            return array_keys($files);
+        };
+
+        $rank = array_flip(array_keys($keysIn));
+        $result = [];
+
+        foreach (self::componentsCalleesFirst(array_keys($keysIn), $calledFiles) as $component) {
+            usort($component, static fn (string $a, string $b): int => ($rank[$a] ?? 0) <=> ($rank[$b] ?? 0));
+
+            foreach ($component as $file) {
+                foreach ($keysIn[$file] ?? [] as $key) {
+                    foreach ($byKey[$key] ?? [] as $function) {
+                        $result[] = $function;
+                    }
+                }
+            }
+        }
+
         return $result;
+    }
+
+    private static function fileOf(FunctionMeta|FunctionContext $function): string
+    {
+        return $function instanceof FunctionMeta ? $function->relativePath : $function->file->relativePath;
     }
 
     /**
@@ -434,11 +552,12 @@ final class InterproceduralResolver
      * deep PHP stack. Components come out callees first, which is the order
      * Tarjan emits them in.
      *
-     * @param list<string> $keys
+     * @param list<string>                   $keys
+     * @param callable(string): list<string> $calleesOf
      *
      * @return list<list<string>>
      */
-    private static function componentsCalleesFirst(array $keys, CallGraph $callGraph): array
+    private static function componentsCalleesFirst(array $keys, callable $calleesOf): array
     {
         $known = array_flip($keys);
         $index = [];
@@ -454,7 +573,7 @@ final class InterproceduralResolver
             }
 
             /** @var list<array{0: string, 1: list<string>, 2: int}> $work key, callees, next callee position */
-            $work = [[$root, self::knownCallees($root, $callGraph, $known), 0]];
+            $work = [[$root, self::knownCallees($root, $calleesOf, $known), 0]];
             $index[$root] = $low[$root] = $next++;
             $stack[] = $root;
             $onStack[$root] = true;
@@ -472,7 +591,7 @@ final class InterproceduralResolver
                         $index[$callee] = $low[$callee] = $next++;
                         $stack[] = $callee;
                         $onStack[$callee] = true;
-                        $work[] = [$callee, self::knownCallees($callee, $callGraph, $known), 0];
+                        $work[] = [$callee, self::knownCallees($callee, $calleesOf, $known), 0];
                     } elseif (isset($onStack[$callee])) {
                         $low[$key] = min($low[$key] ?? 0, $index[$callee]);
                     }
@@ -512,14 +631,15 @@ final class InterproceduralResolver
     }
 
     /**
-     * @param array<string, int> $known
+     * @param callable(string): list<string> $calleesOf
+     * @param array<string, int>              $known
      *
      * @return list<string>
      */
-    private static function knownCallees(string $key, CallGraph $callGraph, array $known): array
+    private static function knownCallees(string $key, callable $calleesOf, array $known): array
     {
         $callees = array_values(array_unique(array_filter(
-            $callGraph->calleesOf($key),
+            $calleesOf($key),
             static fn (string $callee): bool => isset($known[$callee]),
         )));
         sort($callees);

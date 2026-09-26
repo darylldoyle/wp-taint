@@ -63,7 +63,11 @@ final class ScanCommand extends Command
                 InputOption::VALUE_REQUIRED,
                 'Project config file (defaults to ./wp-taint.toml if present)',
             )
-            ->addOption('format', null, InputOption::VALUE_REQUIRED, 'console, json or sarif', 'console')
+            // No Symfony defaults on the options wp-taint.toml can also set.
+            // A default makes the option always present, so the command line
+            // won every time and the config file's value was never read. The
+            // defaults live in buildConfiguration() instead, after the config.
+            ->addOption('format', null, InputOption::VALUE_REQUIRED, 'console, json or sarif [default: "console"]')
             ->addOption('output', 'o', InputOption::VALUE_REQUIRED, 'Write the report to a file instead of stdout')
             ->addOption('baseline', null, InputOption::VALUE_REQUIRED, 'Suppress findings listed in this baseline file')
             ->addOption(
@@ -77,15 +81,13 @@ final class ScanCommand extends Command
                 'min-severity',
                 null,
                 InputOption::VALUE_REQUIRED,
-                'notice, low, medium, high or critical',
-                'low',
+                'notice, low, medium, high or critical [default: "low"]',
             )
             ->addOption(
                 'fail-on',
                 null,
                 InputOption::VALUE_REQUIRED,
-                'Exit 1 at or above this severity, or "never"',
-                'high',
+                'Exit 1 at or above this severity, or "never" [default: "high"]',
             )
             ->addOption(
                 'no-interprocedural',
@@ -168,7 +170,14 @@ final class ScanCommand extends Command
                 'Write a GraphViz dot file of the taint graph',
             )
             ->addOption('trace-full', null, InputOption::VALUE_NONE, 'Never collapse the middle of a long trace')
-            ->addOption('jobs', 'j', InputOption::VALUE_REQUIRED, 'Number of worker processes', '1')
+            ->addOption('jobs', 'j', InputOption::VALUE_REQUIRED, 'Number of worker processes [default: 1]')
+            ->addOption(
+                'memory-budget',
+                null,
+                InputOption::VALUE_REQUIRED,
+                'Memory for held control flow graphs, such as 512M; any other graph is rebuilt when needed. '
+                    . '"unlimited" holds every graph [default: "4G"]',
+            )
             ->addOption(
                 'debug-memory',
                 null,
@@ -256,15 +265,13 @@ final class ScanCommand extends Command
 
         $invocation = $argv === [] ? 'wp-taint scan …' : implode(' ', $argv);
 
-        $handler = static function () use ($stderr, $invocation): void {
+        $advice = self::outOfMemoryAdvice($configuration->memoryBudget, $invocation);
+
+        $handler = static function () use ($stderr, $advice): void {
             $error = error_get_last();
 
             if ($error !== null && str_contains($error['message'], 'Allowed memory size')) {
-                $stderr->writeln(sprintf(
-                    "\n<error>Ran out of memory. Re-run with a higher limit, for example:\n"
-                        . '  WP_TAINT_MEMORY_LIMIT=6G %s</error>',
-                    $invocation,
-                ));
+                $stderr->writeln("\n<error>" . $advice . '</error>');
             }
         };
         register_shutdown_function($handler);
@@ -353,6 +360,40 @@ final class ScanCommand extends Command
             ! $reader->bool('no-structural-rules'),
             $reader->int('jobs', $project->jobs ?? 1),
             honorPhpcsSuppressions: ! $reader->bool('no-phpcs-suppressions'),
+            memoryBudget: $reader->nullableString('memory-budget') ?? $project->memoryBudget,
+        );
+    }
+
+    /**
+     * What to try after running out of memory, worked out before the scan
+     * starts, while there is memory to work it out with.
+     *
+     * It used to suggest a fixed 6G, which told a scan that died at 12G to try
+     * half as much. It now doubles the limit the scan had, and offers the
+     * slower alternative that needs no more memory: holding fewer parsed files.
+     */
+    private static function outOfMemoryAdvice(?int $budget, string $invocation): string
+    {
+        $limit = (string) ini_get('memory_limit');
+
+        try {
+            $bytes = ScanConfiguration::memoryBudget($limit);
+        } catch (InvalidArgumentException) {
+            $bytes = null;
+        }
+
+        $gigabyte = 1024 * 1024 * 1024;
+        $raised = max(4, (int) ceil(2 * ($bytes ?? 2 * $gigabyte) / $gigabyte));
+        $lowered = $budget === null ? '4G' : max(256, intdiv($budget, 2 * 1024 * 1024)) . 'M';
+
+        return sprintf(
+            "Ran out of memory at a %s limit. Re-run with a higher limit:\n"
+                . "  WP_TAINT_MEMORY_LIMIT=%dG %s\n"
+                . 'or hold fewer parsed files, which is slower but needs less memory: add --memory-budget=%s',
+            $limit,
+            $raised,
+            $invocation,
+            $lowered,
         );
     }
 

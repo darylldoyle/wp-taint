@@ -9,6 +9,16 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `--memory-budget` and the `memory_budget` project option cap the memory held
+  by parsed files, at 4GB by default. The scan used to hold every file's control
+  flow graph from parsing to the end. It now keeps a table of what each function
+  is, and up to the budget of parsed files. A file it cannot hold is parsed again
+  whenever one of its functions is needed. That costs time and changes no
+  finding. `unlimited` holds every file, as before. `--debug-memory` reports how
+  much the cache holds and how many files it rebuilt.
+  See docs/design/two-pass-engine.md.
+- `tools/compare-budget.php` scans each target with no budget and with one, and
+  reports any difference in findings, traces or warnings.
 - `--debug-memory` prints PHP's heap in use, the peak so far and the elapsed
   time at every phase and every fixed-point round, in place of the progress
   bar. The operating system's figures are no use for this on macOS, which
@@ -105,6 +115,25 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A function with thousands of blocks could take gigabytes of memory for its
+  dominators alone. The algorithm starts with every block dominating every
+  block, and held that as object sets, so a function of n blocks began with n²
+  entries. A generated theme file in a client's reference trees had a function
+  of 7,910 blocks: about 63 million entries, over 4GB, which ran the scan out
+  of memory at an 8GB limit and at a 12GB one. The sets are now bit words, and
+  the callers read them without building objects. Every dominator set across
+  422,874 functions in 168 reference trees matches the old algorithm's, and the
+  three largest functions take 0.9 seconds instead of 11.
+- The out-of-memory message always suggested `WP_TAINT_MEMORY_LIMIT=6G`, so a
+  scan that died at 12G was told to try half as much. It now suggests double
+  the limit the scan had, or a lower `--memory-budget`, which needs less memory
+  and takes longer.
+- `format`, `fail_on`, `min_severity` and `jobs` under `[scan.options]` in
+  `wp-taint.toml` were ignored. Each matching command-line option had a
+  built-in default, so it always counted as given and always won. A config
+  asking for `format = "json"` produced console output, and `fail_on =
+  "critical"` still failed the build at `high`. The config file's values now
+  apply, and an option given on the command line still overrides them.
 - `$request['id']` is read as the REST parameter it is. `WP_REST_Request`
   implements ArrayAccess over its parameters, and the array form was not a
   source at all, so the commonest way to read a REST parameter reached a sink
@@ -236,6 +265,35 @@ Further precision changes from corpus adjudication of the new attribute rule:
 
 ### Changed
 
+- A function declared in several files, such as a library several plugins
+  each bundle, no longer rebuilds every copy's file for every method. The
+  fixed point fetched each body twice per round, once per pass, and kept one
+  rebuilt file at a time, so a class of m methods copied into k files the
+  cache does not hold cost 2km rebuilds a round. Each body is now fetched once
+  a round, and an eighth of `--memory-budget` is a pool that keeps every file
+  rebuilt while one file's functions are analysed. On the client's 168
+  reference trees, three bundled copies of mpdf had cost 55 to 94 seconds per
+  method, for hundreds of methods. Findings are unchanged; `--debug-memory`
+  reports the pool's size.
+- The scan runs PHP's cycle collector itself, when the heap has grown by
+  1GB, instead of every time ten thousand possible roots gather. The
+  automatic collector walked the scan's live graphs over and over and freed
+  almost nothing: on the client configuration's reference trees it took 58 of
+  the first 85 seconds of parsing. Parsing jetpack went from 39 to 14 seconds.
+  Findings are unchanged. `--debug-memory` shows the collector's time for each
+  phase and round.
+- Each function's block dominators are computed once per analysis pair
+  instead of four times. The guard and capability checks both asked for them,
+  in both the summary pass and the property pass, and on a 40-tree scan that
+  was an eighth of the fixed point's time. Together with the 1GB collector
+  step, that scan went from about 1,100 to about 930 seconds with the same
+  findings.
+- Each round of the fixed point analyses functions grouped by file, with files
+  ordered callees first, so a round needs each file at most once. The findings
+  are unchanged. Over the 50-plugin corpus, 5 findings in 2 plugins show a
+  different trace, because the trace kept for a stored value can depend on the
+  order of analysis. `--jobs` already had the same effect. See
+  KNOWN_LIMITATIONS.md.
 - A REST route's `permission_callback` is credited by
   `wp.authz.object-id-from-request`. WordPress runs the route's callback only
   once the permission callback allows the request, so a callback whose

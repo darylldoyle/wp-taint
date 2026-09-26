@@ -78,7 +78,7 @@ final class CallableResolver
             }
         }
 
-        $closure = $this->closureBehind($callable);
+        $closure = $this->closureBehind($callable, $context);
 
         if ($closure !== null) {
             $targets[] = CallTarget::resolved($arguments, null, $closure->key, $closure->displayName . '()');
@@ -385,7 +385,7 @@ final class CallableResolver
      * resolves. Anything that leaves the chain — a parameter, a property, a
      * call result — stops the walk.
      */
-    public function closureBehind(Operand $operand, int $depth = 0): ?FunctionContext
+    public function closureBehind(Operand $operand, FunctionContext $in, int $depth = 0): ?FunctionMeta
     {
         if ($depth > 8) {
             return null;
@@ -394,11 +394,14 @@ final class CallableResolver
         $definition = OperandHelper::definingOp($operand);
 
         if ($definition instanceof Op\Expr\Assign) {
-            return $this->closureBehind($definition->expr, $depth + 1);
+            return $this->closureBehind($definition->expr, $in, $depth + 1);
         }
 
+        // A closure is declared in the body that holds the operand, so its key
+        // comes from that body's file. Found by key rather than by the `Func`
+        // object, which a rebuilt graph does not share.
         if ($definition instanceof Op\CallableOp) {
-            return $this->functions->forFunc($definition->getFunc());
+            return $this->functions->get(FunctionContext::keyFor($definition->getFunc(), $in->file));
         }
 
         return null;

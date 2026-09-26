@@ -28,7 +28,7 @@ Chronological, newest work last. Each row links to its section.
 | [Analysing WordPress core](#coverage-and-what-analysing-wordpress-core-breaks) | `--include-path`; core made `$wpdb->prefix` tainted and broke receiver resolution. |
 | [Per-key array taint](#per-key-array-taint) | Literal-keyed slots, so `echo $ctx['id']` is clean when `$ctx['title']` is tainted. |
 | [The corpus as a tracked number](#the-corpus-as-a-tracked-number) | Eight pinned plugins, serial scan, a CI baseline that fails on drift. |
-| [Determinism across `--jobs`](#determinism-across---jobs-again) | Lexicographically smallest trace signature, stable across worker counts. |
+| [Determinism across `--jobs`](#determinism-across---jobs-again) | Lexicographically smallest trace signature. Findings are stable across worker counts; a few traces are not. |
 | [Six false positive classes](#six-false-positive-classes) | The largest FP idioms and their root fixes, ordered by finding count. |
 | [Traces before and after](#what-the-traces-looked-like-before-and-after) | Property reads splice in the trace of the write that tainted them. |
 | [What was deliberately left alone](#what-was-deliberately-left-alone) | Real flows and author-suppressed lines that are not tool bugs. |
@@ -556,6 +556,12 @@ another sorts after it and so can never displace the one already chosen.
 Worth recording that the parallel test suite passed throughout. Its fixture was
 too small to split a property's writes across two shards, which is exactly the
 condition the bug needed.
+
+This fixed the Elementor case, but not every case. The smallest signature is
+taken over every trace ever offered, including traces offered in an early round,
+before the analysis settled. Which early traces exist depends on the order of
+analysis. Over the corpus, `--jobs=4` still changes 10 traces in 4 plugins. See
+[KNOWN_LIMITATIONS.md](../KNOWN_LIMITATIONS.md#the-trace-shown-can-depend-on-the-order-of-analysis).
 
 ## Six false positive classes
 

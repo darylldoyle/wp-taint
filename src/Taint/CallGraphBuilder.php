@@ -32,9 +32,9 @@ final class CallGraphBuilder
     }
 
     /**
-     * @param list<FunctionContext> $contexts
+     * @param iterable<FunctionContext> $contexts
      */
-    public function build(array $contexts): CallGraph
+    public function build(iterable $contexts): CallGraph
     {
         $graph = new CallGraph();
         $types = new ClassTypeMap();

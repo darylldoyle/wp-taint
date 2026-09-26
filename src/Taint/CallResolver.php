@@ -347,7 +347,7 @@ final class CallResolver
     public function resolve(Op $op, FunctionContext $context, ClassTypeMap $types): ?CallTarget
     {
         return match (true) {
-            $op instanceof Op\Expr\FuncCall => $this->resolveFunctionCall($op),
+            $op instanceof Op\Expr\FuncCall => $this->resolveFunctionCall($op, $context),
             $op instanceof Op\Expr\NsFuncCall => $this->resolveNamespacedCall($op),
             $op instanceof Op\Expr\MethodCall => $this->resolveMethodCall($op, $context, $types),
             $op instanceof Op\Expr\StaticCall => $this->resolveStaticCall($op, $context),
@@ -356,7 +356,7 @@ final class CallResolver
         };
     }
 
-    private function resolveFunctionCall(Op\Expr\FuncCall $op): CallTarget
+    private function resolveFunctionCall(Op\Expr\FuncCall $op, FunctionContext $context): CallTarget
     {
         $name = OperandHelper::literalString($op->name);
         $arguments = $this->arguments($op->args);
@@ -366,7 +366,7 @@ final class CallResolver
         }
 
         // `$render($x)` where `$render` holds a closure declared in this file.
-        $closure = $this->callables->closureBehind($op->name);
+        $closure = $this->callables->closureBehind($op->name, $context);
 
         if ($closure !== null) {
             return CallTarget::resolved($arguments, null, $closure->key, $closure->displayName . '()');
@@ -523,7 +523,7 @@ final class CallResolver
         $matching = [];
 
         foreach ($this->functions->methodsOf($class) as $method) {
-            $lower = strtolower($method->func->name);
+            $lower = strtolower($method->name);
 
             foreach ($prefixes === [] ? [''] : $prefixes as $prefix) {
                 if (str_starts_with($lower, $prefix)) {
@@ -538,13 +538,13 @@ final class CallResolver
     }
 
     /**
-     * @param list<FunctionContext> $contexts
+     * @param list<FunctionMeta> $functions
      *
      * @return list<string>
      */
-    private function keysOf(array $contexts): array
+    private function keysOf(array $functions): array
     {
-        return array_values(array_unique(array_map(static fn (FunctionContext $c): string => $c->key, $contexts)));
+        return array_values(array_unique(array_map(static fn (FunctionMeta $f): string => $f->key, $functions)));
     }
 
     /**

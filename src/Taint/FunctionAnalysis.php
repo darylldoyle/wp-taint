@@ -3611,12 +3611,12 @@ final class FunctionAnalysis
                 continue;
             }
 
-            foreach (array_values($method->func->params) as $index => $parameter) {
-                if (! $parameter instanceof Op\Expr\Param || ! $parameter->byRef) {
+            foreach ($method->parameters as $index => $parameter) {
+                if (! $parameter['byRef']) {
                     continue;
                 }
 
-                if (! $parameter->variadic) {
+                if (! $parameter['variadic']) {
                     $positions[$index] = true;
 
                     continue;

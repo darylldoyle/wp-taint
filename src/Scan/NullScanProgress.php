@@ -21,6 +21,10 @@ final class NullScanProgress implements ScanProgress
     {
     }
 
+    public function note(string $message): void
+    {
+    }
+
     public function finish(): void
     {
     }

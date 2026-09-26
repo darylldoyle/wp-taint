@@ -21,6 +21,7 @@ use Enshrined\WpTaint\Taint\AnalysisOptions;
 use Enshrined\WpTaint\Taint\CallableResolver;
 use Enshrined\WpTaint\Taint\CallResolver;
 use Enshrined\WpTaint\Taint\Explainer;
+use Enshrined\WpTaint\Taint\FunctionBodies;
 use Enshrined\WpTaint\Taint\FunctionContext;
 use Enshrined\WpTaint\Taint\InterproceduralResolver;
 use Enshrined\WpTaint\Taint\IntraproceduralAnalyzer;
@@ -162,6 +163,7 @@ final class ExplainCommand extends Command
 
         $builder = new CfgBuilder($root);
         $functions = new UserFunctionTable();
+        $bodies = new FunctionBodies();
         $target = null;
 
         foreach ((new FileFinder())->find([$scope]) as $candidate) {
@@ -180,6 +182,7 @@ final class ExplainCommand extends Command
 
             $parsed = $result->file();
             $functions->addFile($parsed);
+            $bodies->add($parsed);
 
             if (PathHelper::normalise($candidate) === PathHelper::normalise($file)) {
                 $target = $parsed;
@@ -196,7 +199,7 @@ final class ExplainCommand extends Command
             return ExitCode::ERROR;
         }
 
-        $contexts = $functions->all();
+        $contexts = $bodies->contexts($functions->all());
         $receivers = new ReceiverResolver($functions->declaredTypes());
         $themes = ThemeRoots::fromFiles(array_map(
             static fn (FunctionContext $context): string => $context->file->path,

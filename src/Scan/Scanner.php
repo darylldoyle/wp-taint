@@ -8,7 +8,6 @@ use Enshrined\WpTaint\Cfg\CfgBuilder;
 use Enshrined\WpTaint\Cfg\ConstantTableBuilder;
 use Enshrined\WpTaint\Cfg\IncludeGraphBuilder;
 use Enshrined\WpTaint\Cfg\IncludeResolver;
-use Enshrined\WpTaint\Cfg\ParsedFile;
 use Enshrined\WpTaint\Cfg\ParseError;
 use Enshrined\WpTaint\Cfg\ThemeRoots;
 use Enshrined\WpTaint\Finding\Finding;
@@ -28,15 +27,19 @@ use Enshrined\WpTaint\Rules\Wordpress\MissingRestPermissionCallback;
 use Enshrined\WpTaint\Rules\Wordpress\NonceWithoutAction;
 use Enshrined\WpTaint\Rules\Wordpress\SettingWithoutSanitizeCallback;
 use Enshrined\WpTaint\Rules\Wordpress\WrongContextEscape;
+use Enshrined\WpTaint\Support\CycleCollector;
 use Enshrined\WpTaint\Support\PathHelper;
 use Enshrined\WpTaint\Taint\AnalysisOptions;
 use Enshrined\WpTaint\Taint\AnalysisWarning;
+use Enshrined\WpTaint\Taint\BodySweep;
 use Enshrined\WpTaint\Taint\CallableResolver;
 use Enshrined\WpTaint\Taint\CallGraph;
 use Enshrined\WpTaint\Taint\CallGraphBuilder;
 use Enshrined\WpTaint\Taint\CallResolver;
 use Enshrined\WpTaint\Taint\CapabilityGuard;
+use Enshrined\WpTaint\Taint\FunctionBodies;
 use Enshrined\WpTaint\Taint\FunctionContext;
+use Enshrined\WpTaint\Taint\FunctionMeta;
 use Enshrined\WpTaint\Taint\InterproceduralResolver;
 use Enshrined\WpTaint\Taint\IntraproceduralAnalyzer;
 use Enshrined\WpTaint\Taint\ReceiverResolver;
@@ -105,6 +108,13 @@ final class Scanner
          * otherwise — see {@see NullScanProgress}.
          */
         private readonly ScanProgress $progress = new NullScanProgress(),
+        /**
+         * Bytes of parsed files the scan may hold, or null for no limit. A file
+         * it does not hold is rebuilt from source whenever it is needed again,
+         * which costs time and changes nothing else. Zero rebuilds every time,
+         * which is how the tests prove that. See {@see FunctionBodies}.
+         */
+        private readonly ?int $memoryBudget = null,
     ) {
         // Structural rules are pure AST shape checks over one file. They exist
         // for the bugs that are an absence — a missing capability check, a
@@ -130,52 +140,76 @@ final class Scanner
      */
     public function scan(array $files): ScanResult
     {
+        // PHP's own collector spends most of a large scan walking graphs that
+        // are still in use. This one collects when the heap has grown instead;
+        // see {@see CycleCollector}.
+        $collector = new CycleCollector();
+        $collector->start();
+
+        try {
+            return $this->scanFiles($files, $collector);
+        } finally {
+            $collector->stop();
+        }
+    }
+
+    /**
+     * @param list<string> $files
+     */
+    private function scanFiles(array $files, CycleCollector $collector): ScanResult
+    {
         $startedAt = hrtime(true);
 
         $builder = new CfgBuilder($this->root);
+        $functions = new UserFunctionTable();
 
-        /** @var list<ParsedFile> $parsed */
-        $parsed = [];
+        // Every body the scan analyses comes from here: held while the budget
+        // allows, rebuilt from source when it does not. Nothing else keeps a
+        // parsed file. See docs/design/two-pass-engine.md.
+        $bodies = new FunctionBodies($builder, $this->processBudget(), $collector);
+
+        /** @var list<string> $parsedPaths every file that parsed, scanned first, for the theme roots */
+        $parsedPaths = [];
+
+        /** @var list<string> $scannedPaths scanned files that parsed, for the structural rules */
+        $scannedPaths = [];
 
         /** @var list<ParseError> $parseErrors */
         $parseErrors = [];
 
+        $scanned = [];
+
+        // Each scanned file is indexed as soon as it is parsed, in the order
+        // the files were given, which is the order the symbol table saw them
+        // in when every file was parsed first and indexed afterwards.
         $this->progress->phase('Parsing', count($files));
 
         foreach ($files as $file) {
             $this->progress->advance();
             $result = $builder->buildFromFile($file);
 
-            if ($result->isSuccess()) {
-                $parsed[] = $result->file();
+            if (! $result->isSuccess()) {
+                // Never skipped, never swallowed. A file we cannot read is a
+                // reported error and sets exit code 2.
+                $parseErrors[] = $result->error();
 
                 continue;
             }
 
-            // Never skipped, never swallowed. A file we cannot read is a
-            // reported error and sets exit code 2.
-            $parseErrors[] = $result->error();
-        }
+            $parsedFile = $result->file();
+            $functions->addFile($parsedFile);
+            $parsedPaths[] = $parsedFile->path;
+            $scannedPaths[] = $parsedFile->path;
+            $scanned[$parsedFile->relativePath] = true;
 
-        // Indexed before the reference trees are parsed, so the symbol table
-        // sees the scanned files first, exactly as it did when everything was
-        // parsed and then indexed in one list.
-        $this->progress->phase('Indexing symbols', count($parsed));
-        $functions = new UserFunctionTable();
-
-        foreach ($parsed as $file) {
-            $this->progress->advance();
-            $functions->addFile($file);
+            // Offered with its AST, which the structural rules read later. A
+            // file the budget cannot hold is rebuilt for them then.
+            $bodies->add($parsedFile);
         }
 
         // Reference trees, parsed after the real ones so a file appearing in
         // both is analysed as the user's own.
         $referenceParseFailures = 0;
-        $scanned = [];
-
-        foreach ($parsed as $file) {
-            $scanned[$file->relativePath] = true;
-        }
 
         /** @var array<string, true> $reference */
         $reference = [];
@@ -196,6 +230,7 @@ final class Scanner
 
         foreach ($referenceFiles as $file) {
             $this->progress->advance();
+
             $result = $builder->buildFromFile($file);
 
             // A reference tree is context, not a deliverable. A file in it that
@@ -211,14 +246,17 @@ final class Scanner
             // Indexed and stripped of its AST straight away. Indexing is the
             // only thing that reads a reference file's AST, since structural
             // rules skip reference trees, and the AST is about 40% of a parsed
-            // file. Holding every one until the structural rules ran put them
-            // all in memory at the peak for nothing.
-            $functions->addFile($result->file());
-            $result->file()->releaseAst();
+            // file.
+            $parsedFile = $result->file();
+            $functions->addFile($parsedFile);
+            $parsedFile->releaseAst();
+            $bodies->add($parsedFile);
 
-            $parsed[] = $result->file();
-            $reference[$result->file()->relativePath] = true;
+            $parsedPaths[] = $parsedFile->path;
+            $reference[$parsedFile->relativePath] = true;
         }
+
+        unset($result, $parsedFile);
 
         $ruleContext = new RuleContext();
 
@@ -226,7 +264,12 @@ final class Scanner
         $findings = [];
 
         $receivers = new ReceiverResolver($functions->declaredTypes());
-        $contexts = $functions->all();
+        $metas = $functions->all();
+
+        // The builders below each walk every function once, or twice for the
+        // constants. Each walk is a sweep: a body the budget does not hold is
+        // rebuilt when reached, and each file at most once per sweep.
+        $contexts = new BodySweep($bodies, $metas);
 
         // Constants first: WordPress builds include paths out of them and
         // almost nothing else, so resolution stops dead without this, and
@@ -235,7 +278,7 @@ final class Scanner
         // the constant chains themes hang off it fold. From the scanned file
         // list, reference trees included — a theme referenced for context still
         // answers the question for its own files.
-        $themes = ThemeRoots::fromFiles(array_map(static fn (ParsedFile $file): string => $file->path, $parsed));
+        $themes = ThemeRoots::fromFiles($parsedPaths);
 
         $static = (new ConstantTableBuilder(new ValueResolver(themes: $themes)))->buildBoth($contexts);
         $values = (new ValueResolver(themes: $themes))->withConstants($static['constants'], $static['returns']);
@@ -271,25 +314,27 @@ final class Scanner
             );
         }
 
-        $this->progress->phase('Structural rules', count($parsed));
+        $this->progress->phase('Structural rules', count($scannedPaths));
 
-        foreach ($parsed as $file) {
+        foreach ($scannedPaths as $path) {
             $this->progress->advance();
             // Structural rules are pure AST shape checks over one file, so they
-            // run before the whole-program taint pass — which is what lets the
-            // AST go early.
-            // Reference trees are skipped: a missing permission_callback in
-            // WordPress core is not this project's bug to fix.
-            // Reference trees are skipped: a missing permission_callback in
-            // WordPress core is not this project's bug to fix.
-            if ($this->structuralRulesEnabled && ! isset($reference[$file->relativePath])) {
+            // run before the whole-program taint pass, which is what lets the
+            // AST go early. Reference trees are skipped: a missing
+            // permission_callback in WordPress core is not this project's bug
+            // to fix.
+            if ($this->structuralRulesEnabled) {
+                $file = $bodies->fileWithAst($path);
+
                 foreach ($this->structuralRules as $rule) {
                     $findings = [...$findings, ...$rule->analyse($file, $this->registry, $ruleContext)];
                 }
             }
 
-            $file->releaseAst();
+            $bodies->releaseAst($path);
         }
+
+        unset($file);
 
         $resolver = new CallResolver(
             $this->registry,
@@ -310,7 +355,7 @@ final class Scanner
             ))->build($contexts)
             : null;
 
-        $restRoutes = $this->restRoutes($contexts, $callables, $receivers, $functions, $callGraph);
+        $restRoutes = $this->restRoutes($contexts, $callables, $receivers, $functions, $bodies, $callGraph);
 
         $analyzer = new IntraproceduralAnalyzer(
             $this->registry,
@@ -324,9 +369,20 @@ final class Scanner
             $restRoutes,
         );
         $extractor = new SummaryExtractor($analyzer, $this->options);
-        $interprocedural = new InterproceduralResolver($analyzer, $extractor, $this->options, $this->jobs, $callGraph);
+        $analysed = $bodies;
 
-        $resolution = $interprocedural->resolve($contexts, $this->progress);
+        $interprocedural = new InterproceduralResolver(
+            $analyzer,
+            $extractor,
+            $this->options,
+            $this->jobs,
+            $callGraph,
+            $analysed,
+        );
+
+        $this->progress->note($this->describeCache('after setup', $bodies));
+        $resolution = $interprocedural->resolve($metas, $this->progress);
+        $this->progress->note($this->describeCache('after resolution', $bodies));
 
         // Findings a structural rule could not decide alone. The rule recorded
         // what it would emit and which callback settles it; the summary — which
@@ -361,7 +417,7 @@ final class Scanner
             );
         }
 
-        $referenceCallers = $this->referenceCallersOfScannedCode($contexts, $callGraph, $reference);
+        $referenceCallers = $this->referenceCallersOfScannedCode($metas, $callGraph, $reference);
 
         // No total: with --jobs the work happens in the workers, which cannot
         // report back to this bar.
@@ -378,7 +434,8 @@ final class Scanner
                 int $shard,
                 int $shardCount
             ) use (
-                $contexts,
+                $metas,
+                $analysed,
                 $analyzer,
                 $resolution,
                 $graph,
@@ -388,7 +445,7 @@ final class Scanner
                 $shardFindings = [];
                 $shardWarnings = [];
 
-                foreach ($contexts as $index => $context) {
+                foreach ($metas as $index => $meta) {
                     if ($index % $shardCount !== $shard) {
                         continue;
                     }
@@ -405,12 +462,13 @@ final class Scanner
                     // not seeded. The flow is reported while analysing the
                     // caller, at the sink inside the callee, and skipping the
                     // caller lost the finding altogether.
-                    $isReference = isset($reference[$context->file->relativePath]);
+                    $isReference = isset($reference[$meta->relativePath]);
 
-                    if ($isReference && ! isset($referenceCallers[$context->key])) {
+                    if ($isReference && ! isset($referenceCallers[$meta->key])) {
                         continue;
                     }
 
+                    $context = $analysed->context($meta);
                     $result = $analyzer->analyze(
                         $context,
                         $resolution['summaries'],
@@ -451,6 +509,8 @@ final class Scanner
             $warnings = [...$warnings, ...$shardResult['warnings']];
         }
 
+        $this->progress->note($this->describeCache('after findings', $bodies));
+
         if ($graph !== null && $this->taintGraphPath !== null) {
             file_put_contents($this->taintGraphPath, $graph->render());
         }
@@ -477,7 +537,7 @@ final class Scanner
         return new ScanResult(
             $collection,
             $parseErrors,
-            count($parsed) - count($reference),
+            count($scannedPaths),
             $warnings,
             $this->root,
             $this->registry->names,
@@ -490,6 +550,38 @@ final class Scanner
     }
 
     /**
+     * The graph cache's share of the budget in this process.
+     *
+     * Workers fork from this process and start with its cache, so a budget
+     * held whole here would be held again in every worker as soon as it read
+     * the pages. Each process gets an equal part instead, and the scan's cache
+     * stays near the budget whatever --jobs is.
+     */
+    private function processBudget(): ?int
+    {
+        if ($this->memoryBudget === null || $this->jobs <= 1) {
+            return $this->memoryBudget;
+        }
+
+        return intdiv($this->memoryBudget, $this->jobs);
+    }
+
+    private function describeCache(string $when, FunctionBodies $bodies): string
+    {
+        $budget = $this->processBudget();
+        $megabytes = static fn (int $bytes): string => number_format($bytes / 1_048_576) . 'MB';
+
+        return sprintf(
+            'graph cache %s: %s held of %s, a pool of %s, %d files rebuilt in this process',
+            $when,
+            $megabytes($bodies->held()),
+            $budget === null ? 'no limit' : $megabytes($budget - $bodies->poolBudget()),
+            $megabytes($bodies->poolBudget()),
+            $bodies->rebuilds(),
+        );
+    }
+
+    /**
      * Every REST route, and which callbacks their permission callbacks entitle.
      *
      * A callback is entitled when every route it handles has a permission
@@ -498,13 +590,14 @@ final class Scanner
      * see into. `__return_true`, a callback that will not resolve, and a route
      * with no permission callback all leave it unentitled.
      *
-     * @param list<FunctionContext> $contexts
+     * @param iterable<FunctionContext> $contexts
      */
     private function restRoutes(
-        array $contexts,
+        iterable $contexts,
         CallableResolver $callables,
         ReceiverResolver $receivers,
         UserFunctionTable $functions,
+        FunctionBodies $bodies,
         CallGraph $callGraph,
     ): RestRouteTable {
         $table = (new RestRouteCollector($callables, $receivers))->collect($contexts);
@@ -521,11 +614,11 @@ final class Scanner
                 }
 
                 foreach ($route->permission as $permission) {
-                    $context = $permission->dynamic || $permission->userFunctionKey === null
+                    $meta = $permission->dynamic || $permission->userFunctionKey === null
                         ? null
                         : $functions->get($permission->userFunctionKey);
 
-                    if ($context === null || ! $guard->permitsOnlyWhenEntitled($context)) {
+                    if ($meta === null || ! $guard->permitsOnlyWhenEntitled($bodies->context($meta))) {
                         $entitled = false;
 
                         break 2;
@@ -538,7 +631,7 @@ final class Scanner
             }
         }
 
-        $this->entitleCallees($table, $contexts, $callGraph);
+        $this->entitleCallees($table, $functions->all(), $callGraph);
 
         return $table;
     }
@@ -557,16 +650,16 @@ final class Scanner
      * caller the graph cannot see, a callable it could not resolve, is not a
      * caller here.
      *
-     * @param list<FunctionContext> $contexts
+     * @param list<FunctionMeta> $functions
      */
-    private function entitleCallees(RestRouteTable $table, array $contexts, CallGraph $callGraph): void
+    private function entitleCallees(RestRouteTable $table, array $functions, CallGraph $callGraph): void
     {
         /** @var array<string, array<string, true>> $callers */
         $callers = [];
 
-        foreach ($contexts as $context) {
-            foreach ($callGraph->calleesOf($context->key) as $callee) {
-                $callers[$callee][$context->key] = true;
+        foreach ($functions as $function) {
+            foreach ($callGraph->calleesOf($function->key) as $callee) {
+                $callers[$callee][$function->key] = true;
             }
         }
 
@@ -605,12 +698,12 @@ final class Scanner
      * handler holds the argument taint, and the helper's summary carries the
      * sink in the scanned callback back up to it.
      *
-     * @param list<FunctionContext> $contexts
-     * @param array<string, true>   $reference relative paths of reference files
+     * @param list<FunctionMeta>  $functions
+     * @param array<string, true> $reference relative paths of reference files
      *
      * @return array<string, true> function keys
      */
-    private function referenceCallersOfScannedCode(array $contexts, CallGraph $callGraph, array $reference): array
+    private function referenceCallersOfScannedCode(array $functions, CallGraph $callGraph, array $reference): array
     {
         if ($reference === []) {
             return [];
@@ -622,11 +715,11 @@ final class Scanner
         /** @var array<string, bool> $isReference function key => declared in a reference file */
         $isReference = [];
 
-        foreach ($contexts as $context) {
-            $isReference[$context->key] ??= isset($reference[$context->file->relativePath]);
+        foreach ($functions as $function) {
+            $isReference[$function->key] ??= isset($reference[$function->relativePath]);
 
-            foreach ($callGraph->calleesOf($context->key) as $callee) {
-                $callers[$callee][] = $context->key;
+            foreach ($callGraph->calleesOf($function->key) as $callee) {
+                $callers[$callee][] = $function->key;
             }
         }
 

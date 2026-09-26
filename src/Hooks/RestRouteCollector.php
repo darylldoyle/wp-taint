@@ -44,9 +44,9 @@ final class RestRouteCollector
     }
 
     /**
-     * @param list<FunctionContext> $contexts
+     * @param iterable<FunctionContext> $contexts
      */
-    public function collect(array $contexts): RestRouteTable
+    public function collect(iterable $contexts): RestRouteTable
     {
         $table = new RestRouteTable();
 

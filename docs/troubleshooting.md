@@ -157,19 +157,26 @@ expect, an `--exclude` is catching more than intended.
 PHP Fatal error: Allowed memory size of 536870912 bytes exhausted
 ```
 
-**Cause.** The default `memory_limit` is not enough for a large tree. The whole
-program is held in memory at once, by design, because taint crosses files.
+**Cause.** The default `memory_limit` is not enough for a large tree. The scan
+keeps what it learns about every function in memory, because taint crosses
+files. It also keeps up to `--memory-budget` of parsed files, 4GB by default.
 
 **Solution.**
 
 ```bash
-php -d memory_limit=4G vendor/bin/wp-taint scan ./src
+php -d memory_limit=8G vendor/bin/wp-taint scan ./src
 ```
 
-Referencing fewer trees reduces peak memory more than anything else.
+Give `memory_limit` at least 4GB more than the budget: 8GB for a large site at
+the default budget, 16GB with `--memory-budget=8G`. With `bin/wp-taint`,
+set `WP_TAINT_MEMORY_LIMIT=8G` instead of passing `-d`. See
+[Scan a large site](scanning-a-wordpress-project.md#scan-a-large-site). A lower budget, such as
+`--memory-budget=1G`, trades memory for time: any file it cannot hold is parsed
+again each time it is needed. The findings do not change. Referencing fewer
+trees still reduces peak memory more than anything else.
 
 To see where the memory goes, add `--debug-memory`. It prints PHP's own heap
-figures at each phase and each round. Trust those over Activity Monitor or
+figures at each phase and each round, and the time PHP's cycle collector took. Trust those over Activity Monitor or
 `ps`: macOS compresses and swaps a large scan, so its resident size can read a
 few hundred megabytes while PHP holds several gigabytes.
 

@@ -57,6 +57,11 @@ final class ParsedFile
         return $this->ast;
     }
 
+    public function hasAst(): bool
+    {
+        return $this->ast !== null;
+    }
+
     public function releaseAst(): void
     {
         $this->ast = null;
