@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Cfg;
 
-use ReflectionClass;
-use ReflectionNamedType;
 use ReflectionProperty;
 
 /**
@@ -20,19 +18,33 @@ use ReflectionProperty;
  * non-nullable typed properties hold, such as a jump's target, and those free
  * as soon as nothing outside points in.
  *
+ * Every link that closes a cycle is a public property: php-cfg keeps its
+ * graph in public fields. The walk reads every property, private and
+ * protected ones too, by casting each object to an array, and clears only
+ * the public ones. Reading by cast is several times faster than reading
+ * through reflection; reflection is kept for the writes, which are far fewer,
+ * and learned once per class.
+ *
  * Only for a file nothing will read again. Every op and operand in it is left
  * hollow: an analysis still holding one would see a graph with no edges. See
  * {@see \Enshrined\WpTaint\Taint\FunctionBodies} for who may call this.
  */
 final class GraphDisposer
 {
-    /** @var array<class-string, list<ReflectionProperty>> the properties that can hold objects, by class */
-    private static array $linking = [];
+    /**
+     * Per class, its public properties that may be written, each with whether
+     * it takes null. Readonly properties are left out.
+     *
+     * @var array<class-string, array<string, array{0: ReflectionProperty, 1: bool}>>
+     */
+    private static array $writable = [];
 
     public static function dispose(ParsedFile $file): void
     {
         $pending = [$file];
         $seen = [];
+
+        /** @var list<object> $objects */
         $objects = [];
 
         // Collect first, then clear: clearing as we go would cut the walk off
@@ -48,14 +60,18 @@ final class GraphDisposer
             $seen[$id] = true;
             $objects[] = $object;
 
-            foreach (self::linking($object) as $property) {
-                if (! $property->isInitialized($object)) {
+            foreach ((array) $object as $value) {
+                if (is_object($value)) {
+                    $pending[] = $value;
+
                     continue;
                 }
 
-                $value = $property->getValue($object);
+                if (! is_array($value)) {
+                    continue;
+                }
 
-                foreach (is_array($value) ? $value : [$value] as $inner) {
+                foreach ($value as $inner) {
                     if (is_object($inner)) {
                         $pending[] = $inner;
 
@@ -75,71 +91,51 @@ final class GraphDisposer
         }
 
         foreach ($objects as $held) {
-            foreach (self::linking($held) as $property) {
-                if ($property->isReadOnly() || ! $property->isInitialized($held)) {
+            $writable = self::$writable[$held::class] ?? self::learn($held::class);
+
+            foreach ((array) $held as $name => $value) {
+                // Private and protected properties arrive with a NUL-prefixed
+                // name, and readonly ones are not listed. None of php-cfg's
+                // cycles run through them.
+                $property = $writable[$name] ?? null;
+
+                if ($property === null) {
                     continue;
                 }
 
-                $value = $property->getValue($held);
-
                 if (is_array($value)) {
                     if ($value !== []) {
-                        $property->setValue($held, []);
+                        $property[0]->setValue($held, []);
                     }
 
                     continue;
                 }
 
-                if (is_object($value) && self::nullable($property)) {
-                    $property->setValue($held, null);
+                if (is_object($value) && $property[1]) {
+                    $property[0]->setValue($held, null);
                 }
             }
         }
     }
 
     /**
-     * The instance properties of a php-cfg object that can hold other objects.
-     * Readonly ones are walked, since what lies behind them may close a cycle,
-     * and never written.
+     * @param class-string $class
      *
-     * @return list<ReflectionProperty>
+     * @return array<string, array{0: ReflectionProperty, 1: bool}>
      */
-    private static function linking(object $object): array
+    private static function learn(string $class): array
     {
-        $class = $object::class;
-
-        if (isset(self::$linking[$class])) {
-            return self::$linking[$class];
-        }
-
         $properties = [];
 
-        foreach ((new ReflectionClass($class))->getProperties() as $property) {
-            if ($property->isStatic()) {
+        foreach ((new \ReflectionClass($class))->getProperties(ReflectionProperty::IS_PUBLIC) as $property) {
+            if ($property->isStatic() || $property->isReadOnly()) {
                 continue;
             }
 
             $type = $property->getType();
-
-            // Scalars never close a cycle.
-            $scalar = $type instanceof ReflectionNamedType
-                && $type->isBuiltin()
-                && ! in_array($type->getName(), ['array', 'mixed', 'object'], true);
-
-            if ($scalar) {
-                continue;
-            }
-
-            $properties[] = $property;
+            $properties[$property->getName()] = [$property, $type === null || $type->allowsNull()];
         }
 
-        return self::$linking[$class] = $properties;
-    }
-
-    private static function nullable(ReflectionProperty $property): bool
-    {
-        $type = $property->getType();
-
-        return $type === null || $type->allowsNull();
+        return self::$writable[$class] = $properties;
     }
 }
