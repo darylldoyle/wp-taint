@@ -134,6 +134,15 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   fires, the reason a filter callback is not credited as a sanitiser either.
   The walk now follows direct calls only. Hook callbacks still have a caller,
   so they are not treated as entry points.
+- Callbacks on Gravity Forms hooks received nothing from the dispatch. Gravity
+  Forms fires its hooks through `gf_do_action()` and `gf_apply_filters()`,
+  with the hook name and its modifiers in an array:
+  `gf_do_action( array( 'gform_after_submission', $form_id ), $entry, $form )`
+  fires `gform_after_submission` and `gform_after_submission_{$form_id}`. The
+  catalogue now models both as dispatchers, with a new `hook_modifiers` flag
+  that reads the array, and a modifier held in a variable joins by prefix. A
+  callback on `gform_after_submission` now sees the submitted entry, which
+  holds what the visitor typed.
 - A file included from a function, or a template loaded with
   `get_template_part()`, was reported as receiving tainted input whenever the
   function had a parameter, even when every caller passed a literal. The

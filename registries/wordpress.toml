@@ -246,6 +246,12 @@ function = "apply_filters_ref_array"
 args = [1]
 
 [[propagators]]
+function = "gf_apply_filters"
+args = [1]
+note = "Gravity Forms' apply_filters(). The filtered value passes through for the same reason; its callbacks are followed through the hook graph, see [[dispatchers]]."
+
+
+[[propagators]]
 function = "get_the_title"
 
 [[propagators]]
@@ -805,6 +811,37 @@ hook = true
 argument_start = 1
 mode = "spread"
 returns = "own"
+
+# ---------------------------------------------------------------------------
+# Dispatch wrappers in widely used plugins.
+#
+# Gravity Forms fires its hooks through gf_do_action() and gf_apply_filters(),
+# not do_action() and apply_filters(). The hook argument is an array: a name,
+# then modifiers that each fire a longer name as well, so
+# `gf_do_action( array( 'gform_after_submission', $form_id ), $entry, $form )`
+# fires `gform_after_submission` and `gform_after_submission_{$form_id}`.
+# Without these, no callback on a Gravity Forms hook received the entry, which
+# holds what the visitor submitted. `hook_modifiers` reads the array; a
+# modifier that will not fold becomes a prefix join on the name so far.
+# ---------------------------------------------------------------------------
+
+[[dispatchers]]
+function = "gf_do_action"
+callable = 0
+hook = true
+hook_modifiers = true
+argument_start = 1
+mode = "rest"
+returns = "own"
+
+[[dispatchers]]
+function = "gf_apply_filters"
+callable = 0
+hook = true
+hook_modifiers = true
+argument_start = 1
+mode = "rest"
+returns = "callee"
 
 # ---------------------------------------------------------------------------
 # Authorization primitives.

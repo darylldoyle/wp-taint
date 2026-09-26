@@ -238,6 +238,10 @@ final class CallResolver
             return [[], []];
         }
 
+        if ($dispatcher->hookModifiers) {
+            return $this->dispatchedByModifiedHook($call, $dispatcher, $name);
+        }
+
         $arguments = $this->calleeArguments($call, $dispatcher);
         $exact = [];
         $prefixed = [];
@@ -261,6 +265,94 @@ final class CallResolver
                 foreach ($this->hooks->targetsMatchingPrefix($prefix) as $target) {
                     $prefixed[] = $target->withArguments($arguments);
                 }
+            }
+        }
+
+        return [$exact, $prefixed];
+    }
+
+    /**
+     * A dispatch whose hook argument is a name and its modifiers.
+     *
+     * `gf_do_action( array( 'gform_after_submission', $form_id ), $entry,
+     * $form )` fires the base name, then the base name with each modifier
+     * appended after an underscore, one after another. Every name whose parts
+     * all fold is an exact dispatch. At the first modifier that does not fold,
+     * a form id held in a variable, the rest can only be a prefix join on the
+     * name so far and an underscore, the same bounded guess a computed hook
+     * name gets. The older form, a plain name with the modifier as the second
+     * argument, dispatches the base name exactly and the modifier's names by
+     * the same rules, with the callee's arguments starting after the modifier.
+     *
+     * @return array{0: list<CallTarget>, 1: list<CallTarget>}
+     */
+    private function dispatchedByModifiedHook(CallTarget $call, Dispatcher $dispatcher, Operand $name): array
+    {
+        if ($this->hooks === null) {
+            return [[], []];
+        }
+
+        $definition = OperandHelper::definingOp($name);
+
+        if ($definition instanceof Op\Expr\Array_) {
+            $parts = array_values(array_filter(
+                $definition->values,
+                static fn (mixed $value): bool => $value instanceof Operand,
+            ));
+            $arguments = $this->calleeArguments($call, $dispatcher);
+        } else {
+            $modifier = $call->argument($dispatcher->callable + 1);
+            $parts = $modifier === null ? [$name] : [$name, $modifier];
+            $arguments = array_values(array_slice(
+                $this->calleeArguments($call, $dispatcher),
+                $modifier === null ? 0 : 1,
+            ));
+        }
+
+        $exact = [];
+        $prefixed = [];
+
+        if ($parts === []) {
+            return [[], []];
+        }
+
+        // Every spelling the name can have so far. A part that does not fold
+        // ends the chain in a prefix join.
+        $names = $this->values->strings($parts[0]);
+
+        foreach (array_slice($parts, 1) as $part) {
+            foreach ($names as $hook) {
+                foreach ($this->hooks->targetsFor($hook) as $target) {
+                    $exact[] = $target->withArguments($arguments);
+                }
+            }
+
+            $modifiers = $this->values->strings($part);
+
+            if ($modifiers === []) {
+                foreach ($names as $hook) {
+                    foreach ($this->hooks->targetsMatchingPrefix($hook . '_') as $target) {
+                        $prefixed[] = $target->withArguments($arguments);
+                    }
+                }
+
+                return [$exact, $prefixed];
+            }
+
+            $longer = [];
+
+            foreach ($names as $hook) {
+                foreach ($modifiers as $modifier) {
+                    $longer[] = $modifier === '' ? $hook : $hook . '_' . $modifier;
+                }
+            }
+
+            $names = array_values(array_unique($longer));
+        }
+
+        foreach ($names as $hook) {
+            foreach ($this->hooks->targetsFor($hook) as $target) {
+                $exact[] = $target->withArguments($arguments);
             }
         }
 

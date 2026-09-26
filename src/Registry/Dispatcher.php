@@ -38,6 +38,16 @@ final class Dispatcher
          */
         public readonly bool $hook = false,
         public readonly ?string $note = null,
+        /**
+         * True when the hook argument may be an array: a name, then modifiers
+         * that each fire a longer name as well. Gravity Forms dispatches this
+         * way: `gf_do_action( array( 'gform_after_submission', $form_id ),
+         * $entry, $form )` fires `gform_after_submission` and then
+         * `gform_after_submission_{$form_id}`. The older form passes the
+         * modifier as the second argument instead, and the callee's arguments
+         * then start one later.
+         */
+        public readonly bool $hookModifiers = false,
     ) {
     }
 }
