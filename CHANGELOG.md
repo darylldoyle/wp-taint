@@ -276,6 +276,16 @@ Further precision changes from corpus adjudication of the new attribute rule:
 
 ### Changed
 
+- A file the graph cache lets go of is taken apart, so it frees at once
+  instead of waiting for the cycle collector. A php-cfg graph is a web of
+  cycles, and under a memory budget every file the cache does not hold becomes
+  one more of them to collect. Files are retired when dropped and taken apart
+  only between units of work, where nothing reads them again: the next
+  function of a sweep, group of a round, function of the findings pass. On a
+  site with 17 reference trees at the default budget, the peak heap fell from
+  6.17GB to 5.19GB and collection from about 64 seconds to 14, for 3% more
+  time; findings are byte-identical. `--dump-taint-graph`, which keeps every
+  analysis's state, turns it off.
 - The object-authorization check settles whether each block is guarded once
   per function, instead of searching again on every question. "Does an
   entitling check dominate this block" recursed through every phi's inputs and

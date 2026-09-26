@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Enshrined\WpTaint\Taint;
 
 use Enshrined\WpTaint\Cfg\CfgBuilder;
+use Enshrined\WpTaint\Cfg\GraphDisposer;
 use Enshrined\WpTaint\Cfg\ParsedFile;
 use Enshrined\WpTaint\Support\CycleCollector;
 use LogicException;
@@ -47,6 +48,26 @@ use PHPCfg\Func;
  * every one. A file that does not fit the pool is rebuilt as before. Where a
  * body comes from never changes what it analyses to, so the pool changes time
  * and nothing else.
+ *
+ * ## Taking dropped files apart
+ *
+ * A file the cache lets go of is cyclic garbage, and only PHP's cycle
+ * collector frees that, walking what is still alive to find it. So a file
+ * that is let go of, the transient when the next one replaces it or the
+ * pool when its owner changes, is retired, and {@see reclaim()} takes every
+ * retired file apart with {@see GraphDisposer}, after which it frees the
+ * moment its last reference goes.
+ *
+ * Taking a file apart hollows every op and operand in it, so it may happen
+ * only where nothing will read the file again. Retiring never does it:
+ * whoever just received a body is still using it. {@see reclaim()} is
+ * called only between units of work: before the next function of a sweep,
+ * the next group of a round, the next function of the findings pass, the
+ * next permission callback, the next file of the structural rules. Nothing
+ * a unit of work leaves behind holds a graph object: summaries, the
+ * property and scope tables, hook and route tables, constants and findings
+ * are plain values. The taint graph dump is the one exception, since it
+ * keeps every analysis's state, and it turns disposal off.
  */
 final class FunctionBodies
 {
@@ -82,6 +103,9 @@ final class FunctionBodies
     /** Bytes the pool may hold. */
     private readonly int $poolBudget;
 
+    /** @var list<ParsedFile> files let go of since the last {@see reclaim()} */
+    private array $retired = [];
+
     public function __construct(
         private readonly ?CfgBuilder $builder = null,
         private readonly ?int $budget = null,
@@ -90,6 +114,8 @@ final class FunctionBodies
          * between two units of the scan's work in every phase.
          */
         private readonly ?CycleCollector $collector = null,
+        /** Take files apart once let go of; see the class comment. */
+        private readonly bool $dispose = false,
     ) {
         // No budget holds everything and needs no pool. A budget of zero
         // rebuilds on every request, which is what the tests rely on, so it
@@ -108,8 +134,9 @@ final class FunctionBodies
             return;
         }
 
-        foreach (array_keys($this->pool) as $path) {
+        foreach ($this->pool as $path => $file) {
             unset($this->contexts[$path]);
+            $this->retire($file);
         }
 
         $this->pool = [];
@@ -193,8 +220,39 @@ final class FunctionBodies
         }
 
         $this->rebuilds++;
+        $file = $result->file();
 
-        return $result->file();
+        // Used once, by the structural rules, and never held.
+        $this->retire($file);
+
+        return $file;
+    }
+
+    /**
+     * Take apart every file let go of since the last call. Only between two
+     * units of work; see the class comment.
+     */
+    public function reclaim(): void
+    {
+        if ($this->retired === []) {
+            return;
+        }
+
+        foreach ($this->retired as $file) {
+            GraphDisposer::dispose($file);
+        }
+
+        $this->retired = [];
+
+        // It remembers the last function's blocks, which may be among them.
+        BlockDominators::forget();
+    }
+
+    private function retire(ParsedFile $file): void
+    {
+        if ($this->dispose) {
+            $this->retired[] = $file;
+        }
     }
 
     /**
@@ -295,7 +353,19 @@ final class FunctionBodies
             return $file;
         }
 
-        $this->transient = $this->budget === 0 ? null : $file;
+        if ($this->transient !== null) {
+            $this->retire($this->transient);
+        }
+
+        // With a budget of zero nothing is kept, not even this one.
+        if ($this->budget === 0) {
+            $this->transient = null;
+            $this->retire($file);
+
+            return $file;
+        }
+
+        $this->transient = $file;
 
         return $file;
     }

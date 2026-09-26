@@ -37,7 +37,12 @@ final class BodySweep implements IteratorAggregate
     public function getIterator(): Generator
     {
         foreach ($this->functions as $index => $function) {
+            // The caller is done with the last body: it asked for the next.
+            $this->bodies->reclaim();
+
             yield $index => $this->bodies->context($function);
         }
+
+        $this->bodies->reclaim();
     }
 }
