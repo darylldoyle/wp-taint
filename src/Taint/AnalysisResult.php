@@ -62,6 +62,20 @@ final class AnalysisResult
          * @var list<array{0: string, 1: string}> closure key and captured name
          */
         public readonly array $capturesReached = [],
+        /**
+         * Shared scopes the seeded parameter reached: a file it includes, a
+         * template it hands `$args` to, a variable a closure writes back.
+         *
+         * The scope half of the same idea again. A probe run's seed is a
+         * question, so publishing it into the scope table made every included
+         * template see its caller's parameters carrying every kind of taint,
+         * whatever the caller passed. The probe records where the seed would
+         * have gone, and the caller publishes what it actually passed.
+         *
+         * @var list<array{0: string, 1: string, 2: string, 3: int|string|null}> see
+         *     {@see FunctionSummary::$paramToScope}
+         */
+        public readonly array $scopesReached = [],
     ) {
     }
 }
