@@ -77,8 +77,31 @@ final class HookGraph
     /** @var array<string, true> */
     private array $seen = [];
 
+    /**
+     * Answers already worked out, by hook name or needle.
+     *
+     * The fixed point asks the same questions of every dispatch op on every
+     * pass of every analysis: `do_action( 'save_post' )` in a large function
+     * is asked about tens of times a round. Each answer sorted every matching
+     * registration, and a computed hook name scanned every hook in the scan.
+     * On the client's 168 reference trees, one function firing `save_post`
+     * took 52 minutes in a round. The graph does not change once it is built,
+     * and every change empties these, so a remembered answer is the answer.
+     *
+     * @var array<string, list<HookRegistration>>
+     */
+    private array $callbacksCache = [];
+
+    /** @var array<string, list<CallTarget>> */
+    private array $prefixTargetsCache = [];
+
+    /** @var array<string, list<CallTarget>> */
+    private array $matchingCache = [];
+
     public function add(HookRegistration $registration): void
     {
+        $this->forgetAnswers();
+
         // The same registration can be reached more than once: a file included
         // from two places, or a worker re-analysing a function in a later
         // round. Deduplicated by position, so the graph is a set.
@@ -108,6 +131,8 @@ final class HookGraph
      */
     public function addPrefix(HookRegistration $registration): bool
     {
+        $this->forgetAnswers();
+
         if (strlen($registration->hook) < self::MIN_PREFIX) {
             return false;
         }
@@ -131,14 +156,7 @@ final class HookGraph
      */
     public function callbacksFor(string $hook): array
     {
-        $registrations = $this->byHook[$hook] ?? [];
-
-        usort(
-            $registrations,
-            static fn (HookRegistration $a, HookRegistration $b): int => $a->sortKey() <=> $b->sortKey(),
-        );
-
-        return $registrations;
+        return $this->callbacksCache[$hook] ??= self::sorted($this->byHook[$hook] ?? []);
     }
 
     /**
@@ -154,20 +172,22 @@ final class HookGraph
      */
     public function prefixTargetsFor(string $hook): array
     {
+        if (isset($this->prefixTargetsCache[$hook])) {
+            return $this->prefixTargetsCache[$hook];
+        }
+
         $matched = [];
 
         foreach ($this->byPrefix as $prefix => $registrations) {
             if (str_starts_with($hook, $prefix) && ! $this->tooGeneric($prefix)) {
-                $matched = [...$matched, ...$registrations];
+                array_push($matched, ...$registrations);
             }
         }
 
-        usort(
-            $matched,
-            static fn (HookRegistration $a, HookRegistration $b): int => $a->sortKey() <=> $b->sortKey(),
+        return $this->prefixTargetsCache[$hook] = array_map(
+            static fn (HookRegistration $r): CallTarget => $r->callback,
+            self::sorted($matched),
         );
-
-        return array_map(static fn (HookRegistration $r): CallTarget => $r->callback, $matched);
     }
 
     /**
@@ -180,8 +200,12 @@ final class HookGraph
      */
     public function targetsMatchingPrefix(string $needle): array
     {
+        if (isset($this->matchingCache[$needle])) {
+            return $this->matchingCache[$needle];
+        }
+
         if (strlen($needle) < self::MIN_PREFIX || $this->tooGeneric($needle)) {
-            return [];
+            return $this->matchingCache[$needle] = [];
         }
 
         $matched = [];
@@ -194,7 +218,7 @@ final class HookGraph
             }
 
             if (str_starts_with($hook, $needle)) {
-                $matched = [...$matched, ...$registrations];
+                array_push($matched, ...$registrations);
             }
         }
 
@@ -202,16 +226,44 @@ final class HookGraph
         // the other — can be the same hook at runtime.
         foreach ($this->byPrefix as $prefix => $registrations) {
             if (str_starts_with($prefix, $needle) || str_starts_with($needle, $prefix)) {
-                $matched = [...$matched, ...$registrations];
+                array_push($matched, ...$registrations);
             }
         }
 
-        usort(
-            $matched,
-            static fn (HookRegistration $a, HookRegistration $b): int => $a->sortKey() <=> $b->sortKey(),
+        return $this->matchingCache[$needle] = array_map(
+            static fn (HookRegistration $r): CallTarget => $r->callback,
+            self::sorted($matched),
         );
+    }
 
-        return array_map(static fn (HookRegistration $r): CallTarget => $r->callback, $matched);
+    /**
+     * Registrations in sort-key order, as `usort` on {@see HookRegistration::sortKey()}
+     * orders them, with each key built once rather than twice per comparison.
+     * Both sorts are stable and compare the same keys, so the order is the
+     * same.
+     *
+     * @param list<HookRegistration> $registrations
+     *
+     * @return list<HookRegistration>
+     */
+    private static function sorted(array $registrations): array
+    {
+        $keyed = [];
+
+        foreach ($registrations as $registration) {
+            $keyed[] = [$registration->sortKey(), $registration];
+        }
+
+        usort($keyed, static fn (array $a, array $b): int => $a[0] <=> $b[0]);
+
+        return array_map(static fn (array $pair): HookRegistration => $pair[1], $keyed);
+    }
+
+    private function forgetAnswers(): void
+    {
+        $this->callbacksCache = [];
+        $this->prefixTargetsCache = [];
+        $this->matchingCache = [];
     }
 
     /**

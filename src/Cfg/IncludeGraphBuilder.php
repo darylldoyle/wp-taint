@@ -33,50 +33,73 @@ final class IncludeGraphBuilder
     ) {
     }
 
+    /** The graph being built by {@see accept()}, until {@see finish()} hands it over. */
+    private ?IncludeGraph $building = null;
+
     /**
      * @param iterable<FunctionContext> $contexts
      */
     public function build(iterable $contexts): IncludeGraph
     {
-        $graph = new IncludeGraph();
-
         foreach ($contexts as $context) {
-            $file = $context->file->relativePath;
-            $absolute = $this->projectRoot . '/' . $file;
-            $offset = 0;
-            $templateOffset = 0;
+            $this->accept($context);
+        }
 
-            foreach (BlockOrder::of($context->func->cfg) as $block) {
-                foreach ($block->children as $op) {
-                    if ($op instanceof Op\Expr\FuncCall || $op instanceof Op\Expr\NsFuncCall) {
-                        $this->recordTemplate($graph, $op, $file, $absolute, $templateOffset);
+        return $this->finish();
+    }
 
-                        continue;
-                    }
+    /**
+     * Record one function's include sites. The scan feeds every function to
+     * this builder and to the hook graph and REST route builders in one sweep,
+     * so a body the budget does not hold is rebuilt once for all three.
+     */
+    public function accept(FunctionContext $context): void
+    {
+        $graph = $this->building ??= new IncludeGraph();
+        $file = $context->file->relativePath;
+        $absolute = $this->projectRoot . '/' . $file;
+        $offset = 0;
+        $templateOffset = 0;
 
-                    if (! $op instanceof Op\Expr\Include_) {
-                        continue;
-                    }
+        foreach (BlockOrder::of($context->func->cfg) as $block) {
+            foreach ($block->children as $op) {
+                if ($op instanceof Op\Expr\FuncCall || $op instanceof Op\Expr\NsFuncCall) {
+                    $this->recordTemplate($graph, $op, $file, $absolute, $templateOffset);
 
-                    // Line alone is not unique: `include A; include B;` on one
-                    // line is legal, if unpleasant.
-                    $site = IncludeGraph::siteKey($file, $op->getLine(), $offset++);
-                    $targets = $this->resolver->resolve($op, $absolute);
-
-                    if ($targets === []) {
-                        $graph->recordUnresolved(
-                            $file,
-                            $op->getLine(),
-                            'the path could not be resolved to a file in the scan',
-                        );
-
-                        continue;
-                    }
-
-                    $graph->record($site, $targets);
+                    continue;
                 }
+
+                if (! $op instanceof Op\Expr\Include_) {
+                    continue;
+                }
+
+                // Line alone is not unique: `include A; include B;` on one
+                // line is legal, if unpleasant.
+                $site = IncludeGraph::siteKey($file, $op->getLine(), $offset++);
+                $targets = $this->resolver->resolve($op, $absolute);
+
+                if ($targets === []) {
+                    $graph->recordUnresolved(
+                        $file,
+                        $op->getLine(),
+                        'the path could not be resolved to a file in the scan',
+                    );
+
+                    continue;
+                }
+
+                $graph->record($site, $targets);
             }
         }
+    }
+
+    /**
+     * The graph every accepted function built, and a fresh start after it.
+     */
+    public function finish(): IncludeGraph
+    {
+        $graph = $this->building ?? new IncludeGraph();
+        $this->building = null;
 
         return $graph;
     }

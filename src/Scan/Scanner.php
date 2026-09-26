@@ -38,7 +38,6 @@ use Enshrined\WpTaint\Taint\CallGraphBuilder;
 use Enshrined\WpTaint\Taint\CallResolver;
 use Enshrined\WpTaint\Taint\CapabilityGuard;
 use Enshrined\WpTaint\Taint\FunctionBodies;
-use Enshrined\WpTaint\Taint\FunctionContext;
 use Enshrined\WpTaint\Taint\FunctionMeta;
 use Enshrined\WpTaint\Taint\InterproceduralResolver;
 use Enshrined\WpTaint\Taint\IntraproceduralAnalyzer;
@@ -292,7 +291,37 @@ final class Scanner
         // reporting a count would mean threading progress through both. A bar
         // that fills in one jump is worse than a sentence that stays put.
         $this->progress->phase('Building the hook and call graphs', null);
-        $hooks = (new HookGraphBuilder($callables, $values, $receivers))->build($contexts);
+
+        // One sweep for everything that needs only the constants: hook
+        // registrations, include sites and REST routes. They were three
+        // sweeps, and under a budget every sweep rebuilds every file the cache
+        // does not hold. None of the three reads another's result, and none
+        // keeps state between functions beyond its own graph, so building them
+        // side by side gives what building them one after another did. The
+        // call graph needs the finished hook graph, so it is a sweep of its
+        // own.
+        $hookBuilder = new HookGraphBuilder($callables, $values, $receivers);
+        $includeBuilder = $this->options->followIncludes
+            ? new IncludeGraphBuilder(
+                new IncludeResolver($values, $files, $this->root, $themes),
+                $this->root,
+                $this->registry,
+                $values,
+            )
+            : null;
+        $routeCollector = new RestRouteCollector($callables, $receivers);
+
+        foreach ($contexts as $context) {
+            $hookBuilder->accept($context);
+            $includeBuilder?->accept($context);
+            $routeCollector->accept($context);
+        }
+
+        unset($context);
+        $hooks = $hookBuilder->finish();
+        $includes = $includeBuilder?->finish();
+        $routeTable = $routeCollector->finish();
+
         $callGraph = (new CallGraphBuilder($this->registry, $functions, $values, $receivers, $callables, $hooks))
             ->build($contexts);
         $ruleContext = $ruleContext->withGraphs($callGraph, $hooks)
@@ -344,18 +373,7 @@ final class Scanner
             $receivers,
             $hooks,
         );
-        // Include sites resolve before analysis, like the hook graph: which
-        // file an include loads is a static fact.
-        $includes = $this->options->followIncludes
-            ? (new IncludeGraphBuilder(
-                new IncludeResolver($values, $files, $this->root, $themes),
-                $this->root,
-                $this->registry,
-                $values,
-            ))->build($contexts)
-            : null;
-
-        $restRoutes = $this->restRoutes($contexts, $callables, $receivers, $functions, $bodies, $callGraph);
+        $restRoutes = $this->restRoutes($routeTable, $functions, $bodies, $callGraph);
 
         $analyzer = new IntraproceduralAnalyzer(
             $this->registry,
@@ -445,8 +463,16 @@ final class Scanner
                 $shardFindings = [];
                 $shardWarnings = [];
 
+                // A contiguous run of the functions, not every Nth one. They
+                // are listed file by file, so striping made every worker
+                // rebuild every file the cache does not hold. A run keeps each
+                // file with one worker, and merged in shard order the runs
+                // give the warnings in exactly the order one process does.
+                $first = intdiv(count($metas) * $shard, $shardCount);
+                $last = intdiv(count($metas) * ($shard + 1), $shardCount);
+
                 foreach ($metas as $index => $meta) {
-                    if ($index % $shardCount !== $shard) {
+                    if ($index < $first || $index >= $last) {
                         continue;
                     }
 
@@ -590,17 +616,13 @@ final class Scanner
      * see into. `__return_true`, a callback that will not resolve, and a route
      * with no permission callback all leave it unentitled.
      *
-     * @param iterable<FunctionContext> $contexts
      */
     private function restRoutes(
-        iterable $contexts,
-        CallableResolver $callables,
-        ReceiverResolver $receivers,
+        RestRouteTable $table,
         UserFunctionTable $functions,
         FunctionBodies $bodies,
         CallGraph $callGraph,
     ): RestRouteTable {
-        $table = (new RestRouteCollector($callables, $receivers))->collect($contexts);
         $guard = new CapabilityGuard($this->registry, $callGraph);
 
         foreach ($table->callbackKeys() as $key) {

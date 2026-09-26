@@ -265,6 +265,32 @@ Further precision changes from corpus adjudication of the new attribute rule:
 
 ### Changed
 
+- The object-authorization check settles whether each block is guarded once
+  per function, instead of searching again on every question. "Does an
+  entitling check dominate this block" recursed through every phi's inputs and
+  kept no answers, so a 3,000-line import routine in a client's reference
+  trees asked it 185,000 times in one analysis: 38 of that analysis's 47
+  seconds, ten analyses a round. The question is a set of "this holds if all
+  of these hold" rules with no negation, and a counting pass now computes
+  their least fixed point, which is exactly what the recursive search
+  answered. A scan running both over the 50-plugin corpus compared 9,882
+  answers and found no difference.
+- Setup walks every function four times, not six. Hook registrations, include
+  sites and REST routes need only the constant table, and they are now
+  collected in one sweep. Under a memory budget every sweep rebuilds every
+  file the cache does not hold, so this is two fewer rebuilds of each. The
+  call graph needs the finished hook graph and keeps its own sweep.
+- The hook graph remembers its answers. The analysis asks which callbacks a
+  hook runs at every dispatch, on every pass of every analysis, and each
+  answer sorted every matching registration again; a computed hook name such
+  as `"save_post_{$type}"` also scanned every hook in the scan. The graph does
+  not change once built, and any change empties the answers.
+- A call on a receiver of unknown class names every method of that name in
+  the scan. That list is now built once per name instead of once per call.
+- With `--jobs`, the findings pass gives each worker a contiguous run of
+  functions instead of every Nth one. Functions are listed file by file, so
+  striping made every worker rebuild every file the cache does not hold. The
+  runs also put warnings in the order one process gives them.
 - A function declared in several files, such as a library several plugins
   each bundle, no longer rebuilds every copy's file for every method. The
   fixed point fetched each body twice per round, once per pass, and kept one
