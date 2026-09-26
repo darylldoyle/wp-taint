@@ -307,8 +307,17 @@ final class InterproceduralResolver
             $summary = null;
             $log->begin($key);
 
-            foreach ($group as $function) {
-                $context = $this->body($function);
+            // Every body of the group, fetched once for both passes below.
+            // Fetching each again for the second pass rebuilt every file the
+            // cache does not hold, twice per group. The groups are in order of
+            // the file that declares them first, so a class several plugins
+            // bundle has its methods' groups back to back, and the pool keeps
+            // the other copies' files while they run. An unbudgeted scan hands
+            // out the same body object every time already.
+            $this->bodies?->retainFor($group[0] instanceof FunctionMeta ? $group[0]->path : null);
+            $contexts = array_map($this->body(...), $group);
+
+            foreach ($contexts as $context) {
                 $extracted = $this->extractor->extract($context, $visible, $roundProperties, $roundScopes);
                 $summary = $summary === null ? $extracted : $summary->union($extracted);
             }
@@ -329,13 +338,16 @@ final class InterproceduralResolver
                 }
             }
 
-            foreach ($group as $function) {
+            foreach ($contexts as $context) {
                 // A pass with no parameter seeded, purely so property writes in
                 // the body land in the map. Findings are discarded.
-                $this->analyzer->analyze($this->body($function), $visible, $roundProperties, $roundScopes, null, false);
+                $this->analyzer->analyze($context, $visible, $roundProperties, $roundScopes, null, false);
             }
         }
 
+        // The pool serves the fixed point only. The findings pass walks files
+        // in order and needs no more than the one transient file.
+        $this->bodies?->retainFor(null);
         $log->reader = null;
 
         // The log is this worker's, and would otherwise travel back to the

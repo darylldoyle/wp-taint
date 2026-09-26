@@ -60,3 +60,41 @@ it('analyses rebuilt bodies exactly as the originals with four workers', functio
 
     expect(scanWithBudget($directory, 0, 4))->toBe(scanWithBudget($directory, null, 4));
 });
+
+/**
+ * Files rebuilt during the fixed point, read off --debug-memory's notes.
+ */
+function rebuildsDuringResolution(string $directory, int $budget): int
+{
+    $output = new Symfony\Component\Console\Output\BufferedOutput();
+
+    (new Scanner(
+        testRegistry(),
+        new AnalysisOptions(),
+        $directory,
+        jobs: 1,
+        progress: new Enshrined\WpTaint\Cli\MemoryScanProgress($output),
+        memoryBudget: $budget,
+    ))->scan((new FileFinder())->find([$directory]));
+
+    preg_match_all('/graph cache after (setup|resolution): .*?(\d+) files rebuilt/', $output->fetch(), $notes);
+    $rebuilt = array_combine($notes[1], array_map('intval', $notes[2]));
+
+    return $rebuilt['resolution'] - $rebuilt['setup'];
+}
+
+it('fetches each body of a duplicated function once a round, not once per pass', function (): void {
+    // Three copies of a class, none held, and a budget too small for a pool.
+    // Round 1 analyses all 18 bodies, six per file, and round 2 the one group
+    // whose input moved, three bodies. One fetch per body per round is 21.
+    // Fetching every body again for the second pass made it 39.
+    $directory = dirname(__DIR__) . '/Fixtures/duplicated-class';
+
+    expect(rebuildsDuringResolution($directory, 1))->toBe(21);
+});
+
+it('analyses a duplicated class exactly the same at every budget', function (int $budget): void {
+    $directory = dirname(__DIR__) . '/Fixtures/duplicated-class';
+
+    expect(scanWithBudget($directory, $budget))->toBe(scanWithBudget($directory, null));
+})->with([0, 1, 20_000, 60_000, 150_000, 400_000, 2_000_000]);

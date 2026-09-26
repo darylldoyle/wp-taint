@@ -569,12 +569,14 @@ final class Scanner
     private function describeCache(string $when, FunctionBodies $bodies): string
     {
         $budget = $this->processBudget();
+        $megabytes = static fn (int $bytes): string => number_format($bytes / 1_048_576) . 'MB';
 
         return sprintf(
-            'graph cache %s: %s held of %s, %d files rebuilt in this process',
+            'graph cache %s: %s held of %s, a pool of %s, %d files rebuilt in this process',
             $when,
-            number_format($bodies->held() / 1_048_576) . 'MB',
-            $budget === null ? 'no limit' : number_format($budget / 1_048_576) . 'MB',
+            $megabytes($bodies->held()),
+            $budget === null ? 'no limit' : $megabytes($budget - $bodies->poolBudget()),
+            $megabytes($bodies->poolBudget()),
             $bodies->rebuilds(),
         );
     }

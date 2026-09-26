@@ -265,6 +265,16 @@ Further precision changes from corpus adjudication of the new attribute rule:
 
 ### Changed
 
+- A function declared in several files, such as a library several plugins
+  each bundle, no longer rebuilds every copy's file for every method. The
+  fixed point fetched each body twice per round, once per pass, and kept one
+  rebuilt file at a time, so a class of m methods copied into k files the
+  cache does not hold cost 2km rebuilds a round. Each body is now fetched once
+  a round, and an eighth of `--memory-budget` is a pool that keeps every file
+  rebuilt while one file's functions are analysed. On the client's 168
+  reference trees, three bundled copies of mpdf had cost 55 to 94 seconds per
+  method, for hundreds of methods. Findings are unchanged; `--debug-memory`
+  reports the pool's size.
 - The scan runs PHP's cycle collector itself, when the heap has grown by
   1GB, instead of every time ten thousand possible roots gather. The
   automatic collector walked the scan's live graphs over and over and freed

@@ -367,6 +367,38 @@ measured both steps:
 The step is now 1GB. Up to 1GB of garbage can wait for the next collection, on
 top of the budget.
 
+## What the 168-tree run found
+
+At a 4GB budget under an 8GB limit, the 168-tree configuration ran, and fitted:
+round 1 peaked at 6.8GB and round 2 at 7.8GB. It was very slow. Setup took 35
+minutes, round 1 2 hours 35 minutes, and round 2 5 hours 49 minutes, 46% of
+it collecting garbage. An instrumented run showed why. In the first 10,000
+functions of round 1, the analysis itself took 17 of 451 seconds, and
+rebuilding files took most of the rest.
+
+The cost came from functions declared in several files. Plugins bundle their
+own copies of libraries, and reference trees are scanned without excludes, so
+mpdf appeared three times. The resolver analyses all of a function's bodies
+together, and it fetched each body twice a round, once for the summary pass
+and once for the property pass, with one rebuilt file kept at a time. So a
+class of m methods copied into k uncached files cost 2km rebuilds a round,
+where k would do. For mpdf, whose main file is 961KB of source, each method
+cost 55 to 94 seconds.
+
+Two changes fix it, and neither changes the order of work:
+
+- **One fetch per body per round.** The group's bodies are fetched once and
+  used for both passes. An unbudgeted scan already hands out the same body
+  object every time, so this is what it does anyway.
+- **A pool for the current file's run.** The resolver's groups are in order of
+  the file that declares each function first, so a duplicated class's
+  methods run back to back. An eighth of the budget is a pool, and every file
+  rebuilt while one file's functions are analysed stays in it until the
+  resolver moves on to the next file. Nothing is evicted inside that run.
+  Least recently used would fail here, because the resolver cycles through
+  the same files for each method, and once they outgrow the pool it would
+  miss every one.
+
 ## Plan
 
 Each step lands on its own, keeps findings byte-identical, and is checked

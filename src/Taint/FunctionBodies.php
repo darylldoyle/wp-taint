@@ -27,6 +27,26 @@ use PHPCfg\Func;
  *   more: a file it does not hold is rebuilt, used and dropped. The scan reads
  *   files in repeated sweeps, and for that pattern keeping what is already held
  *   beats evicting the least recently used by about half.
+ *
+ * ## The pool
+ *
+ * An eighth of the budget is kept back for a pool, and the cache admits up to
+ * the rest. The fixed point analyses a function's bodies together, and a
+ * function declared in several files, a library several plugins each bundle,
+ * has a body in each of them. With one transient file, every body of every
+ * method of such a class rebuilt its file, twice: a class of m methods copied
+ * into k uncached files cost 2km rebuilds a round where k would do. On the
+ * client's 168 reference trees, three bundled copies of mpdf cost 55 to 94
+ * seconds a method, for hundreds of methods.
+ *
+ * So while the resolver works through one file's functions, every file rebuilt
+ * for them stays in the pool, and the pool empties when the resolver moves to
+ * the next file; see {@see retainFor()}. Nothing is evicted inside that run.
+ * Least recently used would not do: the resolver cycles through the same k
+ * files for each method, and once k files outgrow the pool, it would miss
+ * every one. A file that does not fit the pool is rebuilt as before. Where a
+ * body comes from never changes what it analyses to, so the pool changes time
+ * and nothing else.
  */
 final class FunctionBodies
 {
@@ -47,6 +67,21 @@ final class FunctionBodies
     /** The last file rebuilt and not admitted, kept until another is needed. */
     private ?ParsedFile $transient = null;
 
+    /** @var array<string, ParsedFile> absolute path => file rebuilt for the current owner */
+    private array $pool = [];
+
+    /** Heap the pooled files take, as {@see estimatedSize()} estimates it. */
+    private int $pooled = 0;
+
+    /** The file whose functions the pool is serving, or null when there is no pool. */
+    private ?string $poolOwner = null;
+
+    /** Bytes the cache may admit: the budget less the pool's share. */
+    private readonly ?int $cacheBudget;
+
+    /** Bytes the pool may hold. */
+    private readonly int $poolBudget;
+
     public function __construct(
         private readonly ?CfgBuilder $builder = null,
         private readonly ?int $budget = null,
@@ -56,6 +91,30 @@ final class FunctionBodies
          */
         private readonly ?CycleCollector $collector = null,
     ) {
+        // No budget holds everything and needs no pool. A budget of zero
+        // rebuilds on every request, which is what the tests rely on, so it
+        // gets no pool either.
+        $this->poolBudget = $budget === null || $budget === 0 ? 0 : intdiv($budget, 8);
+        $this->cacheBudget = $budget === null ? null : $budget - $this->poolBudget;
+    }
+
+    /**
+     * Serve the functions of this file next, keeping every file rebuilt for
+     * them until the owner changes. Null empties the pool and stops using it.
+     */
+    public function retainFor(?string $owner): void
+    {
+        if ($owner === $this->poolOwner) {
+            return;
+        }
+
+        foreach (array_keys($this->pool) as $path) {
+            unset($this->contexts[$path]);
+        }
+
+        $this->pool = [];
+        $this->pooled = 0;
+        $this->poolOwner = $owner;
     }
 
     /**
@@ -87,7 +146,9 @@ final class FunctionBodies
 
         $context = FunctionContext::create($func, $file);
 
-        if (isset($this->files[$meta->path])) {
+        // Kept for as long as the file is, so a file with hundreds of methods
+        // does not list its functions again for every one of them.
+        if (isset($this->files[$meta->path]) || isset($this->pool[$meta->path])) {
             $this->contexts[$meta->path][$slot] = $context;
         }
 
@@ -173,12 +234,34 @@ final class FunctionBodies
         return $this->held;
     }
 
+    /**
+     * Heap the pooled files take.
+     */
+    public function pooled(): int
+    {
+        return $this->pooled;
+    }
+
+    /**
+     * Bytes the pool may hold.
+     */
+    public function poolBudget(): int
+    {
+        return $this->poolBudget;
+    }
+
     private function file(FunctionMeta $meta): ParsedFile
     {
         $held = $this->files[$meta->path] ?? null;
 
         if ($held !== null) {
             return $held;
+        }
+
+        $pooled = $this->pool[$meta->path] ?? null;
+
+        if ($pooled !== null) {
+            return $pooled;
         }
 
         if ($this->budget !== 0 && $this->transient?->path === $meta->path) {
@@ -199,10 +282,20 @@ final class FunctionBodies
         $file = $result->file();
         $file->releaseAst();
         $this->rebuilds++;
+        $size = self::estimatedSize($file);
 
-        if (! $this->admit($file, self::estimatedSize($file))) {
-            $this->transient = $this->budget === 0 ? null : $file;
+        if ($this->admit($file, $size)) {
+            return $file;
         }
+
+        if ($this->poolOwner !== null && $this->pooled + $size <= $this->poolBudget) {
+            $this->pool[$file->path] = $file;
+            $this->pooled += $size;
+
+            return $file;
+        }
+
+        $this->transient = $this->budget === 0 ? null : $file;
 
         return $file;
     }
@@ -229,7 +322,7 @@ final class FunctionBodies
 
     private function admit(ParsedFile $file, int $size): bool
     {
-        if ($this->budget === null || ($this->budget > 0 && $this->held + $size <= $this->budget)) {
+        if ($this->cacheBudget === null || ($this->cacheBudget > 0 && $this->held + $size <= $this->cacheBudget)) {
             $this->files[$file->path] = $file;
             $this->sizes[$file->path] = $size;
             $this->held += $size;
