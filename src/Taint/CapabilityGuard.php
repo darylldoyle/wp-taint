@@ -91,8 +91,26 @@ final class CapabilityGuard
     /** @var SplObjectStorage<Op, Block>|null the block each op of the current function sits in */
     private ?SplObjectStorage $blockOf = null;
 
-    /** @var SplObjectStorage<Block, null>|null blocks {@see isEntitled()} is part-way through */
-    private ?SplObjectStorage $asking = null;
+    /**
+     * Answers {@see isEntitled()} has settled for the current function.
+     *
+     * "Does an entitling check dominate this block" recursed: a guard on a
+     * phi asked it of every block the phi's inputs come from, and nothing
+     * remembered the answers. A 3,000-line import routine in a client's
+     * reference trees asked it 185,000 times in one analysis, 38 of the
+     * analysis's 47 seconds, and was analysed ten times a round. Each block is
+     * now settled once; see {@see solve()}.
+     *
+     * @var SplObjectStorage<Block, bool>|null
+     */
+    private ?SplObjectStorage $settled = null;
+
+    /**
+     * Whether an edge into a block entitles, settled the same way.
+     *
+     * @var SplObjectStorage<Block, bool>|null
+     */
+    private ?SplObjectStorage $edgeSettled = null;
 
     public function __construct(
         private readonly Registry $registry,
@@ -109,6 +127,8 @@ final class CapabilityGuard
     {
         $this->dominators = BlockDominators::compute($blocks);
         $this->blockOf = new SplObjectStorage();
+        $this->settled = new SplObjectStorage();
+        $this->edgeSettled = new SplObjectStorage();
 
         foreach ($blocks as $block) {
             foreach ([...$block->phi, ...$block->children] as $op) {
@@ -132,43 +152,267 @@ final class CapabilityGuard
             return false;
         }
 
-        // A phi's inputs are asked about in turn, and in a loop one of them can
-        // lead back here. A block already being asked about is not entitled on
-        // that path, which is the answer that cannot suppress a finding.
-        $this->asking ??= new SplObjectStorage();
+        $settled = $this->settled ??= new SplObjectStorage();
 
-        if ($this->asking->contains($block)) {
-            return false;
+        if (! $settled->contains($block)) {
+            $this->solve($block);
         }
 
-        $this->asking->attach($block);
-
-        try {
-            return $this->entitledByDominator($block);
-        } finally {
-            $this->asking->detach($block);
-        }
+        return $settled->contains($block) && $settled[$block];
     }
 
-    private function entitledByDominator(Block $block): bool
+    /**
+     * Settle whether a block is entitled, together with every block and edge
+     * it depends on, as the least fixed point of two rules.
+     *
+     * A block is entitled when some block that dominates it is entered by an
+     * edge that entitles. An edge into a block entitles when the jump before
+     * it branches on an entitling check and the edge is its entitled side, or
+     * when it branches on a phi and every input the phi can still hold on
+     * that edge comes from an entitled block. Each instance is "this holds if
+     * all of these hold", with no "not" anywhere, so a least fixed point
+     * exists and a counting pass finds it: a rule fires once every block it
+     * needs is known to be entitled, and whatever never fires is not.
+     *
+     * That is what the recursive search this replaced answered. It asked the
+     * same questions depth first and answered "no" for a block it was already
+     * asking about. Such a search answers "yes" exactly when a finite proof
+     * exists that never needs a block it is part-way through, which is the
+     * least fixed point. It just asked again for every path, and lost every
+     * answer it found inside another search.
+     */
+    private function solve(Block $root): void
     {
-        if ($this->dominators === null) {
-            return false;
+        if ($this->dominators === null || $this->settled === null) {
+            return;
         }
 
-        $dominating = $this->dominators->of($block);
+        $this->edgeSettled ??= new SplObjectStorage();
 
-        foreach ($dominating as $candidate) {
-            foreach ($candidate->parents as $parent) {
+        /** @var array<string, Block> $blocks node => the block it is about */
+        $blocks = [];
+
+        /** @var list<array{0: string, 1: list<string>}> $rules head, and the nodes it needs */
+        $rules = [];
+
+        /** @var list<string> $known nodes an earlier call settled as holding */
+        $known = [];
+
+        // A "b" node asks whether a block is entitled, an "e" node whether an
+        // edge into a block entitles.
+        $pending = ['b' . spl_object_id($root) => $root];
+
+        while ($pending !== []) {
+            $node = (string) array_key_last($pending);
+            $block = array_pop($pending);
+
+            if (isset($blocks[$node])) {
+                continue;
+            }
+
+            $blocks[$node] = $block;
+
+            if ($node[0] === 'b') {
+                if ($this->settled->contains($block)) {
+                    if ($this->settled[$block]) {
+                        $known[] = $node;
+                    }
+
+                    continue;
+                }
+
+                if (! $this->dominators->covers($block)) {
+                    continue;
+                }
+
+                foreach ($this->dominators->of($block) as $candidate) {
+                    $edge = 'e' . spl_object_id($candidate);
+                    $rules[] = [$node, [$edge]];
+
+                    if (! isset($blocks[$edge])) {
+                        $pending[$edge] = $candidate;
+                    }
+                }
+
+                continue;
+            }
+
+            if ($this->edgeSettled->contains($block)) {
+                if ($this->edgeSettled[$block]) {
+                    $known[] = $node;
+                }
+
+                continue;
+            }
+
+            foreach ($block->parents as $parent) {
                 $terminal = $parent->children[count($parent->children) - 1] ?? null;
 
-                if ($terminal instanceof Op\Stmt\JumpIf && $this->entitlesOnEdge($terminal, $candidate)) {
-                    return true;
+                if (! $terminal instanceof Op\Stmt\JumpIf) {
+                    continue;
+                }
+
+                $premises = $this->edgePremises($terminal, $block);
+
+                if ($premises === null) {
+                    continue;
+                }
+
+                $needs = [];
+
+                foreach ($premises as $premise) {
+                    $needed = 'b' . spl_object_id($premise);
+                    $needs[$needed] = true;
+
+                    if (! isset($blocks[$needed])) {
+                        $pending[$needed] = $premise;
+                    }
+                }
+
+                $rules[] = [$node, array_keys($needs)];
+            }
+        }
+
+        // The counting pass: a rule fires once every node it needs holds.
+        /** @var array<string, true> $holds */
+        $holds = [];
+
+        /** @var array<string, list<int>> $waitingOn node => the rules that need it */
+        $waitingOn = [];
+
+        /** @var array<int, int> $unmet rule => how many of the nodes it needs do not hold yet */
+        $unmet = [];
+
+        $queue = [];
+
+        foreach ($known as $settledNode) {
+            $holds[$settledNode] = true;
+            $queue[] = $settledNode;
+        }
+
+        foreach ($rules as $index => [$head, $needs]) {
+            $unmet[$index] = count($needs);
+
+            foreach ($needs as $needed) {
+                $waitingOn[$needed][] = $index;
+            }
+
+            if ($needs === [] && ! isset($holds[$head])) {
+                $holds[$head] = true;
+                $queue[] = $head;
+            }
+        }
+
+        while ($queue !== []) {
+            $holding = array_pop($queue);
+
+            foreach ($waitingOn[$holding] ?? [] as $index) {
+                $unmet[$index] = ($unmet[$index] ?? 0) - 1;
+
+                if ($unmet[$index] !== 0) {
+                    continue;
+                }
+
+                $head = $rules[$index][0] ?? null;
+
+                if ($head === null) {
+                    continue;
+                }
+
+                if (! isset($holds[$head])) {
+                    $holds[$head] = true;
+                    $queue[] = $head;
                 }
             }
         }
 
-        return false;
+        // Every node explored depends only on nodes explored, so all of them
+        // are settled now, not only the root.
+        foreach ($blocks as $explored => $about) {
+            $table = $explored[0] === 'b' ? $this->settled : $this->edgeSettled;
+
+            if (! $table->contains($about)) {
+                $table[$about] = isset($holds[$explored]);
+            }
+        }
+    }
+
+    /**
+     * The blocks that must all be entitled for arriving at `$arrivedAt` from
+     * this jump to entitle; empty when it entitles outright, null when it
+     * cannot.
+     *
+     * @return list<Block>|null
+     */
+    private function edgePremises(Op\Stmt\JumpIf $jump, Block $arrivedAt): ?array
+    {
+        $positive = true;
+        $operand = $jump->cond;
+
+        while (true) {
+            $definition = OperandHelper::definingOp($operand);
+
+            if ($definition instanceof Op\Expr\BooleanNot) {
+                $positive = ! $positive;
+                $operand = $definition->expr;
+
+                continue;
+            }
+
+            // `if ( ! current_user_can( … ) || $other ) { return; }` branches
+            // on a phi: `true` when the check failed, `$other` otherwise. The
+            // value the phi has on the edge we arrived by rules some of its
+            // inputs out, and every input still possible must have come from
+            // an entitled block.
+            if ($definition instanceof Op\Phi) {
+                return $this->phiPremises($definition, ($arrivedAt === $jump->if) === $positive);
+            }
+
+            if ($definition === null || ! $this->entitles($definition)) {
+                return null;
+            }
+
+            $wanted = $positive ? $jump->if : $jump->else;
+
+            return $wanted === $arrivedAt ? [] : null;
+        }
+    }
+
+    /**
+     * The blocks a phi holding `$value` could have got it from, every one of
+     * which must be entitled for the phi to prove the caller is; null when it
+     * cannot prove it.
+     *
+     * @return list<Block>|null
+     */
+    private function phiPremises(Op\Phi $phi, bool $value): ?array
+    {
+        $premises = [];
+
+        foreach ($phi->vars as $var) {
+            if (! $var instanceof Operand) {
+                return null;
+            }
+
+            if ($var instanceof Operand\Literal) {
+                // A literal that cannot be `$value` is a path not taken.
+                if ((bool) $var->value !== $value) {
+                    continue;
+                }
+
+                return null;
+            }
+
+            $definition = OperandHelper::definingOp($var);
+
+            if ($definition === null || $this->blockOf === null || ! $this->blockOf->contains($definition)) {
+                return null;
+            }
+
+            $premises[] = $this->blockOf[$definition];
+        }
+
+        return $premises === [] ? null : $premises;
     }
 
     /**
@@ -200,7 +444,7 @@ final class CapabilityGuard
             return false;
         }
 
-        $saved = [$this->dominators, $this->blockOf];
+        $saved = [$this->dominators, $this->blockOf, $this->settled, $this->edgeSettled];
         $this->forFunction($blocks);
         /** @var SplObjectStorage<Op, Block> $blockOf */
         $blockOf = $this->blockOf ?? new SplObjectStorage();
@@ -232,7 +476,7 @@ final class CapabilityGuard
 
             return $returns > 0;
         } finally {
-            [$this->dominators, $this->blockOf] = $saved;
+            [$this->dominators, $this->blockOf, $this->settled, $this->edgeSettled] = $saved;
         }
     }
 
@@ -329,87 +573,6 @@ final class CapabilityGuard
         }
 
         return false;
-    }
-
-    /**
-     * Does this branch prove entitlement on the edge we arrived by?
-     *
-     * A check entitles when it *passes*, so the wanted edge is the true edge,
-     * flipped once per `BooleanNot` between the call and the condition —
-     * `if ( ! current_user_can( … ) ) { wp_die(); }` entitles the else edge.
-     */
-    private function entitlesOnEdge(Op\Stmt\JumpIf $jump, Block $arrivedAt): bool
-    {
-        $positive = true;
-        $operand = $jump->cond;
-
-        while (true) {
-            $definition = OperandHelper::definingOp($operand);
-
-            if ($definition instanceof Op\Expr\BooleanNot) {
-                $positive = ! $positive;
-                $operand = $definition->expr;
-
-                continue;
-            }
-
-            // `if ( ! current_user_can( … ) || $other ) { return; }` branches
-            // on a phi: `true` when the check failed, `$other` otherwise. The
-            // value the phi has on the edge we arrived by rules some of its
-            // inputs out, and every input still possible must have come from
-            // an entitled block.
-            if ($definition instanceof Op\Phi) {
-                $value = ($arrivedAt === $jump->if) === $positive;
-
-                return $this->phiProvesEntitled($definition, $value);
-            }
-
-            if ($definition === null || ! $this->entitles($definition)) {
-                return false;
-            }
-
-            $wanted = $positive ? $jump->if : $jump->else;
-
-            return $wanted === $arrivedAt;
-        }
-    }
-
-    /**
-     * Whether a phi that holds `$value` could only have got it by a path the
-     * caller was entitled on.
-     */
-    private function phiProvesEntitled(Op\Phi $phi, bool $value): bool
-    {
-        $possible = 0;
-
-        foreach ($phi->vars as $var) {
-            if (! $var instanceof Operand) {
-                return false;
-            }
-
-            if ($var instanceof Operand\Literal) {
-                // A literal that cannot be `$value` is a path not taken.
-                if ((bool) $var->value !== $value) {
-                    continue;
-                }
-
-                return false;
-            }
-
-            $possible++;
-            $definition = OperandHelper::definingOp($var);
-
-            if (
-                $definition === null
-                || $this->blockOf === null
-                || ! $this->blockOf->contains($definition)
-                || ! $this->isEntitled($this->blockOf[$definition])
-            ) {
-                return false;
-            }
-        }
-
-        return $possible > 0;
     }
 
     private function entitles(Op $definition): bool

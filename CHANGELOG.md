@@ -265,6 +265,16 @@ Further precision changes from corpus adjudication of the new attribute rule:
 
 ### Changed
 
+- The object-authorization check settles whether each block is guarded once
+  per function, instead of searching again on every question. "Does an
+  entitling check dominate this block" recursed through every phi's inputs and
+  kept no answers, so a 3,000-line import routine in a client's reference
+  trees asked it 185,000 times in one analysis: 38 of that analysis's 47
+  seconds, ten analyses a round. The question is a set of "this holds if all
+  of these hold" rules with no negation, and a counting pass now computes
+  their least fixed point, which is exactly what the recursive search
+  answered. A scan running both over the 50-plugin corpus compared 9,882
+  answers and found no difference.
 - Setup walks every function four times, not six. Hook registrations, include
   sites and REST routes need only the constant table, and they are now
   collected in one sweep. Under a memory budget every sweep rebuilds every
