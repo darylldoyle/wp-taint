@@ -138,7 +138,13 @@ final class CallResolver
         $prefixed = [];
 
         if ($dispatcher->hook) {
-            [$dispatched, $prefixed] = $this->dispatchedByHook($direct, $dispatcher);
+            $parts = null;
+
+            if ($dispatcher->hookModifiers) {
+                [$direct, $parts] = $this->inArrayForm($direct, $dispatcher);
+            }
+
+            [$dispatched, $prefixed] = $this->dispatchedByHook($direct, $dispatcher, $parts);
 
             $dispatched = array_map(
                 static fn (CallTarget $target): CallTarget => $target->runByHook(),
@@ -224,22 +230,24 @@ final class CallResolver
      * whose folded head reaches literal registrations. The caller treats the
      * second list as the bounded guess it is.
      *
+     * @param list<Operand>|null $parts a modified hook's name and modifiers, see {@see inArrayForm()}
+     *
      * @return array{0: list<CallTarget>, 1: list<CallTarget>}
      */
-    private function dispatchedByHook(CallTarget $call, Dispatcher $dispatcher): array
+    private function dispatchedByHook(CallTarget $call, Dispatcher $dispatcher, ?array $parts = null): array
     {
         if ($this->hooks === null) {
             return [[], []];
+        }
+
+        if ($parts !== null) {
+            return $this->dispatchedByModifiedHook($call, $dispatcher, $parts);
         }
 
         $name = $call->argument($dispatcher->callable);
 
         if ($name === null) {
             return [[], []];
-        }
-
-        if ($dispatcher->hookModifiers) {
-            return $this->dispatchedByModifiedHook($call, $dispatcher, $name);
         }
 
         $arguments = $this->calleeArguments($call, $dispatcher);
@@ -272,6 +280,72 @@ final class CallResolver
     }
 
     /**
+     * A modified-hook dispatch in the array form, and its name's parts.
+     *
+     * `gf_apply_filters( array( 'gform_pre_render', $form_id ), $form )` is the
+     * form Gravity Forms uses now. The older one is a plain name with the
+     * modifier, or an array of modifiers, as the second argument:
+     * `gf_apply_filters( 'gform_media_upload_path', $form_id, $upload_dir )`.
+     * There the value is the third argument, and the catalogue's pass-through
+     * entry, which reads the second, would pass the modifier through in its
+     * place. Dropping the modifier from the call leaves one shape to describe.
+     *
+     * A name that neither is an array nor folds to a string could be either
+     * form. It is read as the array form, the current one, and names no hook.
+     *
+     * @return array{0: CallTarget, 1: list<Operand>}
+     */
+    private function inArrayForm(CallTarget $call, Dispatcher $dispatcher): array
+    {
+        $name = $call->argument($dispatcher->callable);
+
+        if ($name === null) {
+            return [$call, []];
+        }
+
+        $parts = self::arrayValues($name);
+
+        if ($parts !== null || $this->values->strings($name) === []) {
+            return [$call, $parts ?? [$name]];
+        }
+
+        $modifier = $call->argument($dispatcher->callable + 1);
+
+        if ($modifier === null) {
+            return [$call, [$name]];
+        }
+
+        $arguments = $call->arguments;
+        array_splice($arguments, $dispatcher->callable + 1, 1);
+
+        return [$call->withArguments($arguments), [$name, ...(self::arrayValues($modifier) ?? [$modifier])]];
+    }
+
+    /**
+     * The values of an array literal, directly or through the variable it was
+     * assigned to.
+     *
+     * @return list<Operand>|null null when the operand is not one
+     */
+    private static function arrayValues(Operand $operand): ?array
+    {
+        $definition = OperandHelper::definingOp($operand);
+
+        if ($definition instanceof Op\Expr\Assign) {
+            $definition = OperandHelper::definingOp($definition->expr);
+        }
+
+        if (! $definition instanceof Op\Expr\Array_) {
+            return null;
+        }
+
+        return array_values(array_filter(
+            $definition->values,
+            static fn (mixed $value): bool => $value instanceof Operand,
+        ));
+    }
+
+    /**
      * A dispatch whose hook argument is a name and its modifiers.
      *
      * `gf_do_action( array( 'gform_after_submission', $form_id ), $entry,
@@ -280,41 +354,21 @@ final class CallResolver
      * all fold is an exact dispatch. At the first modifier that does not fold,
      * a form id held in a variable, the rest can only be a prefix join on the
      * name so far and an underscore, the same bounded guess a computed hook
-     * name gets. The older form, a plain name with the modifier as the second
-     * argument, dispatches the base name exactly and the modifier's names by
-     * the same rules, with the callee's arguments starting after the modifier.
+     * name gets.
+     *
+     * @param list<Operand> $parts the name, then its modifiers
      *
      * @return array{0: list<CallTarget>, 1: list<CallTarget>}
      */
-    private function dispatchedByModifiedHook(CallTarget $call, Dispatcher $dispatcher, Operand $name): array
+    private function dispatchedByModifiedHook(CallTarget $call, Dispatcher $dispatcher, array $parts): array
     {
-        if ($this->hooks === null) {
+        if ($this->hooks === null || $parts === []) {
             return [[], []];
         }
 
-        $definition = OperandHelper::definingOp($name);
-
-        if ($definition instanceof Op\Expr\Array_) {
-            $parts = array_values(array_filter(
-                $definition->values,
-                static fn (mixed $value): bool => $value instanceof Operand,
-            ));
-            $arguments = $this->calleeArguments($call, $dispatcher);
-        } else {
-            $modifier = $call->argument($dispatcher->callable + 1);
-            $parts = $modifier === null ? [$name] : [$name, $modifier];
-            $arguments = array_values(array_slice(
-                $this->calleeArguments($call, $dispatcher),
-                $modifier === null ? 0 : 1,
-            ));
-        }
-
+        $arguments = $this->calleeArguments($call, $dispatcher);
         $exact = [];
         $prefixed = [];
-
-        if ($parts === []) {
-            return [[], []];
-        }
 
         // Every spelling the name can have so far. A part that does not fold
         // ends the chain in a prefix join.
@@ -327,7 +381,7 @@ final class CallResolver
                 }
             }
 
-            $modifiers = $this->values->strings($part);
+            $modifiers = $this->modifierStrings($part);
 
             if ($modifiers === []) {
                 foreach ($names as $hook) {
@@ -357,6 +411,22 @@ final class CallResolver
         }
 
         return [$exact, $prefixed];
+    }
+
+    /**
+     * Every spelling a modifier can have.
+     *
+     * Gravity Forms appends each one with `sprintf( '_%s', $modifier )`, so a
+     * form id written as the integer `5` names `gform_pre_render_5`. The value
+     * resolver folds strings only.
+     *
+     * @return list<string>
+     */
+    private function modifierStrings(Operand $part): array
+    {
+        $literal = OperandHelper::literalValue($part);
+
+        return is_int($literal) ? [(string) $literal] : $this->values->strings($part);
     }
 
     /**

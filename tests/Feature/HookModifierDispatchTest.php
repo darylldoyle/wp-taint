@@ -54,18 +54,20 @@ it('delivers the dispatch arguments to a callback on the base name', function ()
 });
 
 it('fires the name with a literal modifier exactly', function (): void {
+    // A filter, because a prefix join would run an action's callback too. Only
+    // an exact match adds a filter callback's return to the result.
     $source = <<<'PHP'
         <?php
-        add_action( 'gform_after_submission_5', 'acme_form_five', 10, 2 );
-        function acme_form_five( $entry, $form ) {
-            echo $entry['name'];
+        add_filter( 'gform_pre_render_5', 'acme_form_five' );
+        function acme_form_five( $form ) {
+            return $_GET['title'];
         }
-        function acme_process() {
-            gf_do_action( array( 'gform_after_submission', 5 ), $_POST, array() );
+        function acme_render() {
+            echo gf_apply_filters( array( 'gform_pre_render', 5 ), 'Contact us' );
         }
         PHP;
 
-    expect(modifiedHookFindings(scanModifiedHooks($source)))->toContain('wp.xss.unescaped-output@4');
+    expect(modifiedHookFindings(scanModifiedHooks($source)))->toContain('wp.xss.unescaped-output@7');
 });
 
 it('joins a modifier held in a variable by prefix', function (): void {
@@ -132,6 +134,56 @@ it('takes the older form, a name with the modifier as the next argument', functi
         }
         function acme_process( $form_id ) {
             gf_do_action( 'gform_after_submission', $form_id, $_POST, array() );
+        }
+        PHP;
+
+    expect(modifiedHookFindings(scanModifiedHooks($source)))->toContain('wp.xss.unescaped-output@4');
+});
+
+it('passes the older form\'s value through, not its modifier', function (): void {
+    $source = <<<'PHP'
+        <?php
+        function acme_upload_path( $form_id ) {
+            echo gf_apply_filters( 'gform_media_upload_path', $form_id, $_GET['path'] );
+        }
+        function acme_label() {
+            echo gf_apply_filters( 'gform_label', $_GET['form'], 'Contact us' );
+        }
+        PHP;
+
+    $findings = modifiedHookFindings(scanModifiedHooks($source));
+
+    expect($findings)->toContain('wp.xss.unescaped-output@3');
+    expect($findings)->not->toContain('wp.xss.unescaped-output@6');
+});
+
+it('fires every name an older-form array of modifiers spells, exactly', function (): void {
+    // A prefix join would run the callback too, but would not add its return
+    // to the result. Only an exact match does.
+    $source = <<<'PHP'
+        <?php
+        add_filter( 'gform_field_label_5_7', 'acme_field_label' );
+        function acme_field_label( $label ) {
+            return $_GET['label'];
+        }
+        function acme_render() {
+            echo gf_apply_filters( 'gform_field_label', array( 5, 7 ), 'Name' );
+        }
+        PHP;
+
+    expect(modifiedHookFindings(scanModifiedHooks($source)))->toContain('wp.xss.unescaped-output@7');
+});
+
+it('reads a name and modifiers held in a variable as the array form', function (): void {
+    $source = <<<'PHP'
+        <?php
+        add_action( 'gform_after_submission_5', 'acme_form_five', 10, 2 );
+        function acme_form_five( $entry, $form ) {
+            echo $entry['name'];
+        }
+        function acme_process() {
+            $hook = array( 'gform_after_submission', 5 );
+            gf_do_action( $hook, $_POST, array() );
         }
         PHP;
 
