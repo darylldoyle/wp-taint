@@ -16,7 +16,7 @@ use Yosymfony\Toml\Toml;
  * A real WordPress checkout is mostly code you did not write. The interesting
  * shape is a handful of first-party directories inside an install of thousands
  * of third-party files, and often those directories reference each other — a
- * client platform plugin and the two themes built against it are one program,
+ * platform plugin and the two themes built against it are one program,
  * not three scans.
  *
  * That is already expressible on the command line: several paths analysed
@@ -26,8 +26,8 @@ use Yosymfony\Toml\Toml;
  * ```toml
  * [scan]
  * paths = [
- *     "wp-content/mu-plugins/client-platform",
- *     "wp-content/themes/client-theme",
+ *     "wp-content/mu-plugins/acme-platform",
+ *     "wp-content/themes/acme-theme",
  * ]
  * reference = ["wp-content/plugins/some-dependency"]
  * exclude = ["*&#47;vendor/*"]
@@ -44,7 +44,7 @@ use Yosymfony\Toml\Toml;
  *
  * ## Do not reference WordPress core here
  *
- * Measured on a real client theme: 310 files scan in 1.8 seconds alone, 163
+ * Measured on a real theme: 310 files scan in 1.8 seconds alone, 163
  * seconds with `wp-includes` referenced, and the ten extra findings were all
  * false positives from core's block-template machinery tainting
  * `$template->content` and the theme echoing rendered block content. The

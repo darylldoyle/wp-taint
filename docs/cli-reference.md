@@ -184,7 +184,7 @@ rewritten before the graph is built.
 
 ```toml
 [scan]
-paths     = ["themes/client-theme", "plugins/client-shared"]
+paths     = ["themes/acme-theme", "plugins/acme-shared"]
 reference = ["plugins/some-dependency"]
 bootstrap = ["wp-taint-bootstrap.php"]
 exclude   = ["*/vendor/*", "*/node_modules/*"]

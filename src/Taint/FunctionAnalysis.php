@@ -1148,7 +1148,7 @@ final class FunctionAnalysis
      *     echo $html;                                                  // reported
      *
      * The first branch never escaped anything and the second never went near a
-     * filter. Three blocks in a real client theme are exactly this, all of them
+     * filter. Three blocks in a real theme are exactly this, all of them
      * the fallback-to-a-URL shape, and the finding tells the reader to fix an
      * ordering that no path has.
      *
@@ -1657,7 +1657,7 @@ final class FunctionAnalysis
      *     $this->generate_zip( $csv['tmp_name'] );
      *
      * The first version was written against ten corpus plugins that all spell
-     * it the first way, and the first real client codebase it was pointed at
+     * it the first way, and the first real codebase it was pointed at
      * spelled it the second, which reported `fopen()` on PHP's own upload path
      * as traversal at high severity.
      *

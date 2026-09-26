@@ -118,7 +118,7 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A function with thousands of blocks could take gigabytes of memory for its
   dominators alone. The algorithm starts with every block dominating every
   block, and held that as object sets, so a function of n blocks began with n²
-  entries. A generated theme file in a client's reference trees had a function
+  entries. A generated theme file in one site's reference trees had a function
   of 7,910 blocks: about 63 million entries, over 4GB, which ran the scan out
   of memory at an 8GB limit and at a 12GB one. The sets are now bit words, and
   the callers read them without building objects. Every dominator set across
@@ -268,8 +268,8 @@ Further precision changes from corpus adjudication of the new attribute rule:
 - The object-authorization check settles whether each block is guarded once
   per function, instead of searching again on every question. "Does an
   entitling check dominate this block" recursed through every phi's inputs and
-  kept no answers, so a 3,000-line import routine in a client's reference
-  trees asked it 185,000 times in one analysis: 38 of that analysis's 47
+  kept no answers, so a 3,000-line import routine in a commercial plugin
+  asked it 185,000 times in one analysis: 38 of that analysis's 47
   seconds, ten analyses a round. The question is a set of "this holds if all
   of these hold" rules with no negation, and a counting pass now computes
   their least fixed point, which is exactly what the recursive search
@@ -297,14 +297,14 @@ Further precision changes from corpus adjudication of the new attribute rule:
   rebuilt file at a time, so a class of m methods copied into k files the
   cache does not hold cost 2km rebuilds a round. Each body is now fetched once
   a round, and an eighth of `--memory-budget` is a pool that keeps every file
-  rebuilt while one file's functions are analysed. On the client's 168
-  reference trees, three bundled copies of mpdf had cost 55 to 94 seconds per
+  rebuilt while one file's functions are analysed. On a site with 168
+  reference trees, three bundled copies of one PDF library had cost 55 to 94 seconds per
   method, for hundreds of methods. Findings are unchanged; `--debug-memory`
   reports the pool's size.
 - The scan runs PHP's cycle collector itself, when the heap has grown by
   1GB, instead of every time ten thousand possible roots gather. The
   automatic collector walked the scan's live graphs over and over and freed
-  almost nothing: on the client configuration's reference trees it took 58 of
+  almost nothing: on one large site's reference trees it took 58 of
   the first 85 seconds of parsing. Parsing jetpack went from 39 to 14 seconds.
   Findings are unchanged. `--debug-memory` shows the collector's time for each
   phase and round.
@@ -344,12 +344,12 @@ Further precision changes from corpus adjudication of the new attribute rule:
   within a round, a changed summary makes its readers later in the same slice
   dirty at once. Findings, traces and warnings are byte-identical to
   re-analysing everything, checked by `tools/compare-incremental.php` on all
-  50 corpus plugins and a client scan with four reference trees, where the scan
+  50 corpus plugins and a production scan with four reference trees, where the scan
   went from 339s to 155s.
 - Peak memory is about a quarter lower on a scan with reference trees. A
   reference file's AST is released as soon as the file is indexed, since
   structural rules never run on reference trees, rather than after the call
-  graphs are built, which is where the peak was. On a client scan with four
+  graphs are built, which is where the peak was. On a production scan with four
   reference plugins: 3,231MB to 2,445MB, identical findings.
 - Building control flow graphs is about 3.5 times faster. php-cfg's simplifier
   re-walked the whole function for every trivial phi it removed, and was most

@@ -96,8 +96,8 @@ final class CapabilityGuard
      *
      * "Does an entitling check dominate this block" recursed: a guard on a
      * phi asked it of every block the phi's inputs come from, and nothing
-     * remembered the answers. A 3,000-line import routine in a client's
-     * reference trees asked it 185,000 times in one analysis, 38 of the
+     * remembered the answers. A 3,000-line import routine in a commercial
+     * plugin asked it 185,000 times in one analysis, 38 of the
      * analysis's 47 seconds, and was analysed ten times a round. Each block is
      * now settled once; see {@see solve()}.
      *

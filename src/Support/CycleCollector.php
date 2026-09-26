@@ -10,8 +10,8 @@ namespace Enshrined\WpTaint\Support;
  *
  * PHP collects cycles every time ten thousand possible roots have gathered, and
  * each run walks what those roots reach. A scan's control flow graphs are one
- * large web of cycles, and a run reaches a great deal of it. Measured on the
- * client configuration's reference trees, the collector took 58 of the first
+ * large web of cycles, and a run reaches a great deal of it. Measured on one
+ * large site's reference trees, the collector took 58 of the first
  * 85 seconds of parsing and freed almost nothing, because a held graph is not
  * garbage. With a memory budget, a dropped graph is garbage, but the collector
  * still ran hundreds of times to find it.

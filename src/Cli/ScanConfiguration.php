@@ -24,7 +24,7 @@ final class ScanConfiguration
     /**
      * 4GB for the graph cache, on top of what the scan needs anyway.
      *
-     * Chosen for a 32GB machine scanning a client site with its whole plugins
+     * Chosen for a 32GB machine scanning a large site with its whole plugins
      * directory as reference: that scan's tables take about 5GB, and every
      * graph together about 21GB. With 4GB of them held, the peak is about 9GB
      * and the scan rebuilds about two and a half graphs per file. A project

@@ -84,7 +84,7 @@ final class HookGraph
      * pass of every analysis: `do_action( 'save_post' )` in a large function
      * is asked about tens of times a round. Each answer sorted every matching
      * registration, and a computed hook name scanned every hook in the scan.
-     * On the client's 168 reference trees, one function firing `save_post`
+     * On a site with 168 reference trees, one function firing `save_post`
      * took 52 minutes in a round. The graph does not change once it is built,
      * and every change empties these, so a remembered answer is the answer.
      *

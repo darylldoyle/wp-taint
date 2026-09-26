@@ -21,7 +21,7 @@ function acme_import_settings(): string {
 }
 
 /**
- * The same read spread over two statements, which is how the first real client
+ * The same read spread over two statements, which is how the first real
  * codebase this was pointed at spelled it.
  */
 function acme_import_via_variable(): string {

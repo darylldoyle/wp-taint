@@ -9,7 +9,7 @@ namespace Enshrined\WpTaint\Scan;
  *
  * A scan of a real WordPress tree spends most of its time in two places —
  * parsing, and the interprocedural fixed point — and said nothing during
- * either. On a client theme that is fifteen seconds of silence; with reference
+ * either. On a production theme that is fifteen seconds of silence; with reference
  * trees it was seven and a half minutes, which reads as a hang.
  *
  * The scanner reports phases; what to do with them is the caller's business.

@@ -7,7 +7,7 @@
  *
  * The first branch never escapes anything. The second never goes near a filter.
  * The finding a union manufactures here tells the reader to fix an ordering
- * that no path has, and three blocks in a real client theme are exactly this
+ * that no path has, and three blocks in a real theme are exactly this
  * shape — an attachment image with a fallback to a plain URL.
  */
 
