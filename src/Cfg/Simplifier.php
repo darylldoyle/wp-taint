@@ -114,7 +114,7 @@ final class Simplifier extends AbstractVisitor
                         }
                         $found[] = [$phi, $foundPhi];
                     }
-                    // If we get here, we can actually remove the phi node and teh jump
+                    // If we get here, we can actually remove the phi node and the jump
                     foreach ($found as $nodes) {
                         $phi = $nodes[0];
                         $foundPhi = $nodes[1];
