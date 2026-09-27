@@ -115,6 +115,15 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A callee that cleared a kind on the way to a property, a closure's capture,
+  or a file it included still passed that kind on. The caller published its
+  whole argument there. `$this->v = esc_html( $x )` stored HTML taint when the
+  caller passed request data, and a template included after
+  `$label = esc_html( $x )` reported unescaped output. The summary now records
+  the kinds that reach each place, and the caller publishes only those. A
+  request id that a callee passes through `absint()`, and uses to load a record
+  that it then hands to an included file, no longer makes that file's copy of
+  the record look like request data.
 - The authorization rules credited a check inside a hook callback. Walking the
   call graph from an AJAX or `admin_post_` handler, a REST permission callback,
   or a helper guarding an object operation, the walk followed hook dispatches

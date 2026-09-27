@@ -48,8 +48,8 @@ final class AnalysisResult
          * goes nowhere — this records that it happened, and the caller applies
          * the taint it actually passed.
          *
-         * @var list<array{0: string|null, 1: string}> class name (null when
-         *                                             unresolved) and property
+         * @var list<array{0: string|null, 1: string, 2: TaintSet}> class name
+         *     (null when unresolved), property, and the kinds that reached it
          */
         public readonly array $propertiesReached = [],
         /**
@@ -59,7 +59,8 @@ final class AnalysisResult
          * the run that seeds nothing, so a probe run records which captures
          * the seed reached and the caller publishes its actual taint.
          *
-         * @var list<array{0: string, 1: string}> closure key and captured name
+         * @var list<array{0: string, 1: string, 2: TaintSet}> closure key,
+         *     captured name, and the kinds that reached it
          */
         public readonly array $capturesReached = [],
         /**
@@ -72,7 +73,7 @@ final class AnalysisResult
          * whatever the caller passed. The probe records where the seed would
          * have gone, and the caller publishes what it actually passed.
          *
-         * @var list<array{0: string, 1: string, 2: string, 3: int|string|null}> see
+         * @var list<array{0: string, 1: string, 2: string, 3: int|string|null, 4: TaintSet}> see
          *     {@see FunctionSummary::$paramToScope}
          */
         public readonly array $scopesReached = [],

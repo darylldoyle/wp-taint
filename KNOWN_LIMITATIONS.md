@@ -1006,6 +1006,18 @@ parameter reaches, and each caller publishes what it passed. A helper that
 renders a view is reported for the callers that pass it request data, and not
 for the ones that pass literals.
 
+Each caller publishes only the kinds that get through the callee. The summary
+records, for every place a parameter reaches, the kinds that arrived there
+when the parameter carried every kind, and the caller's argument is
+intersected with them. `$label = esc_html( $x ); include 'tpl.php';` hands the
+template no HTML taint, whatever the caller passed as `$x`. The escaping
+markers ride with the kind they describe: a value escaped and then filtered
+keeps that history through a setter that stores it as it came. The recorded kinds
+can include some the callee adds itself: a form it loads from the database
+arrives next to the id it was given. A caller's kind with the same name then
+gets through too. The callee's own run has already put that kind there, so the
+kinds come out right, but the trace can start at the caller.
+
 One shape is missed. A closure that writes its own parameter into a
 by-reference capture, called by the function that made it, does not reach that
 function's later reads:
