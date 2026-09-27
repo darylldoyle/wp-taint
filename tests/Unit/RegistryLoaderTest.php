@@ -27,7 +27,13 @@ function loadRegistry(string $toml): Registry
 it('loads the bundled registries and resolves inheritance', function (): void {
     $registry = testRegistry();
 
-    expect($registry->names)->toBe(['php-core', 'wordpress-generated', 'wordpress-filterable', 'wordpress']);
+    expect($registry->names)->toBe([
+        'php-generated',
+        'php-core',
+        'wordpress-generated',
+        'wordpress-filterable',
+        'wordpress',
+    ]);
     expect($registry->source(Matcher::superglobal('_GET')))->not->toBeNull();
     expect($registry->sanitizer(Matcher::function('esc_html')))->not->toBeNull();
     expect($registry->sinksFor(Matcher::construct('echo')))->not->toBeEmpty();
@@ -243,7 +249,14 @@ it('layers a project-local config last', function (): void {
     $registry = (new RegistryLoader(registryDirectory()))->load('wordpress', $local);
 
     expect($registry->sanitizer(Matcher::function('acme_escape')))->not->toBeNull();
-    expect($registry->names)->toBe(['php-core', 'wordpress-generated', 'wordpress-filterable', 'wordpress', 'project']);
+    expect($registry->names)->toBe([
+        'php-generated',
+        'php-core',
+        'wordpress-generated',
+        'wordpress-filterable',
+        'wordpress',
+        'project',
+    ]);
 });
 
 it('sorts every catalogue map so registry:dump is diffable', function (): void {

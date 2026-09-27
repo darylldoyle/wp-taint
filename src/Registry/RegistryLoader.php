@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Enshrined\WpTaint\Registry;
 
 use Enshrined\WpTaint\Finding\Severity;
+use Enshrined\WpTaint\Taint\CharacterProof;
 use Enshrined\WpTaint\Taint\TaintKind;
 use Enshrined\WpTaint\Taint\TaintSet;
 use InvalidArgumentException;
@@ -31,7 +32,7 @@ final class RegistryLoader
     private const SANITIZER_KEYS = [
         'function', 'class', 'method', 'static_method', 'arg', 'args', 'all_args', 'clears',
         'requires_literal_arg', 'literal_violation_rule_id', 'note', 'imprecise',
-        'clears_by', 'pattern_arg', 'replacement_arg', 'quoted_only',
+        'clears_by', 'pattern_arg', 'replacement_arg', 'quoted_only', 'alphabet',
     ];
 
     private const PROPAGATOR_KEYS = [
@@ -54,6 +55,8 @@ final class RegistryLoader
         'function', 'class', 'method', 'static_method', 'writes', 'from', 'as_container', 'note',
     ];
 
+    private const INTERNAL_KEYS = ['function', 'returns', 'args', 'args_from'];
+
     private const TEMPLATE_KEYS = [
         'function', 'class', 'method', 'static_method',
         'slug_arg', 'slug', 'name_arg', 'args_arg', 'path_arg', 'note',
@@ -75,7 +78,7 @@ final class RegistryLoader
      */
     private const TABLE_KEYS = [
         'meta', 'sources', 'sanitizers', 'propagators', 'sinks', 'safe', 'dispatchers', 'byref',
-        'templates', 'authorization', 'capabilities', 'rules', 'options', 'scan', 'filterable',
+        'templates', 'authorization', 'capabilities', 'rules', 'options', 'scan', 'filterable', 'internal',
     ];
 
     private const OPTION_KEYS = ['safe_database_identifiers'];
@@ -159,6 +162,7 @@ final class RegistryLoader
         $this->loadAuthorization($canonical, $data['authorization'] ?? [], $accumulator);
         $this->loadCapabilities($canonical, $data['capabilities'] ?? [], $accumulator);
         $this->loadFilterable($canonical, $data['filterable'] ?? [], $accumulator);
+        $this->loadInternalFunctions($canonical, $data['internal'] ?? [], $accumulator);
         $this->loadRules($canonical, $data['rules'] ?? [], $accumulator);
         $this->loadOptions($canonical, $data['options'] ?? [], $accumulator);
 
@@ -248,14 +252,18 @@ final class RegistryLoader
             $clearsRaw = $entry['clears'] ?? null;
             $clearsEverything = $this->isWildcard($clearsRaw);
             $clearsBy = $this->clearsBy($file, $context, $entry['clears_by'] ?? null);
+            $alphabet = $this->alphabet($file, $context, $entry);
 
-            // One or the other. A fixed set and a strategy would leave it
-            // ambiguous which one applied, and an entry with neither clears
+            // Exactly one of the three. A fixed set and a strategy would leave
+            // it ambiguous which one applied, and an entry with neither clears
             // nothing, which is a propagator written in the wrong table.
-            if (($clearsBy === null) === ($clearsRaw === null || $clearsRaw === [])) {
-                throw RegistryException::at($file, $context, $clearsBy === null
-                    ? 'must set either clears or clears_by.'
-                    : 'sets both clears and clears_by; a strategy computes what it clears.');
+            $ways = ($clearsRaw === null || $clearsRaw === [] ? 0 : 1) + ($clearsBy === null ? 0 : 1)
+                + ($alphabet === null ? 0 : 1);
+
+            if ($ways !== 1) {
+                throw RegistryException::at($file, $context, $ways === 0
+                    ? 'must set one of clears, clears_by or alphabet.'
+                    : 'sets more than one of clears, clears_by and alphabet; each decides what it clears.');
             }
 
             $accumulator->addSanitizer(new Sanitizer(
@@ -263,6 +271,7 @@ final class RegistryLoader
                 $this->arguments($file, $context, $entry, ArgumentSelector::index(0)),
                 match (true) {
                     $clearsBy !== null => TaintSet::empty(),
+                    $alphabet !== null => $alphabet->clears,
                     $clearsEverything => TaintSet::allDataflowKinds(),
                     default => $this->kinds($file, $context, $clearsRaw, allowWildcard: true),
                 },
@@ -280,9 +289,43 @@ final class RegistryLoader
                 $clearsBy,
                 $this->intValue($file, $context . ' pattern_arg', $entry['pattern_arg'] ?? 0),
                 $this->intValue($file, $context . ' replacement_arg', $entry['replacement_arg'] ?? 1),
-                $this->boolValue($file, $context . ' quoted_only', $entry['quoted_only'] ?? false),
+                $alphabet->sqlQuotedOnly
+                    ?? $this->boolValue($file, $context . ' quoted_only', $entry['quoted_only'] ?? false),
             ));
         }
+    }
+
+    /**
+     * What a function whose output can hold only these characters clears.
+     *
+     * `alphabet = "A-Za-z0-9+/="` for `base64_encode()`. The characters are
+     * written as a regex class body, and {@see CharacterProof} works out the
+     * kinds, the same proof a guard or a strip gets. So the entry cannot
+     * credit a kind the characters still carry.
+     *
+     * @param array<string, mixed> $entry
+     */
+    private function alphabet(string $file, string $context, array $entry): ?CharacterProof
+    {
+        if (! array_key_exists('alphabet', $entry)) {
+            return null;
+        }
+
+        $class = $this->requiredString($file, $context . ' alphabet', $entry['alphabet']);
+        $characters = CharacterProof::expandClass($class);
+
+        if ($characters === null || $characters === '') {
+            throw RegistryException::at($file, $context . ' alphabet', sprintf(
+                '"%s" is not a character class this can read: letters, digits, ranges and escaped punctuation.',
+                $class,
+            ));
+        }
+
+        if (array_key_exists('quoted_only', $entry)) {
+            throw RegistryException::at($file, $context, 'sets quoted_only with alphabet; the alphabet decides it.');
+        }
+
+        return CharacterProof::ofCharacters($characters);
     }
 
     /**
@@ -644,6 +687,44 @@ final class RegistryLoader
                     $this->arrayValue($file, $context . ' params', $entry['params'] ?? []),
                 )),
             );
+        }
+    }
+
+    /**
+     * PHP's own functions, by what reflection says they return.
+     *
+     * Generated rather than curated, see tools/generate-php-catalogue.php,
+     * because what `explode()` is declared to take and return is a fact about
+     * PHP. The engine reads these only for a function no other section models.
+     */
+    private function loadInternalFunctions(string $file, mixed $entries, RegistryAccumulator $accumulator): void
+    {
+        foreach ($this->tableList($file, 'internal', $entries) as $index => $entry) {
+            $context = sprintf('[[internal]] #%d', $index + 1);
+            $this->rejectUnknownKeys($file, $context, $entry, self::INTERNAL_KEYS);
+
+            $arguments = [];
+
+            foreach ($this->arrayValue($file, $context . ' args', $entry['args'] ?? []) as $argument) {
+                if (! is_int($argument) || $argument < 0) {
+                    throw RegistryException::at($file, $context . ' args', 'must list argument positions from 0.');
+                }
+
+                $arguments[] = $argument;
+            }
+
+            $from = $entry['args_from'] ?? null;
+
+            if ($from !== null && (! is_int($from) || $from < 0)) {
+                throw RegistryException::at($file, $context . ' args_from', 'must be an argument position from 0.');
+            }
+
+            $accumulator->addInternalFunction(new InternalFunction(
+                Matcher::function($this->requiredString($file, $context . ' function', $entry['function'] ?? null)),
+                $this->requiredString($file, $context . ' returns', $entry['returns'] ?? null),
+                $arguments,
+                $from,
+            ));
         }
     }
 
