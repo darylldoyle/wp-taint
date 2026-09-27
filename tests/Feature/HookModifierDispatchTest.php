@@ -189,3 +189,28 @@ it('reads a name and modifiers held in a variable as the array form', function (
 
     expect(modifiedHookFindings(scanModifiedHooks($source)))->toContain('wp.xss.unescaped-output@4');
 });
+
+it('does not credit an AJAX handler with a check inside a callback on its hook', function (): void {
+    // The callback's check decides what the filter does to the form. It does
+    // not decide who may call the handler.
+    $source = <<<'PHP'
+        <?php
+        add_action( 'wp_ajax_nopriv_acme_form', 'acme_ajax_form' );
+        add_filter( 'gform_form_post_get_meta', 'acme_restrict_fields' );
+        function acme_restrict_fields( $form ) {
+            if ( is_super_admin() ) {
+                return $form;
+            }
+            $form['fields'] = array();
+            return $form;
+        }
+        function acme_get_form( $form_id ) {
+            return gf_apply_filters( array( 'gform_form_post_get_meta', $form_id ), get_option( 'acme_form' ) );
+        }
+        function acme_ajax_form() {
+            wp_send_json( acme_get_form( 5 ) );
+        }
+        PHP;
+
+    expect(modifiedHookFindings(scanModifiedHooks($source)))->toContain('wp.authz.ajax-missing-check@2');
+});
