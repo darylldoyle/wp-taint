@@ -119,9 +119,10 @@ final class TraceBuilder
      * A concatenation of a clean string and a tainted one has two predecessors;
      * following the clean one produces a trace that stops short of the source
      * and teaches the reader nothing.
-     */
-    /**
-     * @return array{0: Operand|null, 1: list<array-key>|null} the predecessor, and the elements of it the flow can come from
+     *
+     * @return array{0: Operand|null, 1: list<array-key>|null} the predecessor, and
+     *                                                         the elements of it
+     *                                                         the flow can come from
      */
     private function nextOperand(Provenance $provenance, TaintKind $kind): array
     {
