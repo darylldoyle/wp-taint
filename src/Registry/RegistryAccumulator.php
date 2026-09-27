@@ -46,6 +46,9 @@ final class RegistryAccumulator
     /** @var array<string, list<int>> lowercased name => parameter indices the filtered return comes from */
     private array $filterable = [];
 
+    /** @var array<string, InternalFunction> */
+    private array $internal = [];
+
     /** @var array<string, RuleMetadata> */
     private array $rules = [];
 
@@ -127,6 +130,11 @@ final class RegistryAccumulator
         $this->filterable[strtolower(ltrim($function, '\\'))] = array_values($params);
     }
 
+    public function addInternalFunction(InternalFunction $function): void
+    {
+        $this->internal[$function->matcher->key()] = $function;
+    }
+
     public function addRule(RuleMetadata $rule): void
     {
         $this->rules[$rule->id] = $rule;
@@ -159,6 +167,7 @@ final class RegistryAccumulator
         ksort($this->authorization);
         ksort($this->capabilities);
         ksort($this->filterable);
+        ksort($this->internal);
         ksort($this->rules);
 
         $identifiers = $this->safeDatabaseIdentifiers;
@@ -179,6 +188,7 @@ final class RegistryAccumulator
             $this->filterable,
             $this->rules,
             $identifiers,
+            $this->internal,
         );
     }
 

@@ -4,6 +4,7 @@
 
 [meta]
 name = "php-core"
+extends = ["php-generated"]
 description = "PHP language and standard library sources, sinks and sanitizers"
 
 [options]
@@ -67,6 +68,30 @@ kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "
 function = "getenv"
 kinds = ["shell", "path", "storage"]
 note = "Environment-derived, not request-derived, but still outside the code's control."
+
+[[sources]]
+function = "getallheaders"
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "storage"]
+note = "The request's headers, as $_SERVER['HTTP_*'] holds them."
+
+[[sources]]
+function = "apache_request_headers"
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "storage"]
+note = "The request's headers, as $_SERVER['HTTP_*'] holds them."
+
+# A response body is somebody else's output, as wp_remote_retrieve_body() is in
+# wordpress.toml, so these carry the stored kinds.
+[[sources]]
+function = "curl_exec"
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv", "storage"]
+stored = true
+note = "The body of an HTTP response, when CURLOPT_RETURNTRANSFER is set."
+
+[[sources]]
+function = "curl_multi_getcontent"
+kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv", "storage"]
+stored = true
+note = "The body of an HTTP response."
 
 # =============================================================================
 # PROPAGATORS — pass taint through unchanged
@@ -209,6 +234,112 @@ keeps_keys = true
 function = "array_merge"
 keeps_keys = true
 
+# The rest of PHP's array functions that return their input under its keys.
+# Each of these returns part of its first argument, so only that one counts.
+[[propagators]]
+function = "array_diff"
+args = [0]
+keeps_keys = true
+
+[[propagators]]
+function = "array_diff_key"
+args = [0]
+keeps_keys = true
+
+[[propagators]]
+function = "array_diff_assoc"
+args = [0]
+keeps_keys = true
+
+[[propagators]]
+function = "array_diff_ukey"
+args = [0]
+keeps_keys = true
+
+[[propagators]]
+function = "array_diff_uassoc"
+args = [0]
+keeps_keys = true
+
+[[propagators]]
+function = "array_udiff"
+args = [0]
+keeps_keys = true
+
+[[propagators]]
+function = "array_udiff_assoc"
+args = [0]
+keeps_keys = true
+
+[[propagators]]
+function = "array_udiff_uassoc"
+args = [0]
+keeps_keys = true
+
+[[propagators]]
+function = "array_intersect"
+args = [0]
+keeps_keys = true
+
+[[propagators]]
+function = "array_intersect_key"
+args = [0]
+keeps_keys = true
+
+[[propagators]]
+function = "array_intersect_assoc"
+args = [0]
+keeps_keys = true
+
+[[propagators]]
+function = "array_intersect_ukey"
+args = [0]
+keeps_keys = true
+
+[[propagators]]
+function = "array_intersect_uassoc"
+args = [0]
+keeps_keys = true
+
+[[propagators]]
+function = "array_uintersect"
+args = [0]
+keeps_keys = true
+
+[[propagators]]
+function = "array_uintersect_assoc"
+args = [0]
+keeps_keys = true
+
+[[propagators]]
+function = "array_uintersect_uassoc"
+args = [0]
+keeps_keys = true
+
+[[propagators]]
+function = "array_unique"
+args = [0]
+keeps_keys = true
+
+[[propagators]]
+function = "array_reverse"
+args = [0]
+keeps_keys = true
+
+# These merge every argument under its keys.
+[[propagators]]
+function = "array_replace"
+keeps_keys = true
+
+[[propagators]]
+function = "array_replace_recursive"
+keeps_keys = true
+
+[[propagators]]
+function = "array_merge_recursive"
+keeps_keys = true
+
+
 [[propagators]]
 function = "reset"
 
@@ -239,6 +370,14 @@ function = "base64_decode"
 [[propagators]]
 function = "unserialize"
 note = "The result carries the taint of the payload, on top of being an object injection sink."
+
+[[propagators]]
+function = "chr"
+note = "The number is the character. Declared to take an int, so reading the type alone would miss it."
+
+[[propagators]]
+function = "mb_chr"
+note = "The number is the character. Declared to take an int, so reading the type alone would miss it."
 
 # =============================================================================
 # SANITIZERS
@@ -341,6 +480,154 @@ clears = "*"
 function = "hash"
 arg = 1
 clears = "*"
+
+# PHP's own functions the catalogue does not list behave by their declared
+# return type: see php-generated.toml. These are the ones whose result the
+# arguments cannot shape, so reading the type alone would credit them wrongly.
+
+[[sanitizers]]
+function = "hash_hmac"
+arg = 1
+clears = "*"
+note = "A digest. The input cannot choose its characters."
+
+[[sanitizers]]
+function = "hash_file"
+arg = 1
+clears = "*"
+note = "A digest of the file. The input cannot choose its characters."
+
+[[sanitizers]]
+function = "md5_file"
+clears = "*"
+note = "A digest of the file. The input cannot choose its characters."
+
+[[sanitizers]]
+function = "sha1_file"
+clears = "*"
+note = "A digest of the file. The input cannot choose its characters."
+
+[[sanitizers]]
+function = "hash_final"
+clears = "*"
+note = "A digest. The input cannot choose its characters."
+
+[[sanitizers]]
+function = "hash_pbkdf2"
+arg = 1
+clears = "*"
+note = "A derived key. The input cannot choose its characters."
+
+[[sanitizers]]
+function = "hash_hkdf"
+arg = 1
+clears = "*"
+note = "A derived key. The input cannot choose its characters."
+
+[[sanitizers]]
+function = "password_hash"
+clears = "*"
+note = "A salted hash. The password cannot choose its characters."
+
+[[sanitizers]]
+function = "get_class"
+clears = "*"
+note = "Names the object's class, one the code declared. The object's contents do not reach it."
+
+[[sanitizers]]
+function = "get_parent_class"
+clears = "*"
+note = "Names a class the code declared."
+
+[[sanitizers]]
+function = "gettype"
+clears = "*"
+note = "Names a type."
+
+[[sanitizers]]
+function = "get_debug_type"
+clears = "*"
+note = "Names a type or a declared class."
+
+[[sanitizers]]
+function = "get_resource_type"
+clears = "*"
+note = "Names a resource type."
+
+[[sanitizers]]
+function = "spl_object_hash"
+clears = "*"
+note = "A hex id for the object."
+
+[[sanitizers]]
+function = "class_implements"
+clears = "*"
+note = "Names interfaces the code declared."
+
+[[sanitizers]]
+function = "class_parents"
+clears = "*"
+note = "Names classes the code declared."
+
+[[sanitizers]]
+function = "class_uses"
+clears = "*"
+note = "Names traits the code declared."
+
+[[sanitizers]]
+function = "constant"
+clears = "*"
+note = "The argument names a constant. What comes back is the constant's value, which the code defined."
+
+[[sanitizers]]
+function = "ini_get"
+clears = "*"
+note = "The argument names a setting. What comes back is the setting's value."
+
+[[sanitizers]]
+function = "get_cfg_var"
+clears = "*"
+note = "The argument names a setting. What comes back is the setting's value."
+
+[[sanitizers]]
+function = "phpversion"
+clears = "*"
+note = "A version string."
+
+[[sanitizers]]
+function = "php_uname"
+clears = "*"
+note = "Describes the host. The argument picks which part."
+
+[[sanitizers]]
+function = "filetype"
+clears = "*"
+note = "One of a fixed set of type names."
+
+[[sanitizers]]
+function = "mime_content_type"
+clears = "*"
+note = "A MIME type from the detector's own list."
+
+# Output limited to a few characters. The kinds are worked out from the
+# characters, the same proof a guard or a strip gets.
+
+[[sanitizers]]
+function = "base64_encode"
+alphabet = "A-Za-z0-9+/="
+
+[[sanitizers]]
+function = "bin2hex"
+alphabet = "0-9a-f"
+
+[[sanitizers]]
+function = "base_convert"
+alphabet = "0-9a-z"
+
+[[sanitizers]]
+function = "http_build_query"
+alphabet = "A-Za-z0-9._~%+=&-"
+note = "Encodes every key and value. A numeric_prefix or an arg_separator is taken as written, and is almost always a literal."
 
 [[sanitizers]]
 function = "count"
@@ -826,6 +1113,13 @@ writes = 1
 from = [0]
 as_container = true
 note = "Takes attacker-controlled input by definition, and the result is a whole array of it."
+
+[[byref]]
+function = "xml_parse_into_struct"
+writes = 2
+from = [1]
+as_container = true
+note = "Fills an array of the document's elements, text included."
 
 [[byref]]
 function = "array_push"

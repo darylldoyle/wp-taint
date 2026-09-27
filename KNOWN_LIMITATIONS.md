@@ -1027,6 +1027,34 @@ Treating unknown returns as tainted would be correct and unusable: every
 which is a TOML edit rather than a code change; or point `--include-path` at the
 tree it lives in.
 
+**PHP's own functions are the exception.** PHP declares what each one takes and
+returns, so `registries/php-generated.toml` lists every one declared to return
+something that can hold text. A call to one the catalogue does not model by hand
+returns the text of the arguments declared to hold text:
+`explode( ',', $_GET['ids'] )` is request data, and so is `array_pop()` of it.
+An argument declared `int`, `float` or `bool` is a length, a count or a flag,
+so it carries nothing. A function declared to return only a number or a flag
+stays clean. Where the arguments cannot shape the result, a hash, a class name,
+a setting, `php-core.toml` says so by hand, and an output alphabet such as
+`base64_encode()`'s clears what its characters cannot carry.
+
+What that still misses:
+
+- **A by-reference output** carries nothing unless `[[byref]]` lists it. Most
+  are error codes, counts and in-place sorts. `preg_match()`, `parse_str()` and
+  the like are listed.
+- **A function declared to return an object** stays clean, and so do the methods
+  of PHP's own classes: `DOMDocument::saveHTML()`, `DateTime::format()`.
+- **`filter_var()`, `filter_input()` and their array forms** stay clean. What
+  they return depends on the filter constant.
+- **`func_get_args()`, `compact()` and `extract()`** read or write variables by
+  name, which a declared type says nothing about.
+- **A raw binary digest**, `md5( $x, true )`, counts as clean like any other
+  digest, though its bytes can happen to include a quote.
+- **A function PHP gained after the file was written**, or one from an
+  extension the file leaves out, is unmodelled. The file records the PHP
+  version and extensions that wrote it.
+
 ### `--include-path` at WordPress core is opt-in
 
 ```bash

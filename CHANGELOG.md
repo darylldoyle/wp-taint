@@ -9,6 +9,17 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `registries/php-generated.toml`, written by `tools/generate-php-catalogue.php`
+  from reflection: each of PHP's own functions declared to return something
+  that can hold text, with the parameters declared to hold text. The engine
+  reads an `[[internal]]` entry only for a call nothing else models.
+- An `alphabet` key for `[[sanitizers]]`. `alphabet = "A-Za-z0-9+/="` says what
+  characters the output can hold, and the kinds it clears are worked out from
+  them by the same proof a guard gets.
+- `getallheaders()` and `apache_request_headers()` are request sources.
+  `curl_exec()` and `curl_multi_getcontent()` are stored sources, like
+  `wp_remote_retrieve_body()`.
+
 - `--memory-budget` and the `memory_budget` project option cap the memory held
   by parsed files, at 4GB by default. The scan used to hold every file's control
   flow graph from parsing to the end. It now keeps a table of what each function
@@ -115,6 +126,19 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A `preg_replace()` pattern's taint went into the result, though the pattern
+  only chooses what is replaced. WooCommerce trims every price with a pattern
+  built from its stored decimal separator, so each formatted price read as
+  stored HTML once `preg_quote()` carried the separator. The pattern argument
+  no longer counts.
+- A PHP function the catalogue did not list returned clean, whatever it
+  returned. `explode( ',', $_GET['ids'] )` was clean, and so were `array_pop()`,
+  `strstr()`, `dirname()`, `max()` and 300 more that the 50-plugin corpus calls
+  25,000 times. Each now returns the text of its arguments when PHP declares it
+  to return something that can hold text. An argument declared as a number or a
+  flag carries nothing. Hashes, class and type names, settings and output
+  alphabets are modelled by hand, and so are `chr()` and `mb_chr()`, whose
+  number is the character.
 - A propagator dropped an array element written under a literal key.
   `implode( ',', array( 'k' => $_GET['v'] ) )` returned clean, so echoing it
   was missed. An element under a literal key now travels with the others. A

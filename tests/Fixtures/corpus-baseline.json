@@ -48,9 +48,10 @@
     },
     "loginizer": {
         "version": "2.1.0",
-        "findings": 10,
+        "findings": 12,
         "bySeverity": {
-            "high": 6,
+            "high": 7,
+            "low": 1,
             "medium": 4
         },
         "warnings": 0,
@@ -58,21 +59,21 @@
     },
     "wp-super-cache": {
         "version": "3.1.3",
-        "findings": 10,
+        "findings": 23,
         "bySeverity": {
-            "high": 10
+            "high": 23
         },
         "warnings": 0,
         "parseFailures": 0
     },
     "wpforms-lite": {
         "version": "2.0.1.1",
-        "findings": 51,
+        "findings": 52,
         "bySeverity": {
             "critical": 4,
-            "high": 29,
-            "low": 6,
-            "medium": 12
+            "high": 30,
+            "low": 7,
+            "medium": 11
         },
         "warnings": 0,
         "parseFailures": 0

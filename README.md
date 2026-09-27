@@ -243,6 +243,10 @@ function = "wp_unslash"
 note = "Strips slashes only. Pure pass-through. NOT a sanitizer."
 ```
 
+A PHP function the catalogue does not list behaves by what PHP declares it to
+return. `registries/php-generated.toml` is written from reflection by
+`tools/generate-php-catalogue.php`, and any hand-written entry wins over it.
+
 A project-local `wp-taint.toml` in the scan root is loaded last and can add or
 override anything. Unknown keys are a hard error, not a warning: a typo in a
 security catalogue silently creates false negatives.

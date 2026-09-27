@@ -1,0 +1,2979 @@
+# Generated from PHP's own declarations by tools/generate-php-catalogue.php.
+# Do not edit by hand: regenerate it.
+#
+# One entry for each PHP function declared to return something that can hold
+# text, naming the parameters that can hold text. The engine reads an entry
+# only for a call no other section models, so php-core.toml wins.
+#
+# Written by PHP 8.3.33 with: bcmath, calendar, core, ctype, curl, date, dom, exif, fileinfo, filter, ftp, gd, gettext, gmp, hash, iconv, intl, json, libxml, mbstring, mysqli, openssl, pcre, pdo, random, session, simplexml, sodium, spl, standard, tokenizer, xml, xmlreader, xmlwriter, zip, zlib.
+
+[meta]
+name = "php-generated"
+description = "PHP functions by declared type"
+
+[[internal]]
+function = "_"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "addcslashes"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "addslashes"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "array_change_key_case"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "array_chunk"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "array_column"
+returns = "array"
+args = [0, 1, 2]
+
+[[internal]]
+function = "array_combine"
+returns = "array"
+args = [0, 1]
+
+[[internal]]
+function = "array_count_values"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "array_diff"
+returns = "array"
+args = [0]
+args_from = 1
+
+[[internal]]
+function = "array_diff_assoc"
+returns = "array"
+args = [0]
+args_from = 1
+
+[[internal]]
+function = "array_diff_key"
+returns = "array"
+args = [0]
+args_from = 1
+
+[[internal]]
+function = "array_diff_uassoc"
+returns = "array"
+args = [0]
+args_from = 1
+
+[[internal]]
+function = "array_diff_ukey"
+returns = "array"
+args = [0]
+args_from = 1
+
+[[internal]]
+function = "array_fill"
+returns = "array"
+args = [2]
+
+[[internal]]
+function = "array_fill_keys"
+returns = "array"
+args = [0, 1]
+
+[[internal]]
+function = "array_filter"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "array_flip"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "array_intersect"
+returns = "array"
+args = [0]
+args_from = 1
+
+[[internal]]
+function = "array_intersect_assoc"
+returns = "array"
+args = [0]
+args_from = 1
+
+[[internal]]
+function = "array_intersect_key"
+returns = "array"
+args = [0]
+args_from = 1
+
+[[internal]]
+function = "array_intersect_uassoc"
+returns = "array"
+args = [0]
+args_from = 1
+
+[[internal]]
+function = "array_intersect_ukey"
+returns = "array"
+args = [0]
+args_from = 1
+
+[[internal]]
+function = "array_key_first"
+returns = "string|int|null"
+args = [0]
+
+[[internal]]
+function = "array_key_last"
+returns = "string|int|null"
+args = [0]
+
+[[internal]]
+function = "array_keys"
+returns = "array"
+args = [0, 1]
+
+[[internal]]
+function = "array_map"
+returns = "array"
+args = [1]
+args_from = 2
+
+[[internal]]
+function = "array_merge"
+returns = "array"
+args = []
+args_from = 0
+
+[[internal]]
+function = "array_merge_recursive"
+returns = "array"
+args = []
+args_from = 0
+
+[[internal]]
+function = "array_pad"
+returns = "array"
+args = [0, 2]
+
+[[internal]]
+function = "array_pop"
+returns = "mixed"
+args = [0]
+
+[[internal]]
+function = "array_rand"
+returns = "array|string|int"
+args = [0]
+
+[[internal]]
+function = "array_reduce"
+returns = "mixed"
+args = [0, 2]
+
+[[internal]]
+function = "array_replace"
+returns = "array"
+args = [0]
+args_from = 1
+
+[[internal]]
+function = "array_replace_recursive"
+returns = "array"
+args = [0]
+args_from = 1
+
+[[internal]]
+function = "array_reverse"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "array_search"
+returns = "string|int|false"
+args = [0, 1]
+
+[[internal]]
+function = "array_shift"
+returns = "mixed"
+args = [0]
+
+[[internal]]
+function = "array_slice"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "array_splice"
+returns = "array"
+args = [0, 3]
+
+[[internal]]
+function = "array_udiff"
+returns = "array"
+args = [0]
+args_from = 1
+
+[[internal]]
+function = "array_udiff_assoc"
+returns = "array"
+args = [0]
+args_from = 1
+
+[[internal]]
+function = "array_udiff_uassoc"
+returns = "array"
+args = [0]
+args_from = 1
+
+[[internal]]
+function = "array_uintersect"
+returns = "array"
+args = [0]
+args_from = 1
+
+[[internal]]
+function = "array_uintersect_assoc"
+returns = "array"
+args = [0]
+args_from = 1
+
+[[internal]]
+function = "array_uintersect_uassoc"
+returns = "array"
+args = [0]
+args_from = 1
+
+[[internal]]
+function = "array_unique"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "array_values"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "assert_options"
+returns = "mixed"
+args = [1]
+
+[[internal]]
+function = "base64_decode"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "base64_encode"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "base_convert"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "basename"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "bcadd"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "bcdiv"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "bcmod"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "bcmul"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "bcpow"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "bcpowmod"
+returns = "string"
+args = [0, 1, 2]
+
+[[internal]]
+function = "bcsqrt"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "bcsub"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "bin2hex"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "bind_textdomain_codeset"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "bindtextdomain"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "call_user_func"
+returns = "mixed"
+args = []
+args_from = 1
+
+[[internal]]
+function = "call_user_func_array"
+returns = "mixed"
+args = [1]
+
+[[internal]]
+function = "chop"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "chunk_split"
+returns = "string"
+args = [0, 2]
+
+[[internal]]
+function = "class_implements"
+returns = "array|false"
+args = [0]
+
+[[internal]]
+function = "class_parents"
+returns = "array|false"
+args = [0]
+
+[[internal]]
+function = "class_uses"
+returns = "array|false"
+args = [0]
+
+[[internal]]
+function = "collator_get_error_message"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "collator_get_locale"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "collator_get_sort_key"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "compact"
+returns = "array"
+args = [0]
+args_from = 1
+
+[[internal]]
+function = "constant"
+returns = "mixed"
+args = [0]
+
+[[internal]]
+function = "convert_uudecode"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "convert_uuencode"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "count_chars"
+returns = "array|string"
+args = [0]
+
+[[internal]]
+function = "crypt"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "curl_error"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "curl_escape"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "curl_exec"
+returns = "string|bool"
+args = [0]
+
+[[internal]]
+function = "curl_getinfo"
+returns = "mixed"
+args = [0]
+
+[[internal]]
+function = "curl_multi_getcontent"
+returns = "?string"
+args = [0]
+
+[[internal]]
+function = "curl_multi_info_read"
+returns = "array|false"
+args = [0, 1]
+
+[[internal]]
+function = "curl_unescape"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "current"
+returns = "mixed"
+args = [0]
+
+[[internal]]
+function = "date"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "date_format"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "date_interval_format"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "date_parse"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "date_parse_from_format"
+returns = "array"
+args = [0, 1]
+
+[[internal]]
+function = "datefmt_format"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "datefmt_format_object"
+returns = "string|false"
+args = [0, 1, 2]
+
+[[internal]]
+function = "datefmt_get_error_message"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "datefmt_get_locale"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "datefmt_get_pattern"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "datefmt_get_timezone_id"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "datefmt_localtime"
+returns = "array|false"
+args = [0, 1, 2]
+
+[[internal]]
+function = "dcgettext"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "dcngettext"
+returns = "string"
+args = [0, 1, 2]
+
+[[internal]]
+function = "deflate_add"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "dgettext"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "dirname"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "dngettext"
+returns = "string"
+args = [0, 1, 2]
+
+[[internal]]
+function = "dns_get_record"
+returns = "array|false"
+args = [0, 2, 3]
+
+[[internal]]
+function = "end"
+returns = "mixed"
+args = [0]
+
+[[internal]]
+function = "escapeshellarg"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "escapeshellcmd"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "exec"
+returns = "string|false"
+args = [0, 1, 2]
+
+[[internal]]
+function = "exif_read_data"
+returns = "array|false"
+args = [0, 1]
+
+[[internal]]
+function = "exif_thumbnail"
+returns = "string|false"
+args = [0, 1, 2, 3]
+
+[[internal]]
+function = "explode"
+returns = "array"
+args = [0, 1]
+
+[[internal]]
+function = "fgetc"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "fgetcsv"
+returns = "array|false"
+args = [0, 2, 3, 4]
+
+[[internal]]
+function = "fgets"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "file"
+returns = "array|false"
+args = [0, 2]
+
+[[internal]]
+function = "file_get_contents"
+returns = "string|false"
+args = [0, 2]
+
+[[internal]]
+function = "filetype"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "finfo_buffer"
+returns = "string|false"
+args = [0, 1, 3]
+
+[[internal]]
+function = "finfo_file"
+returns = "string|false"
+args = [0, 1, 3]
+
+[[internal]]
+function = "fopen"
+returns = "mixed"
+args = [0, 1, 3]
+
+[[internal]]
+function = "forward_static_call"
+returns = "mixed"
+args = []
+args_from = 1
+
+[[internal]]
+function = "forward_static_call_array"
+returns = "mixed"
+args = [1]
+
+[[internal]]
+function = "fread"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "fscanf"
+returns = "array|int|false|null"
+args = [0, 1]
+args_from = 2
+
+[[internal]]
+function = "fsockopen"
+returns = "mixed"
+args = [0, 2, 3]
+
+[[internal]]
+function = "fstat"
+returns = "array|false"
+args = [0]
+
+[[internal]]
+function = "ftp_mkdir"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "ftp_mlsd"
+returns = "array|false"
+args = [0, 1]
+
+[[internal]]
+function = "ftp_nlist"
+returns = "array|false"
+args = [0, 1]
+
+[[internal]]
+function = "ftp_pwd"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "ftp_raw"
+returns = "?array"
+args = [0, 1]
+
+[[internal]]
+function = "ftp_rawlist"
+returns = "array|false"
+args = [0, 1]
+
+[[internal]]
+function = "ftp_systype"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "get_browser"
+returns = "object|array|false"
+args = [0]
+
+[[internal]]
+function = "get_cfg_var"
+returns = "array|string|false"
+args = [0]
+
+[[internal]]
+function = "get_class"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "get_class_methods"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "get_class_vars"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "get_debug_type"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "get_extension_funcs"
+returns = "array|false"
+args = [0]
+
+[[internal]]
+function = "get_headers"
+returns = "array|false"
+args = [0, 2]
+
+[[internal]]
+function = "get_html_translation_table"
+returns = "array"
+args = [2]
+
+[[internal]]
+function = "get_mangled_object_vars"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "get_meta_tags"
+returns = "array|false"
+args = [0]
+
+[[internal]]
+function = "get_object_vars"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "get_parent_class"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "get_resource_type"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "get_resources"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "getenv"
+returns = "array|string|false"
+args = [0]
+
+[[internal]]
+function = "gethostbyaddr"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "gethostbyname"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "gethostbynamel"
+returns = "array|false"
+args = [0]
+
+[[internal]]
+function = "getimagesize"
+returns = "array|false"
+args = [0, 1]
+
+[[internal]]
+function = "getimagesizefromstring"
+returns = "array|false"
+args = [0, 1]
+
+[[internal]]
+function = "getopt"
+returns = "array|false"
+args = [0, 1, 2]
+
+[[internal]]
+function = "getservbyport"
+returns = "string|false"
+args = [1]
+
+[[internal]]
+function = "gettext"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "gettype"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "glob"
+returns = "array|false"
+args = [0]
+
+[[internal]]
+function = "gmdate"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "gmp_div_qr"
+returns = "array"
+args = [0, 1]
+
+[[internal]]
+function = "gmp_export"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "gmp_gcdext"
+returns = "array"
+args = [0, 1]
+
+[[internal]]
+function = "gmp_rootrem"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "gmp_sqrtrem"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "gmp_strval"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "gmstrftime"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "grapheme_extract"
+returns = "string|false"
+args = [0, 4]
+
+[[internal]]
+function = "grapheme_stristr"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "grapheme_strstr"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "grapheme_substr"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "gzcompress"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "gzdecode"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "gzdeflate"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "gzencode"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "gzfile"
+returns = "array|false"
+args = [0]
+
+[[internal]]
+function = "gzgetc"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "gzgets"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "gzinflate"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "gzopen"
+returns = "mixed"
+args = [0, 1]
+
+[[internal]]
+function = "gzread"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "gzuncompress"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "hash"
+returns = "string"
+args = [0, 1, 3]
+
+[[internal]]
+function = "hash_file"
+returns = "string|false"
+args = [0, 1, 3]
+
+[[internal]]
+function = "hash_final"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "hash_hkdf"
+returns = "string"
+args = [0, 1, 3, 4]
+
+[[internal]]
+function = "hash_hmac"
+returns = "string"
+args = [0, 1, 2]
+
+[[internal]]
+function = "hash_hmac_file"
+returns = "string|false"
+args = [0, 1, 2]
+
+[[internal]]
+function = "hash_pbkdf2"
+returns = "string"
+args = [0, 1, 2, 6]
+
+[[internal]]
+function = "hebrev"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "hex2bin"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "highlight_file"
+returns = "string|bool"
+args = [0]
+
+[[internal]]
+function = "highlight_string"
+returns = "string|bool"
+args = [0]
+
+[[internal]]
+function = "html_entity_decode"
+returns = "string"
+args = [0, 2]
+
+[[internal]]
+function = "htmlentities"
+returns = "string"
+args = [0, 2]
+
+[[internal]]
+function = "htmlspecialchars"
+returns = "string"
+args = [0, 2]
+
+[[internal]]
+function = "htmlspecialchars_decode"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "http_build_query"
+returns = "string"
+args = [0, 1, 2]
+
+[[internal]]
+function = "iconv"
+returns = "string|false"
+args = [0, 1, 2]
+
+[[internal]]
+function = "iconv_get_encoding"
+returns = "array|string|false"
+args = [0]
+
+[[internal]]
+function = "iconv_mime_decode"
+returns = "string|false"
+args = [0, 2]
+
+[[internal]]
+function = "iconv_mime_decode_headers"
+returns = "array|false"
+args = [0, 2]
+
+[[internal]]
+function = "iconv_mime_encode"
+returns = "string|false"
+args = [0, 1, 2]
+
+[[internal]]
+function = "iconv_substr"
+returns = "string|false"
+args = [0, 3]
+
+[[internal]]
+function = "idn_to_ascii"
+returns = "string|false"
+args = [0, 3]
+
+[[internal]]
+function = "idn_to_utf8"
+returns = "string|false"
+args = [0, 3]
+
+[[internal]]
+function = "imageaffinematrixconcat"
+returns = "array|false"
+args = [0, 1]
+
+[[internal]]
+function = "imageaffinematrixget"
+returns = "array|false"
+args = [1]
+
+[[internal]]
+function = "imagecolorsforindex"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "imageftbbox"
+returns = "array|false"
+args = [2, 3, 4]
+
+[[internal]]
+function = "imagefttext"
+returns = "array|false"
+args = [0, 6, 7, 8]
+
+[[internal]]
+function = "imagegetclip"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "imageresolution"
+returns = "array|bool"
+args = [0]
+
+[[internal]]
+function = "imagettfbbox"
+returns = "array|false"
+args = [2, 3, 4]
+
+[[internal]]
+function = "imagettftext"
+returns = "array|false"
+args = [0, 6, 7, 8]
+
+[[internal]]
+function = "implode"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "inet_ntop"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "inet_pton"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "inflate_add"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "ini_alter"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "ini_get"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "ini_get_all"
+returns = "array|false"
+args = [0]
+
+[[internal]]
+function = "ini_set"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "intlcal_get_error_message"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "intlcal_get_locale"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "intlcal_get_type"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "intltz_get_canonical_id"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "intltz_get_display_name"
+returns = "string|false"
+args = [0, 3]
+
+[[internal]]
+function = "intltz_get_equivalent_id"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "intltz_get_error_message"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "intltz_get_id"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "intltz_get_id_for_windows_id"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "intltz_get_region"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "intltz_get_windows_id"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "iptcembed"
+returns = "string|bool"
+args = [0, 1]
+
+[[internal]]
+function = "iptcparse"
+returns = "array|false"
+args = [0]
+
+[[internal]]
+function = "iterator_to_array"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "join"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "json_decode"
+returns = "mixed"
+args = [0]
+
+[[internal]]
+function = "json_encode"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "key"
+returns = "string|int|null"
+args = [0]
+
+[[internal]]
+function = "lcfirst"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "locale_accept_from_http"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "locale_canonicalize"
+returns = "?string"
+args = [0]
+
+[[internal]]
+function = "locale_compose"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "locale_get_all_variants"
+returns = "?array"
+args = [0]
+
+[[internal]]
+function = "locale_get_display_language"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "locale_get_display_name"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "locale_get_display_region"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "locale_get_display_script"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "locale_get_display_variant"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "locale_get_keywords"
+returns = "array|false|null"
+args = [0]
+
+[[internal]]
+function = "locale_get_primary_language"
+returns = "?string"
+args = [0]
+
+[[internal]]
+function = "locale_get_region"
+returns = "?string"
+args = [0]
+
+[[internal]]
+function = "locale_get_script"
+returns = "?string"
+args = [0]
+
+[[internal]]
+function = "locale_lookup"
+returns = "?string"
+args = [0, 1, 3]
+
+[[internal]]
+function = "locale_parse"
+returns = "?array"
+args = [0]
+
+[[internal]]
+function = "lstat"
+returns = "array|false"
+args = [0]
+
+[[internal]]
+function = "ltrim"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "max"
+returns = "mixed"
+args = [0]
+args_from = 1
+
+[[internal]]
+function = "mb_chr"
+returns = "string|false"
+args = [1]
+
+[[internal]]
+function = "mb_convert_case"
+returns = "string"
+args = [0, 2]
+
+[[internal]]
+function = "mb_convert_encoding"
+returns = "array|string|false"
+args = [0, 1, 2]
+
+[[internal]]
+function = "mb_convert_kana"
+returns = "string"
+args = [0, 1, 2]
+
+[[internal]]
+function = "mb_convert_variables"
+returns = "string|false"
+args = [0, 1, 2]
+args_from = 3
+
+[[internal]]
+function = "mb_decode_mimeheader"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "mb_decode_numericentity"
+returns = "string"
+args = [0, 1, 2]
+
+[[internal]]
+function = "mb_detect_encoding"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "mb_detect_order"
+returns = "array|bool"
+args = [0]
+
+[[internal]]
+function = "mb_encode_mimeheader"
+returns = "string"
+args = [0, 1, 2, 3]
+
+[[internal]]
+function = "mb_encode_numericentity"
+returns = "string"
+args = [0, 1, 2]
+
+[[internal]]
+function = "mb_encoding_aliases"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "mb_ereg_replace"
+returns = "string|false|null"
+args = [0, 1, 2, 3]
+
+[[internal]]
+function = "mb_ereg_replace_callback"
+returns = "string|false|null"
+args = [0, 2, 3]
+
+[[internal]]
+function = "mb_ereg_search_pos"
+returns = "array|false"
+args = [0, 1]
+
+[[internal]]
+function = "mb_ereg_search_regs"
+returns = "array|false"
+args = [0, 1]
+
+[[internal]]
+function = "mb_eregi_replace"
+returns = "string|false|null"
+args = [0, 1, 2, 3]
+
+[[internal]]
+function = "mb_get_info"
+returns = "array|string|int|false|null"
+args = [0]
+
+[[internal]]
+function = "mb_http_input"
+returns = "array|string|false"
+args = [0]
+
+[[internal]]
+function = "mb_http_output"
+returns = "string|bool"
+args = [0]
+
+[[internal]]
+function = "mb_internal_encoding"
+returns = "string|bool"
+args = [0]
+
+[[internal]]
+function = "mb_language"
+returns = "string|bool"
+args = [0]
+
+[[internal]]
+function = "mb_output_handler"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "mb_preferred_mime_name"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "mb_regex_encoding"
+returns = "string|bool"
+args = [0]
+
+[[internal]]
+function = "mb_regex_set_options"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "mb_scrub"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "mb_split"
+returns = "array|false"
+args = [0, 1]
+
+[[internal]]
+function = "mb_str_pad"
+returns = "string"
+args = [0, 2, 4]
+
+[[internal]]
+function = "mb_str_split"
+returns = "array"
+args = [0, 2]
+
+[[internal]]
+function = "mb_strcut"
+returns = "string"
+args = [0, 3]
+
+[[internal]]
+function = "mb_strimwidth"
+returns = "string"
+args = [0, 3, 4]
+
+[[internal]]
+function = "mb_stristr"
+returns = "string|false"
+args = [0, 1, 3]
+
+[[internal]]
+function = "mb_strrchr"
+returns = "string|false"
+args = [0, 1, 3]
+
+[[internal]]
+function = "mb_strrichr"
+returns = "string|false"
+args = [0, 1, 3]
+
+[[internal]]
+function = "mb_strstr"
+returns = "string|false"
+args = [0, 1, 3]
+
+[[internal]]
+function = "mb_strtolower"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "mb_strtoupper"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "mb_substitute_character"
+returns = "string|int|bool"
+args = [0]
+
+[[internal]]
+function = "mb_substr"
+returns = "string"
+args = [0, 3]
+
+[[internal]]
+function = "md5"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "md5_file"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "metaphone"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "mime_content_type"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "min"
+returns = "mixed"
+args = [0]
+args_from = 1
+
+[[internal]]
+function = "msgfmt_format"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "msgfmt_format_message"
+returns = "string|false"
+args = [0, 1, 2]
+
+[[internal]]
+function = "msgfmt_get_error_message"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "msgfmt_get_locale"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "msgfmt_get_pattern"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "msgfmt_parse"
+returns = "array|false"
+args = [0, 1]
+
+[[internal]]
+function = "msgfmt_parse_message"
+returns = "array|false"
+args = [0, 1, 2]
+
+[[internal]]
+function = "mysqli_affected_rows"
+returns = "string|int"
+args = [0]
+
+[[internal]]
+function = "mysqli_character_set_name"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "mysqli_error"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "mysqli_error_list"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "mysqli_escape_string"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "mysqli_fetch_all"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "mysqli_fetch_array"
+returns = "array|false|null"
+args = [0]
+
+[[internal]]
+function = "mysqli_fetch_assoc"
+returns = "array|false|null"
+args = [0]
+
+[[internal]]
+function = "mysqli_fetch_column"
+returns = "string|int|float|false|null"
+args = [0]
+
+[[internal]]
+function = "mysqli_fetch_field"
+returns = "object|false"
+args = [0]
+
+[[internal]]
+function = "mysqli_fetch_field_direct"
+returns = "object|false"
+args = [0]
+
+[[internal]]
+function = "mysqli_fetch_fields"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "mysqli_fetch_lengths"
+returns = "array|false"
+args = [0]
+
+[[internal]]
+function = "mysqli_fetch_object"
+returns = "object|false|null"
+args = [0, 1, 2]
+
+[[internal]]
+function = "mysqli_fetch_row"
+returns = "array|false|null"
+args = [0]
+
+[[internal]]
+function = "mysqli_get_charset"
+returns = "?object"
+args = [0]
+
+[[internal]]
+function = "mysqli_get_client_info"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "mysqli_get_connection_stats"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "mysqli_get_host_info"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "mysqli_get_server_info"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "mysqli_info"
+returns = "?string"
+args = [0]
+
+[[internal]]
+function = "mysqli_insert_id"
+returns = "string|int"
+args = [0]
+
+[[internal]]
+function = "mysqli_num_rows"
+returns = "string|int"
+args = [0]
+
+[[internal]]
+function = "mysqli_real_escape_string"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "mysqli_sqlstate"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "mysqli_stat"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "mysqli_stmt_affected_rows"
+returns = "string|int"
+args = [0]
+
+[[internal]]
+function = "mysqli_stmt_error"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "mysqli_stmt_error_list"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "mysqli_stmt_insert_id"
+returns = "string|int"
+args = [0]
+
+[[internal]]
+function = "mysqli_stmt_num_rows"
+returns = "string|int"
+args = [0]
+
+[[internal]]
+function = "mysqli_stmt_sqlstate"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "next"
+returns = "mixed"
+args = [0]
+
+[[internal]]
+function = "ngettext"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "nl2br"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "normalizer_get_raw_decomposition"
+returns = "?string"
+args = [0]
+
+[[internal]]
+function = "normalizer_normalize"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "number_format"
+returns = "string"
+args = [2, 3]
+
+[[internal]]
+function = "numfmt_format"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "numfmt_format_currency"
+returns = "string|false"
+args = [0, 2]
+
+[[internal]]
+function = "numfmt_get_error_message"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "numfmt_get_locale"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "numfmt_get_pattern"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "numfmt_get_symbol"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "numfmt_get_text_attribute"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "ob_gzhandler"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "opendir"
+returns = "mixed"
+args = [0, 1]
+
+[[internal]]
+function = "openssl_csr_get_subject"
+returns = "array|false"
+args = [0]
+
+[[internal]]
+function = "openssl_decrypt"
+returns = "string|false"
+args = [0, 1, 2, 4, 5, 6]
+
+[[internal]]
+function = "openssl_dh_compute_key"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "openssl_digest"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "openssl_encrypt"
+returns = "string|false"
+args = [0, 1, 2, 4, 5, 6]
+
+[[internal]]
+function = "openssl_pbkdf2"
+returns = "string|false"
+args = [0, 1, 4]
+
+[[internal]]
+function = "openssl_pkey_derive"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "openssl_pkey_get_details"
+returns = "array|false"
+args = [0]
+
+[[internal]]
+function = "openssl_random_pseudo_bytes"
+returns = "string"
+args = [1]
+
+[[internal]]
+function = "openssl_spki_export"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "openssl_spki_export_challenge"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "openssl_spki_new"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "openssl_x509_fingerprint"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "openssl_x509_parse"
+returns = "array|false"
+args = [0]
+
+[[internal]]
+function = "pack"
+returns = "string"
+args = [0]
+args_from = 1
+
+[[internal]]
+function = "parse_ini_file"
+returns = "array|false"
+args = [0]
+
+[[internal]]
+function = "parse_ini_string"
+returns = "array|false"
+args = [0]
+
+[[internal]]
+function = "parse_url"
+returns = "array|string|int|false|null"
+args = [0]
+
+[[internal]]
+function = "password_get_info"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "password_hash"
+returns = "string"
+args = [0, 1, 2]
+
+[[internal]]
+function = "pathinfo"
+returns = "array|string"
+args = [0]
+
+[[internal]]
+function = "pfsockopen"
+returns = "mixed"
+args = [0, 2, 3]
+
+[[internal]]
+function = "php_strip_whitespace"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "php_uname"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "phpversion"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "popen"
+returns = "mixed"
+args = [0, 1]
+
+[[internal]]
+function = "pos"
+returns = "mixed"
+args = [0]
+
+[[internal]]
+function = "pow"
+returns = "object|int|float"
+args = [0, 1]
+
+[[internal]]
+function = "preg_filter"
+returns = "array|string|null"
+args = [0, 1, 2, 4]
+
+[[internal]]
+function = "preg_grep"
+returns = "array|false"
+args = [0, 1]
+
+[[internal]]
+function = "preg_quote"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "preg_replace"
+returns = "array|string|null"
+args = [0, 1, 2, 4]
+
+[[internal]]
+function = "preg_replace_callback"
+returns = "array|string|null"
+args = [0, 2, 4]
+
+[[internal]]
+function = "preg_replace_callback_array"
+returns = "array|string|null"
+args = [0, 1, 3]
+
+[[internal]]
+function = "preg_split"
+returns = "array|false"
+args = [0, 1]
+
+[[internal]]
+function = "prev"
+returns = "mixed"
+args = [0]
+
+[[internal]]
+function = "print_r"
+returns = "string|bool"
+args = [0]
+
+[[internal]]
+function = "proc_get_status"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "proc_open"
+returns = "mixed"
+args = [0, 1, 2, 3, 4, 5]
+
+[[internal]]
+function = "quoted_printable_decode"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "quoted_printable_encode"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "quotemeta"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "range"
+returns = "array"
+args = [0, 1]
+
+[[internal]]
+function = "rawurldecode"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "rawurlencode"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "readdir"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "readlink"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "realpath"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "reset"
+returns = "mixed"
+args = [0]
+
+[[internal]]
+function = "resourcebundle_get"
+returns = "mixed"
+args = [0, 1]
+
+[[internal]]
+function = "resourcebundle_get_error_message"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "resourcebundle_locales"
+returns = "array|false"
+args = [0]
+
+[[internal]]
+function = "rtrim"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "scandir"
+returns = "array|false"
+args = [0, 2]
+
+[[internal]]
+function = "serialize"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "session_cache_limiter"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "session_create_id"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "session_id"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "session_module_name"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "session_name"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "session_save_path"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "set_include_path"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "setlocale"
+returns = "string|false"
+args = [1]
+args_from = 2
+
+[[internal]]
+function = "sha1"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sha1_file"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "shell_exec"
+returns = "string|false|null"
+args = [0]
+
+[[internal]]
+function = "show_source"
+returns = "string|bool"
+args = [0]
+
+[[internal]]
+function = "socket_get_status"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "sodium_base642bin"
+returns = "string"
+args = [0, 2]
+
+[[internal]]
+function = "sodium_bin2base64"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_bin2hex"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_aead_chacha20poly1305_decrypt"
+returns = "string|false"
+args = [0, 1, 2, 3]
+
+[[internal]]
+function = "sodium_crypto_aead_chacha20poly1305_encrypt"
+returns = "string"
+args = [0, 1, 2, 3]
+
+[[internal]]
+function = "sodium_crypto_aead_chacha20poly1305_ietf_decrypt"
+returns = "string|false"
+args = [0, 1, 2, 3]
+
+[[internal]]
+function = "sodium_crypto_aead_chacha20poly1305_ietf_encrypt"
+returns = "string"
+args = [0, 1, 2, 3]
+
+[[internal]]
+function = "sodium_crypto_aead_xchacha20poly1305_ietf_decrypt"
+returns = "string|false"
+args = [0, 1, 2, 3]
+
+[[internal]]
+function = "sodium_crypto_aead_xchacha20poly1305_ietf_encrypt"
+returns = "string"
+args = [0, 1, 2, 3]
+
+[[internal]]
+function = "sodium_crypto_auth"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "sodium_crypto_box"
+returns = "string"
+args = [0, 1, 2]
+
+[[internal]]
+function = "sodium_crypto_box_keypair_from_secretkey_and_publickey"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "sodium_crypto_box_open"
+returns = "string|false"
+args = [0, 1, 2]
+
+[[internal]]
+function = "sodium_crypto_box_publickey"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_box_publickey_from_secretkey"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_box_seal"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "sodium_crypto_box_seal_open"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "sodium_crypto_box_secretkey"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_box_seed_keypair"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_core_ristretto255_add"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "sodium_crypto_core_ristretto255_from_hash"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_core_ristretto255_scalar_add"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "sodium_crypto_core_ristretto255_scalar_complement"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_core_ristretto255_scalar_invert"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_core_ristretto255_scalar_mul"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "sodium_crypto_core_ristretto255_scalar_negate"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_core_ristretto255_scalar_reduce"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_core_ristretto255_scalar_sub"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "sodium_crypto_core_ristretto255_sub"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "sodium_crypto_generichash"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "sodium_crypto_generichash_final"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_generichash_init"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_kdf_derive_from_key"
+returns = "string"
+args = [2, 3]
+
+[[internal]]
+function = "sodium_crypto_kx_client_session_keys"
+returns = "array"
+args = [0, 1]
+
+[[internal]]
+function = "sodium_crypto_kx_publickey"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_kx_secretkey"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_kx_seed_keypair"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_kx_server_session_keys"
+returns = "array"
+args = [0, 1]
+
+[[internal]]
+function = "sodium_crypto_pwhash"
+returns = "string"
+args = [1, 2]
+
+[[internal]]
+function = "sodium_crypto_pwhash_scryptsalsa208sha256"
+returns = "string"
+args = [1, 2]
+
+[[internal]]
+function = "sodium_crypto_pwhash_scryptsalsa208sha256_str"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_pwhash_str"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_scalarmult"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "sodium_crypto_scalarmult_base"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_scalarmult_ristretto255"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "sodium_crypto_scalarmult_ristretto255_base"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_secretbox"
+returns = "string"
+args = [0, 1, 2]
+
+[[internal]]
+function = "sodium_crypto_secretbox_open"
+returns = "string|false"
+args = [0, 1, 2]
+
+[[internal]]
+function = "sodium_crypto_secretstream_xchacha20poly1305_init_pull"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "sodium_crypto_secretstream_xchacha20poly1305_init_push"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_secretstream_xchacha20poly1305_pull"
+returns = "array|false"
+args = [0, 1, 2]
+
+[[internal]]
+function = "sodium_crypto_secretstream_xchacha20poly1305_push"
+returns = "string"
+args = [0, 1, 2]
+
+[[internal]]
+function = "sodium_crypto_shorthash"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "sodium_crypto_sign"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "sodium_crypto_sign_detached"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "sodium_crypto_sign_ed25519_pk_to_curve25519"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_sign_ed25519_sk_to_curve25519"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_sign_keypair_from_secretkey_and_publickey"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "sodium_crypto_sign_open"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "sodium_crypto_sign_publickey"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_sign_publickey_from_secretkey"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_sign_secretkey"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_sign_seed_keypair"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_crypto_stream"
+returns = "string"
+args = [1, 2]
+
+[[internal]]
+function = "sodium_crypto_stream_xchacha20"
+returns = "string"
+args = [1, 2]
+
+[[internal]]
+function = "sodium_crypto_stream_xchacha20_xor"
+returns = "string"
+args = [0, 1, 2]
+
+[[internal]]
+function = "sodium_crypto_stream_xchacha20_xor_ic"
+returns = "string"
+args = [0, 1, 3]
+
+[[internal]]
+function = "sodium_crypto_stream_xor"
+returns = "string"
+args = [0, 1, 2]
+
+[[internal]]
+function = "sodium_hex2bin"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "sodium_pad"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sodium_unpad"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "soundex"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "spl_autoload_extensions"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "spl_object_hash"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "sprintf"
+returns = "string"
+args = [0]
+args_from = 1
+
+[[internal]]
+function = "sscanf"
+returns = "array|int|null"
+args = [0, 1]
+args_from = 2
+
+[[internal]]
+function = "stat"
+returns = "array|false"
+args = [0]
+
+[[internal]]
+function = "str_decrement"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "str_getcsv"
+returns = "array"
+args = [0, 1, 2, 3]
+
+[[internal]]
+function = "str_increment"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "str_ireplace"
+returns = "array|string"
+args = [0, 1, 2, 3]
+
+[[internal]]
+function = "str_pad"
+returns = "string"
+args = [0, 2]
+
+[[internal]]
+function = "str_repeat"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "str_replace"
+returns = "array|string"
+args = [0, 1, 2, 3]
+
+[[internal]]
+function = "str_rot13"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "str_shuffle"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "str_split"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "str_word_count"
+returns = "array|int"
+args = [0, 2]
+
+[[internal]]
+function = "strchr"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "stream_bucket_make_writeable"
+returns = "?object"
+args = [0]
+
+[[internal]]
+function = "stream_bucket_new"
+returns = "object"
+args = [0, 1]
+
+[[internal]]
+function = "stream_context_create"
+returns = "mixed"
+args = [0, 1]
+
+[[internal]]
+function = "stream_context_get_default"
+returns = "mixed"
+args = [0]
+
+[[internal]]
+function = "stream_context_get_options"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "stream_context_get_params"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "stream_context_set_default"
+returns = "mixed"
+args = [0]
+
+[[internal]]
+function = "stream_filter_append"
+returns = "mixed"
+args = [0, 1, 3]
+
+[[internal]]
+function = "stream_filter_prepend"
+returns = "mixed"
+args = [0, 1, 3]
+
+[[internal]]
+function = "stream_get_contents"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "stream_get_line"
+returns = "string|false"
+args = [0, 2]
+
+[[internal]]
+function = "stream_get_meta_data"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "stream_resolve_include_path"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "stream_socket_accept"
+returns = "mixed"
+args = [0, 2]
+
+[[internal]]
+function = "stream_socket_client"
+returns = "mixed"
+args = [0, 1, 2, 5]
+
+[[internal]]
+function = "stream_socket_get_name"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "stream_socket_recvfrom"
+returns = "string|false"
+args = [0, 3]
+
+[[internal]]
+function = "stream_socket_server"
+returns = "mixed"
+args = [0, 1, 2, 4]
+
+[[internal]]
+function = "strftime"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "strip_tags"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "stripcslashes"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "stripslashes"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "stristr"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "strpbrk"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "strptime"
+returns = "array|false"
+args = [0, 1]
+
+[[internal]]
+function = "strrchr"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "strrev"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "strstr"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "strtok"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "strtolower"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "strtoupper"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "strtr"
+returns = "string"
+args = [0, 1, 2]
+
+[[internal]]
+function = "strval"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "substr"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "substr_replace"
+returns = "array|string"
+args = [0, 1, 2, 3]
+
+[[internal]]
+function = "system"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "tempnam"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "textdomain"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "timezone_identifiers_list"
+returns = "array"
+args = [1]
+
+[[internal]]
+function = "timezone_location_get"
+returns = "array|false"
+args = [0]
+
+[[internal]]
+function = "timezone_name_from_abbr"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "timezone_name_get"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "timezone_transitions_get"
+returns = "array|false"
+args = [0]
+
+[[internal]]
+function = "token_get_all"
+returns = "array"
+args = [0]
+
+[[internal]]
+function = "transliterator_get_error_message"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "transliterator_transliterate"
+returns = "string|false"
+args = [0, 1]
+
+[[internal]]
+function = "trim"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "ucfirst"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "ucwords"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "uniqid"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "unpack"
+returns = "array|false"
+args = [0, 1]
+
+[[internal]]
+function = "unserialize"
+returns = "mixed"
+args = [0, 1]
+
+[[internal]]
+function = "urldecode"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "urlencode"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "utf8_decode"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "utf8_encode"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "var_export"
+returns = "?string"
+args = [0]
+
+[[internal]]
+function = "vsprintf"
+returns = "string"
+args = [0, 1]
+
+[[internal]]
+function = "wordwrap"
+returns = "string"
+args = [0, 2]
+
+[[internal]]
+function = "xml_parser_get_option"
+returns = "string|int|bool"
+args = [0]
+
+[[internal]]
+function = "xmlwriter_flush"
+returns = "string|int"
+args = [0]
+
+[[internal]]
+function = "xmlwriter_output_memory"
+returns = "string"
+args = [0]
+
+[[internal]]
+function = "zip_entry_compressionmethod"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "zip_entry_name"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "zip_entry_read"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "zip_open"
+returns = "mixed"
+args = [0]
+
+[[internal]]
+function = "zip_read"
+returns = "mixed"
+args = [0]
+
+[[internal]]
+function = "zlib_decode"
+returns = "string|false"
+args = [0]
+
+[[internal]]
+function = "zlib_encode"
+returns = "string|false"
+args = [0]

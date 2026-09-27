@@ -31,6 +31,7 @@ final class Registry
      * @param array<string, CapabilityScope> $capabilities capability name => what a passing check proves
      * @param array<string, RuleMetadata> $rules
      * @param list<string>                $safeDatabaseIdentifiers
+     * @param array<string, InternalFunction> $internal  PHP's own functions, by declared type
      */
     public function __construct(
         public readonly array $names,
@@ -48,6 +49,7 @@ final class Registry
         private readonly array $filterable,
         private readonly array $rules,
         private readonly array $safeDatabaseIdentifiers,
+        private readonly array $internal = [],
     ) {
     }
 
@@ -205,6 +207,14 @@ final class Registry
     public function filterableParameters(string $function): ?array
     {
         return $this->filterable[strtolower(ltrim($function, '\\'))] ?? null;
+    }
+
+    /**
+     * One of PHP's own functions, for a call no other section models.
+     */
+    public function internalFunction(Matcher $matcher): ?InternalFunction
+    {
+        return $this->internal[$matcher->key()] ?? null;
     }
 
     public function isSafeCall(Matcher $matcher): bool
@@ -394,6 +404,7 @@ final class Registry
             $this->filterable,
             $this->rules,
             $this->safeDatabaseIdentifiers,
+            $this->internal,
         );
     }
 
@@ -429,6 +440,7 @@ final class Registry
             $this->filterable,
             $this->rules,
             $this->safeDatabaseIdentifiers,
+            $this->internal,
         );
     }
 }

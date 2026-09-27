@@ -201,6 +201,9 @@ that silently never fires.
 Two parts of the catalogue are generated from WordPress itself and checked for
 drift in CI: the escaper list, cross-checked against the WordPress Coding
 Standards sniffs, and the list of core functions that return filtered content.
+A third is generated from PHP: what each of PHP's own functions is declared to
+take and return. A function the hand-written catalogue does not model behaves
+by that declaration, so `explode()` of request data is request data.
 
 ## What it deliberately does not do
 
@@ -209,7 +212,8 @@ Standards sniffs, and the list of core functions that return filtered content.
 - **No silent skips.** A file that will not parse is exit code 2, not a gap.
 - **No guessing.** An unmodelled function returns clean rather than a guess, and
   a value the engine cannot account for is said to be unaccounted for rather
-  than assumed either way.
+  than assumed either way. PHP's own functions are modelled by what PHP
+  declares they return, which is a fact rather than a guess.
 
 ## Related
 

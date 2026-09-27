@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Taint;
 
+use Enshrined\WpTaint\Cfg\CompatibilityVisitor;
 use Enshrined\WpTaint\Cfg\IncludeGraph;
 use Enshrined\WpTaint\Finding\Finding;
 use Enshrined\WpTaint\Finding\Fingerprint;
@@ -13,6 +14,7 @@ use Enshrined\WpTaint\Finding\TraceVerb;
 use Enshrined\WpTaint\Hooks\RestRouteTable;
 use Enshrined\WpTaint\Registry\ArgumentSelector;
 use Enshrined\WpTaint\Registry\DispatchReturn;
+use Enshrined\WpTaint\Registry\InternalFunction;
 use Enshrined\WpTaint\Registry\Matcher;
 use Enshrined\WpTaint\Registry\MatcherKind;
 use Enshrined\WpTaint\Registry\Registry;
@@ -2953,10 +2955,47 @@ final class FunctionAnalysis
             return $this->writeResult($op->result, TaintSet::empty()) || $changed;
         }
 
-        // A named function the catalogue has no model for. Returning clean is
-        // the deliberate choice: a documented false negative beats an
+        $internal = $matcher === null ? null : $this->registry->internalFunction($matcher);
+
+        if ($internal !== null) {
+            return $this->transferInternalFunction($op, $call, $internal) || $changed;
+        }
+
+        // A named function nothing models, and not one of PHP's own. Returning
+        // clean is the deliberate choice: a documented false negative beats an
         // undocumented false positive.
         return $this->writeResult($op->result, TaintSet::empty()) || $changed;
+    }
+
+    /**
+     * One of PHP's own functions that the catalogue does not model by hand.
+     *
+     * Its declaration says what it returns. A result that can hold text holds
+     * the text of the arguments that can: `explode( ',', $_GET['ids'] )`.
+     * A call written with names or `...` cannot be matched to the declared
+     * positions, so every argument counts.
+     */
+    private function transferInternalFunction(Op\Expr $op, CallTarget $call, InternalFunction $internal): bool
+    {
+        $positions = $op->hasAttribute(CompatibilityVisitor::UNPACKED_OR_NAMED_ARGUMENTS)
+            ? array_keys($call->arguments)
+            : $internal->resolve($call->argumentCount());
+
+        $inputs = [];
+
+        foreach ($positions as $position) {
+            $argument = $call->argument($position);
+
+            if ($argument !== null) {
+                $inputs[] = $argument;
+            }
+        }
+
+        return $this->transferUnion($op, $inputs, sprintf(
+            'PHP declares %s to return %s, so the result carries the text of its arguments.',
+            $call->matcher?->describe() ?? $call->name(),
+            $internal->returns,
+        ));
     }
 
     /**
@@ -3136,6 +3175,18 @@ final class FunctionAnalysis
         Matcher $matcher,
     ): bool {
         $incoming = $this->state->unionOf($call->arguments);
+
+        // A pattern decides which parts of the subject are replaced. Its own
+        // text never reaches the result, so a pattern built from a stored
+        // setting, `preg_quote( $separator )`, does not taint every price the
+        // replacement trims.
+        if ($sanitizer->clearsBy === Sanitizer::ALLOWLIST_PATTERN) {
+            $incoming = $this->state->unionOf(array_values(array_filter(
+                $call->arguments,
+                static fn (int $index): bool => $index !== $sanitizer->patternArgument,
+                ARRAY_FILTER_USE_KEY,
+            )));
+        }
 
         if ($sanitizer->requiresLiteralArgument !== null) {
             $formatArgument = $call->argument($sanitizer->requiresLiteralArgument);
