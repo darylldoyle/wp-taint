@@ -39,9 +39,10 @@ final class ArgumentLayout
      * Lay out the arguments of a call written with `...` or names, or of a
      * callee that takes a variadic parameter.
      *
-     * @param array<int, array{0: Operand, 1: string|null}> $written the call's arguments and how each was
-     *                                                               written; see
-     *                                                               {@see CompatibilityVisitor::UNPACKED_OR_NAMED_ARGUMENTS}
+     * `$written` holds the call's arguments and how each was written: see
+     * {@see CompatibilityVisitor::UNPACKED_OR_NAMED_ARGUMENTS}.
+     *
+     * @param array<int, array{0: Operand, 1: string|null}> $written
      */
     public function lay(CallTarget $target, array $written): CallTarget
     {
@@ -52,10 +53,9 @@ final class ArgumentLayout
         }
 
         $forms = self::formsOf($target->arguments, $written);
+        $shaped = array_filter($forms, static fn (?string $form): bool => $form !== null) !== [];
 
-        if (! in_array(true, array_map(static fn (?string $form): bool => $form !== null, $forms), true)
-            && self::variadicAt($parameters) === null
-        ) {
+        if (! $shaped && self::variadicAt($parameters) === null) {
             return $target;
         }
 

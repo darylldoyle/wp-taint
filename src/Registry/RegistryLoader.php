@@ -445,14 +445,22 @@ final class RegistryLoader
         }
 
         if (! is_array($value) || ! array_is_list($value) || $value === []) {
-            throw RegistryException::at($file, $context, 'must be a list with one list of argument positions per parameter.');
+            throw RegistryException::at(
+                $file,
+                $context,
+                'must be a list with one list of argument positions per parameter.',
+            );
         }
 
         $parameters = [];
 
         foreach ($value as $sources) {
             if (! is_array($sources) || ! array_is_list($sources) || $sources === []) {
-                throw RegistryException::at($file, $context, 'each parameter must list at least one argument position.');
+                throw RegistryException::at(
+                    $file,
+                    $context,
+                    'each parameter must list at least one argument position.',
+                );
             }
 
             $parameters[] = array_map(fn (mixed $source): int => $this->intValue($file, $context, $source), $sources);
