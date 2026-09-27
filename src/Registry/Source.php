@@ -77,6 +77,13 @@ final class Source
          * @var list<string>|null
          */
         public readonly ?array $subKeys = null,
+        /**
+         * `filter_input()`: the filter constant at this argument decides what
+         * the value can still carry. See {@see \Enshrined\WpTaint\Taint\FilterProof}.
+         */
+        public readonly ?int $filterArgument = null,
+        /** Where `filter_input()`'s options are: `options.default` comes back unfiltered. */
+        public readonly ?int $optionsArgument = null,
     ) {
     }
 

@@ -126,6 +126,14 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `filter_var()`, `filter_var_array()`, `filter_input()` and
+  `filter_input_array()` were unlisted, so they returned clean whatever the
+  filter. They now read the filter constant. `FILTER_VALIDATE_INT` and the
+  other number filters clear every payload, an address or number-sanitising
+  filter clears what its characters cannot carry, and the special-characters
+  filters clear HTML. `FILTER_DEFAULT`, `FILTER_VALIDATE_EMAIL`,
+  `FILTER_VALIDATE_URL` and any filter not written as a constant pass the value
+  through. The `filter_input()` pair are request sources.
 - A `preg_replace()` pattern's taint went into the result, though the pattern
   only chooses what is replaced. WooCommerce trims every price with a pattern
   built from its stored decimal separator, so each formatted price read as

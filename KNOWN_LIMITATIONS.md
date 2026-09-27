@@ -1045,8 +1045,14 @@ What that still misses:
   the like are listed.
 - **A function declared to return an object** stays clean, and so do the methods
   of PHP's own classes: `DOMDocument::saveHTML()`, `DateTime::format()`.
-- **`filter_var()`, `filter_input()` and their array forms** stay clean. What
-  they return depends on the filter constant.
+- **`filter_var()` and `filter_input()` read the filter constant.** A number
+  filter clears every payload, an address filter clears what its alphabet
+  cannot hold, and `FILTER_SANITIZE_SPECIAL_CHARS` clears HTML and not SQL. Any
+  other filter passes the value through, and so does one written as a number
+  or held in a variable. The flags are not read, and neither is a definition
+  array for `filter_var_array()` or `filter_input_array()`: the value comes back
+  as it was. `options.default` comes back unfiltered, so the options always
+  count as written.
 - **`func_get_args()`, `compact()` and `extract()`** read or write variables by
   name, which a declared type says nothing about.
 - **A raw binary digest**, `md5( $x, true )`, counts as clean like any other

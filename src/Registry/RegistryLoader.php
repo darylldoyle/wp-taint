@@ -26,13 +26,13 @@ final class RegistryLoader
 
     private const SOURCE_KEYS = [
         'superglobal', 'function', 'class', 'method', 'static_method', 'kinds', 'stored', 'note',
-        'arg', 'arg_literal_contains', 'keys', 'key_prefixes', 'sub_keys', 'applies_by',
+        'arg', 'arg_literal_contains', 'keys', 'key_prefixes', 'sub_keys', 'applies_by', 'filter_arg', 'options_arg',
     ];
 
     private const SANITIZER_KEYS = [
         'function', 'class', 'method', 'static_method', 'arg', 'args', 'all_args', 'clears',
         'requires_literal_arg', 'literal_violation_rule_id', 'note', 'imprecise',
-        'clears_by', 'pattern_arg', 'replacement_arg', 'quoted_only', 'alphabet',
+        'clears_by', 'pattern_arg', 'replacement_arg', 'quoted_only', 'alphabet', 'filter_arg', 'options_arg',
     ];
 
     private const PROPAGATOR_KEYS = [
@@ -238,6 +238,8 @@ final class RegistryLoader
                 isset($entry['sub_keys'])
                     ? $this->stringList($file, $context . ' sub_keys', $entry['sub_keys'])
                     : null,
+                $this->optionalPosition($file, $context . ' filter_arg', $entry['filter_arg'] ?? null),
+                $this->optionalPosition($file, $context . ' options_arg', $entry['options_arg'] ?? null),
             ));
         }
     }
@@ -291,8 +293,15 @@ final class RegistryLoader
                 $this->intValue($file, $context . ' replacement_arg', $entry['replacement_arg'] ?? 1),
                 $alphabet->sqlQuotedOnly
                     ?? $this->boolValue($file, $context . ' quoted_only', $entry['quoted_only'] ?? false),
+                $this->optionalPosition($file, $context . ' filter_arg', $entry['filter_arg'] ?? null),
+                $this->optionalPosition($file, $context . ' options_arg', $entry['options_arg'] ?? null),
             ));
         }
+    }
+
+    private function optionalPosition(string $file, string $context, mixed $value): ?int
+    {
+        return $value === null ? null : $this->intValue($file, $context, $value);
     }
 
     /**

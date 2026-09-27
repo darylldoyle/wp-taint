@@ -18,7 +18,13 @@ final class Sanitizer
      */
     public const ALLOWLIST_PATTERN = 'allowlist_pattern';
 
-    public const STRATEGIES = [self::ALLOWLIST_PATTERN];
+    /**
+     * `filter_var()`: what comes back depends on the filter constant at
+     * {@see $filterArgument}. See {@see \Enshrined\WpTaint\Taint\FilterProof}.
+     */
+    public const FILTER = 'filter';
+
+    public const STRATEGIES = [self::ALLOWLIST_PATTERN, self::FILTER];
 
     public function __construct(
         public readonly Matcher $matcher,
@@ -73,6 +79,13 @@ final class Sanitizer
          * payload to write.
          */
         public readonly bool $quotedOnly = false,
+        /** For the filter strategy: where the filter constant is. */
+        public readonly ?int $filterArgument = null,
+        /**
+         * For the filter strategy: where the options are. `options.default`
+         * comes back unfiltered when the filter fails, so it counts as written.
+         */
+        public readonly ?int $optionsArgument = null,
     ) {
     }
 

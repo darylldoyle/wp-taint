@@ -57,10 +57,10 @@ const EXTENSIONS = [
  * Functions left out on purpose, with the reason.
  */
 const SKIPPED = [
-    'filter_var' => 'What comes back depends on the filter constant. Modelled by filter.',
-    'filter_var_array' => 'What comes back depends on the filter constants. Modelled by filter.',
-    'filter_input' => 'A request source whose result depends on the filter constant. Modelled by filter.',
-    'filter_input_array' => 'A request source whose result depends on the filter constants. Modelled by filter.',
+    'filter_var' => 'What comes back depends on the filter constant. php-core.toml models it.',
+    'filter_var_array' => 'What comes back depends on the filter constants. php-core.toml models it.',
+    'filter_input' => 'A request source whose result depends on the filter constant. php-core.toml models it.',
+    'filter_input_array' => 'A request source whose result depends on the filter constants. php-core.toml models it.',
 ];
 
 const NOT_TEXT = ['int', 'float', 'bool', 'false', 'true', 'null', 'void', 'never', 'callable'];

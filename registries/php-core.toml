@@ -69,6 +69,22 @@ function = "getenv"
 kinds = ["shell", "path", "storage"]
 note = "Environment-derived, not request-derived, but still outside the code's control."
 
+# filter_input() reads the request and filters it in one call. What the value
+# can still carry depends on the filter constant; see FilterProof. A type other
+# than INPUT_GET, INPUT_POST, INPUT_COOKIE or INPUT_SERVER is rare enough that
+# every type counts as the request.
+[[sources]]
+function = "filter_input"
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "object_id", "csv", "storage"]
+filter_arg = 2
+options_arg = 3
+
+[[sources]]
+function = "filter_input_array"
+kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "unserialize", "ldap", "xpath", "identifier", "object_id", "csv", "storage"]
+filter_arg = 1
+note = "A definition array filters each key its own way, and is not read: the value comes back as it was."
+
 [[sources]]
 function = "getallheaders"
 kinds = ["html", "html_attr", "sql", "shell", "path", "url", "header", "eval", "storage"]
@@ -608,6 +624,21 @@ note = "One of a fixed set of type names."
 function = "mime_content_type"
 clears = "*"
 note = "A MIME type from the detector's own list."
+
+# What comes back depends on the filter constant; see FilterProof. A filter
+# that proves nothing, FILTER_DEFAULT included, passes the value through, and
+# the options count as written because options.default comes back unfiltered.
+[[sanitizers]]
+function = "filter_var"
+clears_by = "filter"
+filter_arg = 1
+options_arg = 2
+
+[[sanitizers]]
+function = "filter_var_array"
+clears_by = "filter"
+filter_arg = 1
+note = "A definition array filters each key its own way, and is not read: the value comes back as it was."
 
 # Output limited to a few characters. The kinds are worked out from the
 # characters, the same proof a guard or a strip gets.
