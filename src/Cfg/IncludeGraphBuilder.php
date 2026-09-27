@@ -199,7 +199,7 @@ final class IncludeGraphBuilder
      */
     private function stringsOf(?Operand $operand): array
     {
-        return $operand === null ? [] : $this->values->strings($operand);
+        return $operand === null ? [] : $this->values->knownStrings($operand);
     }
 
     /**

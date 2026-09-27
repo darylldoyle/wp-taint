@@ -3448,7 +3448,7 @@ final class FunctionAnalysis
             return false;
         }
 
-        $names = $this->resolver->values()->strings($key);
+        $names = $this->resolver->values()->knownStrings($key);
 
         if ($names === [] || count($names) > 4) {
             return false;
@@ -3501,7 +3501,7 @@ final class FunctionAnalysis
         $taint = TaintSet::empty();
         $origin = [];
 
-        foreach ($this->resolver->values()->strings($key) as $name) {
+        foreach ($this->resolver->values()->knownStrings($key) as $name) {
             $stored = $this->properties->get(self::OPTION_STORE, $name);
 
             if ($origin === [] && ! $stored->isEmpty()) {

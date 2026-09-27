@@ -62,7 +62,7 @@ final class CallableResolver
     ): array {
         $targets = [];
 
-        foreach ($this->values->strings($callable) as $name) {
+        foreach ($this->values->knownStrings($callable) as $name) {
             $target = $this->fromString($name, $arguments);
 
             if ($target !== null) {
@@ -170,7 +170,7 @@ final class CallableResolver
         ClassTypeMap $types,
         ReceiverResolver $receivers,
     ): array {
-        $methods = $this->values->strings($method);
+        $methods = $this->values->knownStrings($method);
 
         if ($methods === []) {
             return [];
@@ -264,7 +264,7 @@ final class CallableResolver
         ReceiverResolver $receivers,
     ): array {
         // `array( 'Acme_Renderer', 'render' )` — a class name, so static.
-        $classNames = $this->values->strings($receiver);
+        $classNames = $this->values->knownStrings($receiver);
         $static = $classNames !== [];
         $inferred = $receivers->classOf($receiver, $context, $types);
         $classes = $static ? $classNames : ($inferred === null ? [] : [$inferred]);

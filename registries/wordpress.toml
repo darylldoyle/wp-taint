@@ -391,12 +391,42 @@ function = "absint"
 clears = "*"
 note = "Casts to a non-negative integer, which cannot carry a payload in any context."
 
-# like_escape() lives in the generated catalogue clearing "sql". It escapes for
-# a LIKE pattern inside quotes, so it carries the same caveat as esc_sql().
-[[sanitizers]]
+# like_escape() and wpdb::esc_like() escape the LIKE wildcards % and _ and the
+# backslash, and no quote. They protect nothing a query needs protecting, so
+# they pass their argument through. The value still needs esc_sql() or
+# prepare(), which is what WordPress's own documentation says.
+[[propagators]]
 function = "like_escape"
+
+[[propagators]]
+class = "wpdb"
+method = "esc_like"
+
+# wpdb::_escape() is esc_sql()'s implementation, and the deprecated
+# wpdb::escape() its older weak form. Both escape quotes and backslashes.
+[[sanitizers]]
+class = "wpdb"
+method = "_escape"
 clears = ["sql"]
 quoted_only = true
+
+[[sanitizers]]
+class = "wpdb"
+method = "escape"
+clears = ["sql"]
+quoted_only = true
+
+# _wp_specialchars() always encodes & < and >, and encodes quotes only when its
+# second argument asks. esc_html() and esc_attr() ask; a direct call by default
+# does not. Safe in HTML text, not inside an attribute.
+[[sanitizers]]
+function = "_wp_specialchars"
+clears = ["html"]
+
+[[sanitizers]]
+function = "wp_specialchars"
+clears = ["html"]
+note = "Deprecated alias of _wp_specialchars()."
 
 [[sanitizers]]
 function = "esc_sql"

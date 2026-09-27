@@ -282,7 +282,7 @@ final class CallResolver
         $arguments = $this->calleeArguments($call, $dispatcher);
         $exact = [];
         $prefixed = [];
-        $names = $this->values->strings($name);
+        $names = $this->values->knownStrings($name);
 
         foreach ($names as $hook) {
             foreach ($this->hooks->targetsFor($hook) as $target) {
@@ -334,7 +334,7 @@ final class CallResolver
 
         $parts = self::arrayValues($name);
 
-        if ($parts !== null || $this->values->strings($name) === []) {
+        if ($parts !== null || $this->values->knownStrings($name) === []) {
             return [$call, $parts ?? [$name]];
         }
 
@@ -401,7 +401,7 @@ final class CallResolver
 
         // Every spelling the name can have so far. A part that does not fold
         // ends the chain in a prefix join.
-        $names = $this->values->strings($parts[0]);
+        $names = $this->values->knownStrings($parts[0]);
 
         foreach (array_slice($parts, 1) as $part) {
             foreach ($names as $hook) {
@@ -455,7 +455,7 @@ final class CallResolver
     {
         $literal = OperandHelper::literalValue($part);
 
-        return is_int($literal) ? [(string) $literal] : $this->values->strings($part);
+        return is_int($literal) ? [(string) $literal] : $this->values->knownStrings($part);
     }
 
     /**
@@ -469,7 +469,7 @@ final class CallResolver
     {
         $targets = [];
 
-        foreach ($this->values->strings($class) as $name) {
+        foreach ($this->values->knownStrings($class) as $name) {
             $name = ltrim($name, '\\');
 
             if ($name === '') {
@@ -661,7 +661,7 @@ final class CallResolver
         // answers stay dynamic: picking one would be a guess, and the union of
         // effects belongs to the callable path, not this one.
         if ($method === null) {
-            $names = $this->values->strings($op->name);
+            $names = $this->values->knownStrings($op->name);
             $method = count($names) === 1 ? $names[0] : null;
         }
 

@@ -181,13 +181,13 @@ final class HookGraphBuilder
         // A hook name that resolves to several strings registers the callback
         // on all of them. `add_action( $is_admin ? 'admin_init' : 'init', $cb )`
         // genuinely does run in both places.
-        $names = $this->values->strings($arguments[0]);
+        $names = $this->values->knownStrings($arguments[0]);
         $priority = $this->intArgument($arguments[2] ?? null, 10);
         $accepted = $this->intArgument($arguments[3] ?? null, 1);
 
         // `$loader->add_action( $hook, $component, 'method' )` splits the
         // callback across two arguments; every other form keeps it in one.
-        $callbacks = $wrapped && isset($arguments[2]) && $this->values->strings($arguments[2]) !== []
+        $callbacks = $wrapped && isset($arguments[2]) && $this->values->knownStrings($arguments[2]) !== []
             ? $this->callables->resolveParts($arguments[1], $arguments[2], $context, $types, $this->receivers)
             : $this->callables->resolve($arguments[1], [], $context, $types, $this->receivers);
 

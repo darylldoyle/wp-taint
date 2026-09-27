@@ -603,16 +603,20 @@ different because it grants more than the write did.
 
 ### `esc_sql()` is only credited inside quotes
 
-`esc_sql()`, `wpdb::_real_escape()` and `like_escape()` escape quotes and
-backslashes. Inside quotes that is a real defence; outside them there is nothing
-to escape and `1 OR 1=1` reaches the database whole. So they do not clear `sql`;
-they trade it for `sql_unquoted`, which the sink reports only when the value
-lands in an unquoted position.
+`esc_sql()`, `wpdb::_real_escape()`, `wpdb::_escape()`, `addslashes()` and
+`mysqli_real_escape_string()` escape quotes and backslashes. Inside quotes that
+is a real defence; outside them there is nothing to escape and `1 OR 1=1`
+reaches the database whole. So they do not clear `sql`; they trade it for
+`sql_unquoted`, which the sink reports only when the value lands in an unquoted
+position. `like_escape()` and `wpdb::esc_like()` escape only the LIKE wildcards
+and the backslash, so they clear nothing.
 
 Quote state is read from the fragments of the query string, counting unescaped
 `'` and `"`. A fragment that is not written as a literal still counts when it
 folds to exactly one string, a helper returning a constant `"WHERE name = '"`
-carries its quote into the position after it, a call away from the sink.
+carries its quote into the position after it, a call away from the sink. A
+fragment that is one of several values, one of which will not fold, does not
+count: `$c ? "'" : $x` could hold anything.
 Backticks quote identifiers rather than values and offer a value no protection,
 so they deliberately do not count as being in quotes.
 

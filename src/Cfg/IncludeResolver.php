@@ -91,7 +91,7 @@ final class IncludeResolver
      */
     public function resolvePath(Operand $path, string $includingFile): array
     {
-        $candidates = $this->values->strings($path);
+        $candidates = $this->values->knownStrings($path);
 
         if ($candidates === [] || count($candidates) > self::MAX_TARGETS) {
             return [];

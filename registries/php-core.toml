@@ -298,6 +298,33 @@ clears = ["html"]
 imprecise = true
 note = "Only safe inside a JSON context. Marked imprecise so consumers can filter."
 
+# Quote escapers for SQL. Each escapes quotes and backslashes, which defends a
+# value inside quotes and nothing else, the same caveat as esc_sql(). They used
+# to be absent, and an unlisted function returns clean, so they cleared every
+# kind in every context.
+[[sanitizers]]
+function = "addslashes"
+clears = ["sql"]
+quoted_only = true
+note = "A multibyte connection charset such as GBK defeats it. WordPress connects as utf8mb4."
+
+[[sanitizers]]
+function = "mysqli_real_escape_string"
+arg = 1
+clears = ["sql"]
+quoted_only = true
+
+[[sanitizers]]
+class = "mysqli"
+method = "real_escape_string"
+clears = ["sql"]
+quoted_only = true
+
+[[sanitizers]]
+function = "mysql_real_escape_string"
+clears = ["sql"]
+quoted_only = true
+
 [[sanitizers]]
 function = "md5"
 clears = "*"
