@@ -446,6 +446,18 @@ requires_literal_arg = 0
 literal_violation_rule_id = "wp.sqli.prepare-non-literal"
 note = "Only sanitises with a literal first argument. Interpolating a variable into the format string defeats it entirely."
 
+# Identifier escapers in widely used plugins. A table or column name cannot be
+# a prepare() placeholder before %i, so plugins that build names escape them by
+# hand: double every backtick, then wrap the name in backticks. That is MySQL's
+# rule for a quoted identifier, and the result carries its own quotes, so it is
+# safe wherever the query puts it. Unlike esc_sql(), nothing is left for an
+# unquoted context.
+[[sanitizers]]
+class = "UpdraftPlus_Database_Utility"
+static_method = "escape_table_name"
+clears = ["sql"]
+note = "Doubles every backtick and wraps the name in backticks: a complete quoted identifier."
+
 # =============================================================================
 # EXPLICITLY SAFE — do not re-add these as sinks
 # =============================================================================
