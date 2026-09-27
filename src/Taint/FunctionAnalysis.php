@@ -12,11 +12,11 @@ use Enshrined\WpTaint\Finding\Severity;
 use Enshrined\WpTaint\Finding\TraceStep;
 use Enshrined\WpTaint\Finding\TraceVerb;
 use Enshrined\WpTaint\Hooks\RestRouteTable;
-use Enshrined\WpTaint\Registry\ArgumentSelector;
 use Enshrined\WpTaint\Registry\DispatchReturn;
 use Enshrined\WpTaint\Registry\InternalFunction;
 use Enshrined\WpTaint\Registry\Matcher;
 use Enshrined\WpTaint\Registry\MatcherKind;
+use Enshrined\WpTaint\Registry\Propagator;
 use Enshrined\WpTaint\Registry\Registry;
 use Enshrined\WpTaint\Registry\Sanitizer;
 use Enshrined\WpTaint\Registry\Sink;
@@ -2091,7 +2091,7 @@ final class FunctionAnalysis
             }
         }
 
-        return $this->transferUnion(
+        return $this->transferConcatenation(
             $op,
             $parts,
             'Interpolated into a string. Interpolation concatenates; it does not escape.',
@@ -2100,11 +2100,69 @@ final class FunctionAnalysis
 
     private function transferBinaryConcat(Op\Expr\BinaryOp $op): bool
     {
-        $description = $op instanceof Op\Expr\BinaryOp\Coalesce
-            ? 'Null coalescing passes the left-hand value through when it is set.'
-            : 'Concatenated into a larger string.';
+        if ($op instanceof Op\Expr\BinaryOp\Coalesce) {
+            return $this->transferUnion(
+                $op,
+                [$op->left, $op->right],
+                'Null coalescing passes the left-hand value through when it is set.',
+            );
+        }
 
-        return $this->transferUnion($op, [$op->left, $op->right], $description);
+        return $this->transferConcatenation($op, [$op->left, $op->right], 'Concatenated into a larger string.');
+    }
+
+    /**
+     * A concatenation: the union of its parts, with an escaped SQL value moved
+     * to where its quotes put it. See {@see SqlQuoteFold}.
+     *
+     * The fold reads the whole string this one belongs to, through the
+     * concatenations and assignments that built it, so `"x = '" . esc_sql( $v )
+     * . "'"` sees both quotes although PHP builds it in two steps.
+     *
+     * @param list<Operand> $inputs
+     */
+    private function transferConcatenation(Op\Expr $op, array $inputs, string $description): bool
+    {
+        // Each part is written whole, as text. `implode()` hands back its
+        // elements' taint as a container, and elements escaped and joined
+        // between quotes this concatenation writes are quoted here too:
+        // `"NOT IN ('" . implode( "', '", array_map( 'esc_sql', $a ) ) . "')"`.
+        $direct = array_map(fn (Operand $input): TaintSet => $this->guardedEffectiveTaintOf($input), $inputs);
+
+        if (! SqlQuoteFold::applies($direct)) {
+            return $this->transferUnion($op, $inputs, $description);
+        }
+
+        $parts = $this->queryShapes->parts($op->result);
+
+        if ($parts === null) {
+            return $this->transferUnion($op, $inputs, $description);
+        }
+
+        $taint = SqlQuoteFold::fold(array_map(
+            fn (array $part): array => [$part[1], $this->guardedEffectiveTaintOf($part[0])],
+            $parts,
+        ));
+
+        return $this->writeResult(
+            $op->result,
+            $taint,
+            $taint->isEmpty() ? null : new Provenance(TraceVerb::Propagate, $op, $description, $inputs),
+        );
+    }
+
+    /**
+     * An escaped SQL value's residuals turned back into `sql`.
+     */
+    private static function unescapedSql(TaintSet $taint): TaintSet
+    {
+        $residuals = TaintSet::of(TaintKind::SqlUnquoted, TaintKind::SqlSelfQuoted);
+
+        if ($taint->intersect($residuals)->isEmpty()) {
+            return $taint;
+        }
+
+        return $taint->without($residuals)->with(TaintKind::Sql);
     }
 
     /**
@@ -2211,6 +2269,7 @@ final class FunctionAnalysis
         string $description,
         bool $imprecise = false,
         bool $keepsKeys = false,
+        bool $revertResiduals = false,
     ): bool {
         $taint = TaintSet::empty();
         $container = TaintSet::empty();
@@ -2239,6 +2298,17 @@ final class FunctionAnalysis
 
                 $container = $container->union(self::guarded($keyed, $proof));
             }
+        }
+
+        // A function that can undo an escaper's work leaves an escaped SQL
+        // value as raw as it was: `stripslashes( esc_sql( $v ) )`.
+        if ($revertResiduals) {
+            $taint = self::unescapedSql($taint);
+            $container = self::unescapedSql($container);
+            $kept = array_map(
+                static fn (array $entry): array => [$entry[0], $entry[1], self::unescapedSql($entry[2])],
+                $kept,
+            );
         }
 
         $hasKept = array_filter($kept, static fn (array $entry): bool => ! $entry[2]->isEmpty()) !== [];
@@ -2939,14 +3009,7 @@ final class FunctionAnalysis
             $propagator = $this->registry->propagator($matcher);
 
             if ($propagator !== null) {
-                return $this->transferPropagator(
-                    $op,
-                    $call,
-                    $propagator->arguments,
-                    $matcher,
-                    $propagator->note,
-                    $propagator->keepsKeys,
-                ) || $changed;
+                return $this->transferPropagator($op, $call, $propagator, $matcher) || $changed;
             }
 
             if ($this->registry->isSafeCall($matcher)) {
@@ -3024,6 +3087,7 @@ final class FunctionAnalysis
                 $op,
                 $inputs,
                 sprintf('%s keeps its arguments, so the object holds them.', $name),
+                revertResiduals: true,
             );
         }
 
@@ -3031,7 +3095,7 @@ final class FunctionAnalysis
         $receiver = $op instanceof Op\Expr\MethodCall ? $op->var : null;
 
         if ($internal->stores && $receiver !== null) {
-            $kept = $this->state->unionOf($inputs);
+            $kept = self::unescapedSql($this->state->unionOf($inputs));
 
             if (! $kept->isEmpty()) {
                 $changed = $this->state->addContainerTaint($receiver, $kept, new Provenance(
@@ -3051,13 +3115,15 @@ final class FunctionAnalysis
             $inputs[] = $receiver;
         }
 
+        // Nothing says this function cannot undo an escaper's work, so an
+        // escaped SQL value comes out as raw as it went in.
         return $this->transferUnion($op, $inputs, sprintf(
             $internal->receiver
                 ? 'PHP declares %s to return %s, so the result carries the text of its arguments and its object.'
                 : 'PHP declares %s to return %s, so the result carries the text of its arguments.',
             $name,
             $internal->returns,
-        )) || $changed;
+        ), revertResiduals: true) || $changed;
     }
 
     /**
@@ -3589,14 +3655,32 @@ final class FunctionAnalysis
         }
 
         if ($reached->has(TaintKind::Sql)) {
-            $carried = $carried->with(TaintKind::SqlUnquoted);
+            $carried = $carried->with(TaintKind::SqlUnquoted, TaintKind::SqlSelfQuoted);
         }
 
         if (TaintSet::allDataflowKinds()->isSubsetOf($reached)) {
             $carried = $carried->with(TaintKind::Unknown);
         }
 
-        return $argument->intersect($reached->union($carried));
+        return $argument->intersect($reached->union($carried))->union(self::madeFrom($argument, $reached));
+    }
+
+    /**
+     * The escaped SQL residuals a callee made from the argument's `sql`.
+     *
+     * The probe run seeds the parameter with payload kinds only, so what it saw
+     * arrive is what the body made of them. `function q( $v ) { return esc_sql(
+     * $v ); }` returns `sql_unquoted`, which the argument does not carry until
+     * the callee escapes it. Keeping only the kinds both share lost it, and an
+     * escaped wrapper's return used unquoted was clean.
+     */
+    private static function madeFrom(TaintSet $argument, TaintSet $reached): TaintSet
+    {
+        if (! $argument->has(TaintKind::Sql)) {
+            return TaintSet::empty();
+        }
+
+        return $reached->intersect(TaintSet::of(TaintKind::SqlUnquoted, TaintKind::SqlSelfQuoted));
     }
 
     /**
@@ -4055,17 +4139,11 @@ final class FunctionAnalysis
         );
     }
 
-    private function transferPropagator(
-        Op\Expr $op,
-        CallTarget $call,
-        ArgumentSelector $selector,
-        Matcher $matcher,
-        ?string $note,
-        bool $keepsKeys = false,
-    ): bool {
+    private function transferPropagator(Op\Expr $op, CallTarget $call, Propagator $propagator, Matcher $matcher): bool
+    {
         $inputs = [];
 
-        foreach ($selector->resolve($call->argumentCount()) as $index) {
+        foreach ($propagator->arguments->resolve($call->argumentCount()) as $index) {
             $argument = $call->argument($index);
 
             if ($argument !== null) {
@@ -4073,7 +4151,8 @@ final class FunctionAnalysis
             }
         }
 
-        $description = $note ?? sprintf('%s passes its argument through unchanged.', $matcher->describe());
+        $description = $propagator->note
+            ?? sprintf('%s passes its argument through unchanged.', $matcher->describe());
 
         // array_keys() returns keys, so it reads the array's own taint and not
         // what element writes put into it. See transferArrayLiteral().
@@ -4085,7 +4164,131 @@ final class FunctionAnalysis
             );
         }
 
-        return $this->transferUnion($op, $inputs, $description, keepsKeys: $keepsKeys);
+        if ($propagator->formatArgument !== null) {
+            $formatted = $this->transferFormat($op, $call, $propagator, $matcher);
+
+            if ($formatted !== null) {
+                return $formatted;
+            }
+        }
+
+        return $this->transferUnion(
+            $op,
+            $inputs,
+            $description,
+            keepsKeys: $propagator->keepsKeys,
+            revertResiduals: ! $this->keepsResiduals($call, $propagator),
+        );
+    }
+
+    /**
+     * Whether a propagator leaves an escaped SQL value's residual in place.
+     *
+     * Only one the catalogue says cannot undo the escaping, called without the
+     * argument that could, and for `implode()` a glue that leaves the quotes as
+     * it found them: `','` or `"', '"`, not `"'"`.
+     */
+    private function keepsResiduals(CallTarget $call, Propagator $propagator): bool
+    {
+        if ($propagator->glueArgument !== null) {
+            $glue = $call->argumentCount() === 1 ? '' : $this->knownText($call->argument($propagator->glueArgument));
+
+            return $glue !== null && self::keepsQuotes($glue);
+        }
+
+        if (! $propagator->keepsResiduals) {
+            return false;
+        }
+
+        return $propagator->maskArgument === null || $call->argument($propagator->maskArgument) === null;
+    }
+
+    /**
+     * Whether a run of text leaves every quote state as it found it.
+     */
+    private static function keepsQuotes(string $text): bool
+    {
+        foreach ([SqlQuote::None, SqlQuote::Single, SqlQuote::Double, SqlQuote::Backtick] as $state) {
+            if ($state->after($text)[0] !== $state) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * The one string an operand is known to hold, or null.
+     */
+    private function knownText(?Operand $operand): ?string
+    {
+        if ($operand === null) {
+            return null;
+        }
+
+        $literal = OperandHelper::literalString($operand);
+
+        if ($literal !== null) {
+            return $literal;
+        }
+
+        $folded = $this->resolver->values()->strings($operand);
+
+        return count($folded) === 1 ? $folded[0] : null;
+    }
+
+    /**
+     * `sprintf( "WHERE name = '%s'", esc_sql( $n ) )`: a literal format read
+     * as the text it writes, with each argument folded where the format puts
+     * it. A numeric conversion writes a number and carries nothing of its
+     * argument. Null for a format that is not a literal this can read.
+     */
+    private function transferFormat(Op\Expr $op, CallTarget $call, Propagator $propagator, Matcher $matcher): ?bool
+    {
+        $at = (int) $propagator->formatArgument;
+        $format = $this->knownText($call->argument($at));
+        $pieces = $format === null ? null : PrintfFormat::pieces($format);
+
+        if ($pieces === null) {
+            return null;
+        }
+
+        $parts = [];
+        $inputs = [];
+
+        foreach ($pieces as $piece) {
+            if (is_string($piece)) {
+                $parts[] = [$piece, TaintSet::empty()];
+
+                continue;
+            }
+
+            $argument = $propagator->formatArray
+                ? $call->argument($at + 1)
+                : $call->argument($at + 1 + $piece);
+
+            if ($argument === null) {
+                continue;
+            }
+
+            // The whole value is written as text, elements and all:
+            // `implode()` hands back its elements' taint as a container.
+            $inputs[] = $argument;
+            $parts[] = [null, $this->guardedEffectiveTaintOf($argument)];
+        }
+
+        $taint = SqlQuoteFold::fold($parts);
+
+        return $this->writeResult(
+            $op->result,
+            $taint,
+            $taint->isEmpty() ? null : new Provenance(
+                TraceVerb::Propagate,
+                $op,
+                sprintf('%s writes its arguments where its format puts them.', $matcher->describe()),
+                $inputs,
+            ),
+        );
     }
 
     /**
@@ -4146,6 +4349,7 @@ final class FunctionAnalysis
                 DynamicCallPolicy::Propagate->describe(),
             ),
             imprecise: true,
+            revertResiduals: true,
         );
 
         $passed = TaintSet::empty();
@@ -4328,7 +4532,8 @@ final class FunctionAnalysis
 
             $anyArgumentTainted = true;
 
-            $returned = $argumentTaint->intersect($summary->returnTaintFor($index));
+            $returned = $argumentTaint->intersect($summary->returnTaintFor($index))
+                ->union(self::madeFrom($argumentTaint, $summary->returnTaintFor($index)));
 
             // What the argument put into the returned array's elements, as
             // for a property: the kinds that got through the body.
@@ -4647,12 +4852,27 @@ final class FunctionAnalysis
                     $reference->functionDisplayName,
                     $reference->kind->value,
                 )
-                : sprintf(
-                    'Reaches %s inside %s with %s taint intact.',
-                    $reference->sinkIdentity,
-                    $reference->functionDisplayName,
-                    $reference->kind->value,
-                );
+                : match ($reference->kind) {
+                    TaintKind::SqlUnquoted => sprintf(
+                        'Reaches %s inside %s outside quotes. The value was made safe inside quotes only, by '
+                            . 'esc_sql() or an equivalent, so `1 OR 1=1` gets through. Use prepare() with a '
+                            . 'placeholder.',
+                        $reference->sinkIdentity,
+                        $reference->functionDisplayName,
+                    ),
+                    TaintKind::SqlSelfQuoted => sprintf(
+                        'Reaches %s inside %s inside quotes. The value brought its own quotes, which close the ones '
+                            . 'around it, so its escaped part is outside any. Use prepare() with a placeholder.',
+                        $reference->sinkIdentity,
+                        $reference->functionDisplayName,
+                    ),
+                    default => sprintf(
+                        'Reaches %s inside %s with %s taint intact.',
+                        $reference->sinkIdentity,
+                        $reference->functionDisplayName,
+                        $reference->kind->value,
+                    ),
+                };
 
             $sinkStep = new TraceStep(
                 TraceVerb::Sink,
@@ -4972,6 +5192,7 @@ final class FunctionAnalysis
         }
 
         $this->recordSinkReference($sink, $op, $identity);
+        $this->recordQuoteContext($sink, $op, $operand, $identity);
 
         if (! $this->collecting || ! $this->collectFindings) {
             return;
@@ -5084,6 +5305,56 @@ final class FunctionAnalysis
                 $identity,
             ),
             TaintKind::SqlUnquoted,
+        );
+    }
+
+    /**
+     * Where the seeded parameter lands in a query built here, for a caller
+     * that escaped it first.
+     *
+     * The probe seeds `sql`, so the callee's query reports as a plain SQL sink.
+     * A caller passing `esc_sql( $v )` carries `sql_unquoted` instead, which
+     * that reference does not match, and `acme_col( esc_sql( $_GET['c'] ) )`
+     * into `"SELECT $col FROM t"` went quiet. So a component carrying the seed
+     * bare also records a reference for `sql_unquoted`, and one inside quotes
+     * records one for `sql_self_quoted`, a value that brought its own.
+     */
+    private function recordQuoteContext(Sink $sink, Op $op, Operand $query, string $identity): void
+    {
+        if ($sink->kind !== TaintKind::Sql || $this->seedParameterIndex === null || ! $this->collecting) {
+            return;
+        }
+
+        $carriesSql = fn (Operand $component): bool => $this->guardedEffectiveTaintOf($component)
+            ->has(TaintKind::Sql);
+
+        $contexts = [
+            [TaintKind::SqlUnquoted, $this->queryShapes->unquotedComponent($query, $carriesSql)],
+            [TaintKind::SqlSelfQuoted, $this->queryShapes->quotedComponent($query, $carriesSql)],
+        ];
+
+        foreach ($contexts as [$kind, $component]) {
+            if ($component === null) {
+                continue;
+            }
+
+            $this->recordSinkReference(
+                new Sink($sink->matcher, $sink->arguments, $kind, Severity::Critical, self::UNPREPARED_QUERY_RULE),
+                $op,
+                $identity,
+            );
+        }
+    }
+
+    /**
+     * An operand's taint by every route, less what a guard dominating this
+     * block proves.
+     */
+    private function guardedEffectiveTaintOf(Operand $operand): TaintSet
+    {
+        return self::guarded(
+            $this->state->effectiveTaintOf($operand),
+            $this->guards->proofFor($operand, $this->currentBlock),
         );
     }
 

@@ -95,7 +95,13 @@ final class Sanitizer
             return TaintSet::empty();
         }
 
-        return $incoming->without($this->clears);
+        // Clearing SQL clears a value that brings its own quotes too: a
+        // quote-escaper escapes those quotes, and anything stricter removes them.
+        $cleared = $this->clears->has(TaintKind::Sql)
+            ? $this->clears->union(TaintSet::of(TaintKind::SqlSelfQuoted))
+            : $this->clears;
+
+        return $incoming->without($cleared);
     }
 
     /**
@@ -136,7 +142,10 @@ final class Sanitizer
         // `sql` for `sql_unquoted` is what lets the sink tell those apart, and
         // what keeps a table name from a helper — which never carried `sql` —
         // out of it entirely.
-        if (($this->quotedOnly || $strategyQuotedOnly) && $incoming->has(TaintKind::Sql)) {
+        if (
+            ($this->quotedOnly || $strategyQuotedOnly)
+            && ($incoming->has(TaintKind::Sql) || $incoming->has(TaintKind::SqlSelfQuoted))
+        ) {
             $cleared = $cleared->union(TaintSet::of(TaintKind::SqlUnquoted));
         }
 

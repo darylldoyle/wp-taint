@@ -664,20 +664,47 @@ reaches the database whole. So they do not clear `sql`; they trade it for
 position. `like_escape()` and `wpdb::esc_like()` escape only the LIKE wildcards
 and the backslash, so they clear nothing.
 
-Quote state is read from the fragments of the query string, counting unescaped
-`'` and `"`. A fragment that is not written as a literal still counts when it
-folds to exactly one string, a helper returning a constant `"WHERE name = '"`
-carries its quote into the position after it, a call away from the sink. A
-fragment that is one of several values, one of which will not fold, does not
-count: `$c ? "'" : $x` could hold anything.
-Backticks quote identifiers rather than values and offer a value no protection,
-so they deliberately do not count as being in quotes.
+**The concatenation that adds the quotes decides.** Each concatenation reads
+its own text, through the concatenations and assignments that built it, and
+tracks single quotes, double quotes and backticks. An escaped value inside a
+quote the concatenation opens and closes is quoted there, and the result
+carries `sql_self_quoted` instead: it brings its own quotes. That is safe where
+it lands bare and unsafe inside more quotes, where its quotes close the outer
+ones. So a clause built as `" AND name = '" . esc_sql( $n ) . "'"` and joined
+into a query later is safe, however it got there.
 
-**What is missed.** A fragment that folds to two possible texts, which could
-disagree about the state they leave behind; a query whose quoting is itself
-computed; and any case where the string is not built where the sink is, the
-value has to reach a sink whose query is a concatenation or an interpolation
-for the position to be readable at all.
+A literal `sprintf()` format counts as text the same way, with each argument
+where the format puts it, and a numeric conversion writes a number. An
+`implode()` glue that leaves the quotes as it found them, such as `"','"`, keeps
+the elements where the outer quotes put them. A glue the scan cannot read as
+one string turns them back into `sql`: WooCommerce joins its tax-rate
+locations with a glue built from a number and an escaped value, and that line
+is reported. A fragment that is not written as
+a literal still counts when it folds to exactly one string. One that folds to
+several, or to none, is taken to hold no quote: `$c ? "'" : $x` could hold
+anything.
+
+**Only some functions keep the escaping.** A value keeps `sql_unquoted` or
+`sql_self_quoted` through a propagator the catalogue marks `keeps_residuals`:
+the case functions, `trim()` without a mask, `strval()`, the array functions
+that copy their elements, and the `apply_filters()` family. Anything else can
+undo the escaping, so the value is `sql` again after it: `stripslashes()`,
+`rawurldecode()`, `substr()`, `trim( $v, '\\' )`, every PHP function from the
+generated catalogue and every call the scan cannot resolve.
+
+**Across a call.** A helper that escapes its argument hands the caller the
+residual it made, so `function q( $v ) { return esc_sql( $v ); }` used unquoted
+is reported. A callee that puts its argument into a query records where: bare,
+or inside quotes. A caller passing an escaped value to the bare position, or a
+self-quoted one to the quoted position, gets the finding at the callee's query.
+
+**What is missed.** A caller that escapes a value and a callee that adds the
+quotes: the callee's summary is built from `sql` and cannot see the quotes it
+adds around an escaped value, so the caller's value still reads as unquoted. A
+quote left open at the end of one concatenation and closed by a later one
+across a branch merge. A quote inside an SQL comment, which is read as opening
+a string. A query that reaches the sink whole, not as a concatenation, carrying
+`sql_unquoted`: its position cannot be read.
 
 ### `$_FILES` sub-keys are PHP's or the client's, not all one thing
 

@@ -238,6 +238,11 @@ final class CharacterProof
             $removed = $removed->union(TaintSet::of(TaintKind::SqlUnquoted));
         }
 
+        // A value that cannot hold a quote cannot bring its own.
+        if ($this->clears->has(TaintKind::Sql)) {
+            $removed = $removed->union(TaintSet::of(TaintKind::SqlSelfQuoted));
+        }
+
         if ($this->clears->has(TaintKind::Html)) {
             $removed = $removed->union(TaintSet::of(TaintKind::Escaped, TaintKind::EscapeVoided));
         }

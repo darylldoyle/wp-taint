@@ -126,6 +126,21 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- An escaped SQL value's quotes were read only at the sink. A clause built as
+  `"AND name LIKE '%" . esc_sql( $s ) . "%' "` and joined into a query later
+  read as unquoted, a false critical in WooCommerce's API key list. A helper
+  that escaped its argument lost the fact on the way back, so its return used
+  unquoted was clean. A caller's escaped argument used unquoted one call down
+  was missed. Each concatenation now decides what its own quotes hold: an
+  escaped value inside quotes it opens and closes becomes `sql_self_quoted`,
+  safe bare and unsafe inside more quotes. Literal `sprintf()` formats and
+  `implode()` glue are read the same way. A helper hands its caller the
+  residual it made, and a callee records whether its query puts the argument
+  bare or inside quotes.
+- An escaped SQL value stayed escaped through any function. `stripslashes(
+  esc_sql( $v ) )`, `rawurldecode()` of it and `trim()` with a mask can each undo
+  the escaping. Only the functions the catalogue marks `keeps_residuals` now
+  keep it; after any other, the value is `sql` again.
 - A document or container loaded from the request came back clean.
   `$dom->loadHTML( $_POST['html'] ); echo $dom->saveHTML();` was missed, and so
   were `new ArrayObject( $_POST )`, an `SplQueue` of request values,

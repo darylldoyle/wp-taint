@@ -84,6 +84,26 @@ enum TaintKind: string
     case SqlUnquoted = 'sql_unquoted';
 
     /**
+     * An escaped SQL value that brings its own quotes.
+     *
+     * `"'" . esc_sql( $v ) . "'"` is safe where it lands bare, because the
+     * quotes it opened and closed hold the escaped value. Inside more quotes
+     * its own close the outer ones:
+     *
+     * ```php
+     * $clause = " AND name = '" . esc_sql( $n ) . "'";
+     * $wpdb->query( "SELECT * FROM t WHERE 1 = 1 $clause" );      // fine
+     * $wpdb->query( "SELECT * FROM t WHERE title = '$clause'" );  // not
+     * ```
+     *
+     * The concatenation that adds the quotes is where this is decided: a caller
+     * cannot see quotes a helper added. So a concatenation that puts a
+     * {@see self::SqlUnquoted} value inside quotes it opens and closes trades
+     * the kind for this one, and the sink reports it only inside quotes.
+     */
+    case SqlSelfQuoted = 'sql_self_quoted';
+
+    /**
      * Object injection reachable only through data already in the database.
      *
      * The same sink as {@see self::Unserialize} and a different bar to clear.
@@ -229,6 +249,7 @@ enum TaintKind: string
             self::Identifier => 1 << 12,
             self::ObjectId => 1 << 20,
             self::SqlUnquoted => 1 << 13,
+            self::SqlSelfQuoted => 1 << 21,
             self::UnserializeStored => 1 << 14,
             self::Escaped => 1 << 15,
             self::EscapeVoided => 1 << 16,
@@ -263,7 +284,11 @@ enum TaintKind: string
      */
     public function isDerived(): bool
     {
-        return in_array($this, [self::SqlUnquoted, self::Escaped, self::EscapeVoided, self::Unknown], true);
+        return in_array(
+            $this,
+            [self::SqlUnquoted, self::SqlSelfQuoted, self::Escaped, self::EscapeVoided, self::Unknown],
+            true,
+        );
     }
 
     /**
@@ -302,6 +327,7 @@ enum TaintKind: string
             self::Identifier => 'privileged identifier',
             self::ObjectId => 'request-chosen object id',
             self::SqlUnquoted => 'SQL outside quotes',
+            self::SqlSelfQuoted => 'SQL inside more quotes',
             self::UnserializeStored => 'stored serialised payload',
             self::Escaped => 'escaped',
             self::EscapeVoided => 'escaping voided by a filter',
