@@ -42,6 +42,7 @@ use Enshrined\WpTaint\Taint\FunctionBodies;
 use Enshrined\WpTaint\Taint\FunctionMeta;
 use Enshrined\WpTaint\Taint\InterproceduralResolver;
 use Enshrined\WpTaint\Taint\IntraproceduralAnalyzer;
+use Enshrined\WpTaint\Taint\ParameterKeyReads;
 use Enshrined\WpTaint\Taint\PermissionAllowlist;
 use Enshrined\WpTaint\Taint\ReceiverResolver;
 use Enshrined\WpTaint\Taint\SummaryExtractor;
@@ -391,7 +392,7 @@ final class Scanner
             $hooks->printedReturnCallbacks(),
             $restRoutes,
         );
-        $extractor = new SummaryExtractor($analyzer, $this->options);
+        $extractor = new SummaryExtractor($analyzer, $this->options, new ParameterKeyReads($functions));
         $analysed = $bodies;
 
         $interprocedural = new InterproceduralResolver(

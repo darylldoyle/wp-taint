@@ -77,6 +77,17 @@ final class AnalysisResult
          *     {@see FunctionSummary::$paramToScope}
          */
         public readonly array $scopesReached = [],
+        /**
+         * What the returned array's elements carry under a computed key. See
+         * {@see FunctionSummary::$paramToReturnContainer}.
+         */
+        public readonly ?TaintSet $returnContainer = null,
+        /**
+         * What the returned array's elements carry under each literal key.
+         *
+         * @var array<array-key, TaintSet>
+         */
+        public readonly array $returnKeyed = [],
     ) {
     }
 }

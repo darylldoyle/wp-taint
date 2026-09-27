@@ -91,7 +91,77 @@ final class FunctionSummary
          * @var array<int, list<ScopeReference>>
          */
         public readonly array $paramToScope = [],
+        /**
+         * Kinds each parameter puts into the returned array's elements under a
+         * computed key, as opposed to the value itself.
+         *
+         * `function build( $x ) { $a = array(); $a[] = $x; return $a; }`
+         * returns an array whose own taint is nothing and whose elements are
+         * $x. A caller reads the elements from its call result the way it
+         * reads them from a local array, and a `foreach` over it sees the keys
+         * it would see locally.
+         *
+         * @var array<int, TaintSet>
+         */
+        public readonly array $paramToReturnContainer = [],
+        /**
+         * Kinds each parameter puts into the returned array's elements under
+         * a literal key, by key: `$a['title'] = $x; return $a;`.
+         *
+         * @var array<int, array<array-key, TaintSet>>
+         */
+        public readonly array $paramToReturnKeyed = [],
+        /**
+         * What the returned array's elements carry under a computed key
+         * regardless of any argument, the elements' counterpart to
+         * {@see introduces()}.
+         */
+        public readonly ?TaintSet $introducesContainerOrNull = null,
+        /**
+         * What the returned array's elements carry under each literal key
+         * regardless of any argument.
+         *
+         * @var array<array-key, TaintSet>
+         */
+        public readonly array $introducesKeyed = [],
+        /**
+         * The keys this function reads each parameter through, for a
+         * parameter it reads only through literal keys. See
+         * {@see ParameterKeyReads}.
+         *
+         * @var array<int, list<array-key>>
+         */
+        public readonly array $parameterKeys = [],
     ) {
+    }
+
+    /**
+     * The keys this function reads a parameter through, or null when it reads
+     * the parameter whole.
+     *
+     * @return list<array-key>|null
+     */
+    public function keysReadFrom(int $parameterIndex): ?array
+    {
+        return $this->parameterKeys[$parameterIndex] ?? null;
+    }
+
+    public function returnContainerFor(int $parameterIndex): TaintSet
+    {
+        return $this->paramToReturnContainer[$parameterIndex] ?? TaintSet::empty();
+    }
+
+    /**
+     * @return array<array-key, TaintSet>
+     */
+    public function returnKeyedFor(int $parameterIndex): array
+    {
+        return $this->paramToReturnKeyed[$parameterIndex] ?? [];
+    }
+
+    public function introducesContainer(): TaintSet
+    {
+        return $this->introducesContainerOrNull ?? TaintSet::empty();
     }
 
     /**
@@ -249,7 +319,78 @@ final class FunctionSummary
             self::mergeProperties($this->paramToProperty, $other->paramToProperty),
             self::mergeCaptures($this->paramToCapture, $other->paramToCapture),
             self::mergeScopes($this->paramToScope, $other->paramToScope),
+            self::mergeSets($this->paramToReturnContainer, $other->paramToReturnContainer),
+            self::mergeKeyed($this->paramToReturnKeyed, $other->paramToReturnKeyed),
+            $this->introducesContainer()->union($other->introducesContainer()),
+            self::mergeKeyed([$this->introducesKeyed], [$other->introducesKeyed])[0] ?? [],
+            self::mergeParameterKeys($this->parameterKeys, $other->parameterKeys),
         );
+    }
+
+    /**
+     * A parameter is read only through keys when both bodies read it so, and
+     * then through the keys of either.
+     *
+     * @param array<int, list<array-key>> $mine
+     * @param array<int, list<array-key>> $theirs
+     *
+     * @return array<int, list<array-key>>
+     */
+    private static function mergeParameterKeys(array $mine, array $theirs): array
+    {
+        $merged = [];
+
+        foreach ($mine as $index => $keys) {
+            if (! isset($theirs[$index])) {
+                continue;
+            }
+
+            $union = array_keys(array_fill_keys([...$keys, ...$theirs[$index]], true));
+            sort($union);
+            $merged[$index] = $union;
+        }
+
+        return $merged;
+    }
+
+    /**
+     * @param array<int, TaintSet> $mine
+     * @param array<int, TaintSet> $theirs
+     *
+     * @return array<int, TaintSet>
+     */
+    private static function mergeSets(array $mine, array $theirs): array
+    {
+        $result = $mine;
+
+        foreach ($theirs as $index => $set) {
+            $result[$index] = ($result[$index] ?? TaintSet::empty())->union($set);
+        }
+
+        ksort($result);
+
+        return $result;
+    }
+
+    /**
+     * @param array<int, array<array-key, TaintSet>> $mine
+     * @param array<int, array<array-key, TaintSet>> $theirs
+     *
+     * @return array<int, array<array-key, TaintSet>>
+     */
+    private static function mergeKeyed(array $mine, array $theirs): array
+    {
+        $result = $mine;
+
+        foreach ($theirs as $index => $keys) {
+            foreach ($keys as $key => $set) {
+                $result[$index][$key] = ($result[$index][$key] ?? TaintSet::empty())->union($set);
+            }
+        }
+
+        ksort($result);
+
+        return $result;
     }
 
     /**
@@ -506,6 +647,27 @@ final class FunctionSummary
             return false;
         }
 
+        // The returned array's elements drive the fixed point as its value
+        // does.
+        if (
+            ! $this->introducesContainer()->equals($other->introducesContainer())
+            || ! self::setsEqual($this->paramToReturnContainer, $other->paramToReturnContainer)
+            || ! self::setsEqual($this->introducesKeyed, $other->introducesKeyed)
+            || array_keys($this->paramToReturnKeyed) !== array_keys($other->paramToReturnKeyed)
+        ) {
+            return false;
+        }
+
+        foreach ($this->paramToReturnKeyed as $index => $keys) {
+            if (! self::setsEqual($keys, $other->paramToReturnKeyed[$index] ?? [])) {
+                return false;
+            }
+        }
+
+        if ($this->parameterKeys !== $other->parameterKeys) {
+            return false;
+        }
+
         return count($this->paramToSink) === count($other->paramToSink);
     }
 
@@ -526,8 +688,8 @@ final class FunctionSummary
     }
 
     /**
-     * @param array<int, TaintSet> $a
-     * @param array<int, TaintSet> $b
+     * @param array<array-key, TaintSet> $a
+     * @param array<array-key, TaintSet> $b
      */
     private static function setsEqual(array $a, array $b): bool
     {

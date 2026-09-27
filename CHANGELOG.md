@@ -115,6 +115,23 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A function that returned an array lost the taint of its elements.
+  `$a['title'] = $_GET['title']; return $a;` was clean to every caller, and so
+  was an element written under a computed key. A summary now records what each
+  parameter puts into the returned array's elements, and what the body puts
+  there itself, by key. A caller reads them off the call result as it reads a
+  local array. A trace through such an element now starts at the write into
+  it, not at the read.
+- A callee received every element of an array argument, including elements it
+  never reads. WooCommerce's settings page hands each field's array, with the
+  stored option under `value`, to a helper that reads only `desc` and
+  `desc_tip`. The option came back out as the field's description. A summary
+  now lists the literal keys a function reads each parameter through, when it
+  reads the parameter no other way, and a caller hands such a callee only
+  those elements. The array's own taint and its computed-key elements still go
+  in. A call written with `...$args` or a named argument, and a callback run
+  by `call_user_func_array()`, `array_map()` or their relatives, still hands
+  on the whole argument, because the array there is not one parameter's value.
 - A property read on a value that one of PHP's own methods returned shared a
   slot with every write to a property of that name the scan could not place.
   `$r->getClosureCalledClass()->name` read whatever any `$labels->name = …`

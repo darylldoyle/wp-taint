@@ -25,6 +25,7 @@ use Enshrined\WpTaint\Taint\FunctionBodies;
 use Enshrined\WpTaint\Taint\FunctionContext;
 use Enshrined\WpTaint\Taint\InterproceduralResolver;
 use Enshrined\WpTaint\Taint\IntraproceduralAnalyzer;
+use Enshrined\WpTaint\Taint\ParameterKeyReads;
 use Enshrined\WpTaint\Taint\ReceiverResolver;
 use Enshrined\WpTaint\Taint\SummaryExtractor;
 use Enshrined\WpTaint\Taint\TaintKind;
@@ -227,7 +228,7 @@ final class ExplainCommand extends Command
 
         $resolver = new CallResolver($registry, $functions, $callables, $values, $receivers, $hooks);
         $analyzer = new IntraproceduralAnalyzer($registry, $functions, $resolver, $options, $includes);
-        $extractor = new SummaryExtractor($analyzer, $options);
+        $extractor = new SummaryExtractor($analyzer, $options, new ParameterKeyReads($functions));
         $resolution = (new InterproceduralResolver($analyzer, $extractor, $options))->resolve($contexts);
 
         $explanation = (new Explainer($registry, $resolver, $analyzer, $options))->explain(
