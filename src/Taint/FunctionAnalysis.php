@@ -1371,12 +1371,12 @@ final class FunctionAnalysis
         $value = $op->expr;
 
         // A value checked on every path to here against a guard is one of what
-        // the guard admits, wherever it is written: see GuardAnalyzer. Only an
-        // object id survives that, as it survives the check at a sink.
+        // the guard admits, wherever it is written: see GuardAnalyzer. What
+        // survives is what the check leaves possible, kind by kind.
         // Otherwise `$query['orderby'] = $params['orderby']` behind an
         // allowlist carried the request into every query built from $query.
-        $guarded = $op instanceof Op\Expr\Assign && $this->guards->isGuarded($value, $this->currentBlock);
-        $taint = self::unlessGuarded($this->state->taintOf($value), $guarded);
+        $proof = $op instanceof Op\Expr\Assign ? $this->guards->proofFor($value, $this->currentBlock) : null;
+        $taint = self::guarded($this->state->taintOf($value), $proof);
 
         $provenance = new Provenance(
             TraceVerb::Propagate,
@@ -1397,7 +1397,7 @@ final class FunctionAnalysis
 
         // `$a = $b` where `$b` is an array with taint written into its elements
         // has to carry that across, or the taint is lost at the assignment.
-        $container = self::unlessGuarded($this->state->containerTaintOf($value), $guarded);
+        $container = self::guarded($this->state->containerTaintOf($value), $proof);
 
         if (! $container->isEmpty()) {
             $changed = $this->state->addContainerTaint($op->var, $container, $provenance) || $changed;
@@ -1405,9 +1405,9 @@ final class FunctionAnalysis
         }
 
         // The per-key slots travel with the array. Without this `$b = $a` would
-        // lose the precision and fall back to the whole-array answer. A guarded
-        // value is one of a few scalars, so it has none worth carrying.
-        if (! $guarded) {
+        // lose the precision and fall back to the whole-array answer. A value
+        // that passed a guard is a scalar, so it has none worth carrying.
+        if ($proof === null) {
             $changed = $this->state->copyKeyedTaint($value, $op->var) || $changed;
             $changed = $this->state->copyKeyedTaint($value, $op->result) || $changed;
         }
@@ -1416,12 +1416,13 @@ final class FunctionAnalysis
     }
 
     /**
-     * What survives a guard: an object id, which names a row rather than
-     * carrying a payload, and nothing else.
+     * What survives the checks on every way here: what they leave possible,
+     * kind by kind. See {@see CharacterProof}. An object id always survives;
+     * it names a row rather than carrying a payload.
      */
-    private static function unlessGuarded(TaintSet $taint, bool $guarded): TaintSet
+    private static function guarded(TaintSet $taint, ?CharacterProof $proof): TaintSet
     {
-        return $guarded ? $taint->intersect(TaintSet::of(TaintKind::ObjectId)) : $taint;
+        return $proof === null ? $taint : $proof->apply($taint);
     }
 
     /**
@@ -2215,9 +2216,9 @@ final class FunctionAnalysis
                 continue;
             }
 
-            $guarded = $this->guards->isGuarded($input, $this->currentBlock);
-            $taint = $taint->union(self::unlessGuarded($this->state->taintOf($input), $guarded));
-            $container = $container->union(self::unlessGuarded($this->state->containerTaintOf($input), $guarded));
+            $proof = $this->guards->proofFor($input, $this->currentBlock);
+            $taint = $taint->union(self::guarded($this->state->taintOf($input), $proof));
+            $container = $container->union(self::guarded($this->state->containerTaintOf($input), $proof));
         }
 
         $provenance = $taint->isEmpty() && $container->isEmpty()
@@ -2431,19 +2432,19 @@ final class FunctionAnalysis
         //
         // and every plugin vendoring a copy of it handed us a false positive,
         // because the early return carried the argument's taint out untouched.
-        $guarded = $this->guards->isGuarded($op->expr, $this->currentBlock);
-        $taint = $guarded ? TaintSet::empty() : $this->state->taintOf($op->expr);
+        $proof = $this->guards->proofFor($op->expr, $this->currentBlock);
+        $taint = self::guarded($this->state->taintOf($op->expr), $proof);
 
         // The elements travel as elements. Returning only the value's own
         // taint lost everything written into it: `$a['k'] = $_GET['x'];
         // return $a;` handed every caller a clean array.
-        $container = $guarded ? TaintSet::empty() : $this->state->containerTaintOf($op->expr);
-        $keyed = $guarded ? [] : $this->state->keyedTaintMapOf($op->expr);
+        $container = self::guarded($this->state->containerTaintOf($op->expr), $proof);
+        $keyed = $proof === null ? $this->state->keyedTaintMapOf($op->expr) : [];
 
         $this->reportShortcodeReturn(
             $op,
             $op->expr,
-            $guarded ? TaintSet::empty() : $this->state->effectiveTaintOf($op->expr),
+            self::guarded($this->state->effectiveTaintOf($op->expr), $proof),
         );
 
         $merged = $this->returnTaint->union($taint);
@@ -3080,9 +3081,11 @@ final class FunctionAnalysis
             $this->imprecise = true;
         }
 
+        $proof = $sanitizer->clearsBy === null ? null : $this->strategyClears($sanitizer, $call);
         $cleared = $sanitizer->transform(
             $incoming,
-            $sanitizer->clearsBy === null ? null : $this->strategyClears($sanitizer, $call),
+            $sanitizer->clearsBy === null ? null : ($proof->clears ?? TaintSet::empty()),
+            $proof->sqlQuotedOnly ?? false,
         );
 
         // Remember that this value has been escaped, so that a filter standing
@@ -3684,10 +3687,10 @@ final class FunctionAnalysis
      * be. That is the right failure: `preg_replace()` with a computed pattern
      * proves nothing, and pretending otherwise would launder real taint.
      */
-    private function strategyClears(Sanitizer $sanitizer, CallTarget $call): TaintSet
+    private function strategyClears(Sanitizer $sanitizer, CallTarget $call): ?CharacterProof
     {
         if ($sanitizer->clearsBy !== Sanitizer::ALLOWLIST_PATTERN) {
-            return TaintSet::empty();
+            return null;
         }
 
         $pattern = $call->argument($sanitizer->patternArgument);
@@ -3697,10 +3700,10 @@ final class FunctionAnalysis
         $replacementLiteral = $replacement === null ? null : OperandHelper::literalString($replacement);
 
         if ($patternLiteral === null || $replacementLiteral === null) {
-            return TaintSet::empty();
+            return null;
         }
 
-        return AllowlistPattern::clears($patternLiteral, $replacementLiteral) ?? TaintSet::empty();
+        return AllowlistPattern::clears($patternLiteral, $replacementLiteral);
     }
 
     private function formatStringIsUnsafe(Operand $formatArgument): bool
@@ -4057,9 +4060,9 @@ final class FunctionAnalysis
 
         foreach ($call->arguments as $index => $argument) {
             // A guarded argument hands the callee what the guard admits.
-            $argumentTaint = self::unlessGuarded(
+            $argumentTaint = self::guarded(
                 $this->argumentTaint($call, $summary, $index, $argument),
-                $this->guards->isGuarded($argument, $this->currentBlock),
+                $this->guards->proofFor($argument, $this->currentBlock),
             );
 
             if ($argumentTaint->isEmpty()) {
@@ -4703,7 +4706,7 @@ final class FunctionAnalysis
             if ($this->callerIsEntitled()) {
                 return;
             }
-        } elseif ($this->guards->isGuarded($operand, $this->currentBlock)) {
+        } elseif ($this->guards->proofFor($operand, $this->currentBlock)?->settlesIn($taint, $sink->kind) ?? false) {
             // Did every path here validate the value? A guard clause is how
             // careful WordPress code constrains a request value, and it lives
             // in the shape of the control flow rather than in the value, so it
@@ -4747,11 +4750,14 @@ final class FunctionAnalysis
         // the caller can only learn about it from the summary. Recorded under
         // `sql` rather than `sql_unquoted`, because `sql` is what the caller
         // passes in — the callee is what turns one into the other.
+        // Seen through any guard on the component: a check that admits spaces
+        // leaves the value safe inside quotes only, as esc_sql() does.
         $unquoted = $this->queryShapes->unquotedComponent(
             $operand,
-            fn (Operand $component): bool => $this->state
-                ->effectiveTaintOf($component)
-                ->has(TaintKind::SqlUnquoted),
+            fn (Operand $component): bool => self::guarded(
+                $this->state->effectiveTaintOf($component),
+                $this->guards->proofFor($component, $this->currentBlock),
+            )->has(TaintKind::SqlUnquoted),
         );
 
         if ($unquoted !== null) {
@@ -4778,7 +4784,8 @@ final class FunctionAnalysis
             $operand,
             $this->context,
             $this->types,
-            fn (Operand $component): bool => $this->guards->isGuarded($component, $this->currentBlock),
+            fn (Operand $component): bool => $this->guards
+                ->proofFor($component, $this->currentBlock)?->clears->has(TaintKind::Sql) ?? false,
         );
 
         if ($unaccounted !== null) {
@@ -4812,10 +4819,10 @@ final class FunctionAnalysis
             $identity,
             $unquoted,
             sprintf(
-                '%s was escaped with esc_sql() or an equivalent and then interpolated into the query passed to '
-                    . '%s() with no quotes around it. Those functions escape quotes; with none present there is '
-                    . 'nothing for them to escape, and `1 OR 1=1` reaches the database intact. Use prepare() with '
-                    . 'a %%d or %%s placeholder.',
+                '%s was made safe inside quotes only, by esc_sql() or an equivalent or by a check that still '
+                    . 'admits spaces or operators, and then interpolated into the query passed to %s() with no '
+                    . 'quotes around it. Outside quotes, `1 OR 1=1` reaches the database intact. Use prepare() '
+                    . 'with a %%d or %%s placeholder.',
                 OperandHelper::describe($unquoted),
                 $identity,
             ),

@@ -2,9 +2,9 @@
     "expectation": "vulnerable",
     "findings": [
         {
-            "ruleId": "wp.sqli.wpdb-query",
+            "ruleId": "wp.sqli.unprepared-query",
             "kind": "sql",
-            "line": 12
+            "line": 13
         }
     ]
 }

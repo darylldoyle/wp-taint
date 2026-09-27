@@ -62,21 +62,28 @@ use PHPCfg\Operand;
  */
 final class GuardAnalyzer
 {
-    /** Characters that can carry syntax in any context this engine models. */
-    private const DANGEROUS = '<>"\'`;()&|$\\/=%{} ';
+    /**
+     * Predicates that admit only a fixed set of characters, and which.
+     *
+     * What that proves depends on the kind: see {@see CharacterProof}. The
+     * `ctype_*` family reads the C locale, which is ASCII.
+     */
+    private const CHARACTER_SETS = [
+        'ctype_digit' => '0123456789',
+        'ctype_alnum' => 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789',
+        'ctype_alpha' => 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ',
+        'ctype_xdigit' => '0123456789abcdefABCDEF',
+        'ctype_lower' => 'abcdefghijklmnopqrstuvwxyz',
+        'ctype_upper' => 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+    ];
 
     /**
-     * Predicates that constrain a value to something harmless.
-     *
-     * `ctype_*` admit only characters from a fixed class, none of which can
-     * open a quote, a tag or a statement. `in_array` and `array_key_exists`
-     * constrain to a set the code chose. `preg_match` is handled separately,
-     * because whether it constrains depends on the pattern.
+     * Predicates that admit only a number or a boolean. `is_numeric()` also
+     * admits leading and trailing whitespace, which the number's grammar
+     * leaves harmless, so these are credited as the value they admit rather
+     * than by the characters in it.
      */
-    private const CHARACTER_CLASSES = [
-        'ctype_digit', 'ctype_alnum', 'ctype_alpha', 'ctype_xdigit', 'ctype_lower', 'ctype_upper',
-        'is_numeric', 'is_int', 'is_integer', 'is_long', 'is_float', 'is_double', 'is_bool',
-    ];
+    private const NUMERIC = ['is_numeric', 'is_int', 'is_integer', 'is_long', 'is_float', 'is_double', 'is_bool'];
 
     /**
      * Functions that normalise a value without adding to it, so that a check
@@ -95,7 +102,7 @@ final class GuardAnalyzer
     /** Dominators, per function. */
     private ?BlockDominators $dominators = null;
 
-    /** @var array<string, bool> isGuarded() answers for this function, by operand and block */
+    /** @var array<string, CharacterProof|null> proofFor() answers for this function, by operand and block */
     private array $answers = [];
 
     /** The function's first block, the one block with no parents that runs. */
@@ -113,29 +120,46 @@ final class GuardAnalyzer
         $this->answers = [];
     }
 
+    /**
+     * Whether every way here checked the value against something that leaves
+     * it no payload at all.
+     */
     public function isGuarded(Operand $operand, ?Block $block): bool
     {
+        return $this->proofFor($operand, $block)?->clearsEveryPayload() ?? false;
+    }
+
+    /**
+     * What the checks on every way here prove about the value, or null when
+     * there is a way round them.
+     */
+    public function proofFor(Operand $operand, ?Block $block): ?CharacterProof
+    {
         if ($block === null || $this->dominators === null || ! $this->dominators->covers($block)) {
-            return false;
+            return null;
         }
 
         // Fixed for the function, and asked again on every pass of the fixed
         // point for every input to a concatenation.
         $key = spl_object_id($operand) . ':' . spl_object_id($block);
 
-        return $this->answers[$key] ??= $this->answer($operand, $block);
+        if (! array_key_exists($key, $this->answers)) {
+            $this->answers[$key] = $this->answer($operand, $block);
+        }
+
+        return $this->answers[$key];
     }
 
-    private function answer(Operand $operand, Block $block): bool
+    private function answer(Operand $operand, Block $block): ?CharacterProof
     {
         if ($this->dominators === null) {
-            return false;
+            return null;
         }
 
         $names = $this->namesOf($operand);
 
         if ($names === []) {
-            return false;
+            return null;
         }
 
         $dominating = $this->dominators->of($block);
@@ -151,13 +175,20 @@ final class GuardAnalyzer
         // edge left `echo $x` after it unreported. A branch that returns or
         // dies first still falls in as far as the CFG says, and never runs
         // that far.
+        //
+        // Each guard passed on the way proves what it proves, and together they
+        // prove all of it: a length check and then an allowlist.
+        $proof = null;
+
         foreach ($dominating as $candidate) {
-            if ($this->enteredOnlyValidated($candidate, $names)) {
-                return true;
+            $entered = $this->enteredOnlyValidated($candidate, $names);
+
+            if ($entered !== null) {
+                $proof = $proof === null ? $entered : $proof->and($entered);
             }
         }
 
-        return false;
+        return $proof;
     }
 
     /**
@@ -165,27 +196,38 @@ final class GuardAnalyzer
      * or comes from a block that never gets as far as its jump, and at least
      * one validates.
      *
+     * The value arrives by one of the edges, so only what every edge proves
+     * holds. An edge that replaces the value with a literal proves everything.
+     *
      * @param list<string> $names
      */
-    private function enteredOnlyValidated(Block $block, array $names): bool
+    private function enteredOnlyValidated(Block $block, array $names): ?CharacterProof
     {
+        $proof = null;
         $validated = false;
 
         foreach ($block->parents as $parent) {
             $terminal = $parent->children[count($parent->children) - 1] ?? null;
+            $edge = $terminal instanceof Op\Stmt\JumpIf ? $this->validatesOnEdge($terminal, $block, $names) : null;
 
-            if ($terminal instanceof Op\Stmt\JumpIf && $this->validatesOnEdge($terminal, $block, $names)) {
-                $validated = true;
-
+            if ($edge === null && $this->endsBeforeJumping($parent)) {
                 continue;
             }
 
-            if (! $this->endsBeforeJumping($parent) && ! $this->replacesWithLiteral($parent, $names)) {
-                return false;
+            if ($edge === null && $this->replacesWithLiteral($parent, $names)) {
+                $edge = CharacterProof::complete();
+            } else {
+                $validated = $validated || $edge !== null;
             }
+
+            if ($edge === null) {
+                return null;
+            }
+
+            $proof = $proof === null ? $edge : $proof->or($edge);
         }
 
-        return $validated;
+        return $validated ? $proof : null;
     }
 
     /**
@@ -311,11 +353,16 @@ final class GuardAnalyzer
      */
     public function provesWhenTrue(Operand $condition, Operand $value): bool
     {
+        return $this->proofWhenTrue($condition, $value)?->clearsEveryPayload() ?? false;
+    }
+
+    private function proofWhenTrue(Operand $condition, Operand $value): ?CharacterProof
+    {
         $names = $this->namesOf($value);
         $positive = true;
 
         if ($names === []) {
-            return false;
+            return null;
         }
 
         while (true) {
@@ -340,7 +387,7 @@ final class GuardAnalyzer
                 $joined = self::shortCircuited($definition);
 
                 if ($joined === null || $positive === $joined[0]) {
-                    return false;
+                    return null;
                 }
 
                 $condition = $joined[1];
@@ -349,12 +396,12 @@ final class GuardAnalyzer
             }
 
             if (! $definition instanceof Op\Expr\FuncCall && ! $definition instanceof Op\Expr\NsFuncCall) {
-                return false;
+                return null;
             }
 
-            $safeWhen = $this->safeWhen($definition, $names);
+            $safe = $this->safeWhen($definition, $names);
 
-            return $safeWhen !== null && $safeWhen === $positive;
+            return $safe !== null && $safe[0] === $positive ? $safe[1] : null;
         }
     }
 
@@ -400,7 +447,7 @@ final class GuardAnalyzer
      *
      * @param list<string> $names
      */
-    private function validatesOnEdge(Op\Stmt\JumpIf $jump, Block $arrivedAt, array $names): bool
+    private function validatesOnEdge(Op\Stmt\JumpIf $jump, Block $arrivedAt, array $names): ?CharacterProof
     {
         $positive = true;
         $operand = $jump->cond;
@@ -429,28 +476,30 @@ final class GuardAnalyzer
                 $joined = self::shortCircuited($definition);
 
                 if ($joined === null) {
-                    return false;
+                    return null;
                 }
 
                 [$constant, $operand] = $joined;
                 $informative = $positive === ! $constant ? $jump->if : $jump->else;
 
                 if ($informative !== $arrivedAt) {
-                    return false;
+                    return null;
                 }
 
                 continue;
             }
 
             if (! $definition instanceof Op\Expr\FuncCall && ! $definition instanceof Op\Expr\NsFuncCall) {
-                return false;
+                return null;
             }
 
-            $safeWhen = $this->safeWhen($definition, $names);
+            $safe = $this->safeWhen($definition, $names);
 
-            if ($safeWhen === null) {
-                return false;
+            if ($safe === null) {
+                return null;
             }
+
+            [$safeWhen, $proof] = $safe;
 
             // Which way the call has to come out for the value to be safe, and
             // then which edge that is once the negations are counted.
@@ -462,19 +511,22 @@ final class GuardAnalyzer
             $conditionIsTrue = $positive ? $safeWhen : ! $safeWhen;
             $wanted = $conditionIsTrue ? $jump->if : $jump->else;
 
-            return $wanted === $arrivedAt;
+            return $wanted === $arrivedAt ? $proof : null;
         }
     }
 
     /**
-     * What this call has to evaluate to for the value to be safe.
+     * What this call has to evaluate to for the value to be safe, and what it
+     * then proves.
      *
      * True for a predicate that confirms the value is acceptable, false for one
      * that detects something unacceptable, null when it says nothing at all.
      *
      * @param list<string> $names
+     *
+     * @return array{0: bool, 1: CharacterProof}|null
      */
-    private function safeWhen(Op\Expr\FuncCall|Op\Expr\NsFuncCall $call, array $names): ?bool
+    private function safeWhen(Op\Expr\FuncCall|Op\Expr\NsFuncCall $call, array $names): ?array
     {
         $function = OperandHelper::literalString($call->name);
 
@@ -488,37 +540,45 @@ final class GuardAnalyzer
             static fn (mixed $argument): bool => $argument instanceof Operand,
         ));
 
-        if (in_array($function, self::CHARACTER_CLASSES, true)) {
-            return isset($arguments[0]) && $this->refersTo($arguments[0], $names) ? true : null;
+        $checksValue = fn (int $index): bool => isset($arguments[$index])
+            && $this->refersTo($arguments[$index], $names);
+
+        if (isset(self::CHARACTER_SETS[$function])) {
+            return $checksValue(0) ? [true, CharacterProof::ofCharacters(self::CHARACTER_SETS[$function])] : null;
+        }
+
+        if (in_array($function, self::NUMERIC, true)) {
+            return $checksValue(0) ? [true, CharacterProof::complete()] : null;
         }
 
         if ($function === 'in_array') {
             // Loose comparison is not a constraint: `in_array( '0abc', [ 0 ] )`
             // is true in PHP before 8, and the third-party suite marks the
             // loose form as a case an analyser should still flag.
-            return isset($arguments[0], $arguments[1], $arguments[2])
-                && $this->refersTo($arguments[0], $names)
+            return isset($arguments[1], $arguments[2])
+                && $checksValue(0)
                 && $this->isTrue($arguments[2])
-                && $this->isLiteralArray($arguments[1]) ? true : null;
+                && $this->isLiteralArray($arguments[1]) ? [true, CharacterProof::complete()] : null;
         }
 
         if ($function === 'array_key_exists') {
-            return isset($arguments[0], $arguments[1])
-                && $this->refersTo($arguments[0], $names)
-                && $this->isLiteralArray($arguments[1]) ? true : null;
+            return isset($arguments[1])
+                && $checksValue(0)
+                && $this->isLiteralArray($arguments[1]) ? [true, CharacterProof::complete()] : null;
         }
 
-        if (
-            $function === 'preg_match' && isset($arguments[0], $arguments[1])
-            && $this->refersTo($arguments[1], $names)
-        ) {
-            // An anchored allowlist proves safety by matching; a bare class of
-            // dangerous characters proves it by *not* matching.
-            if ($this->patternConstrains($arguments[0], true)) {
-                return true;
+        if ($function === 'preg_match' && isset($arguments[0]) && $checksValue(1)) {
+            // An anchored allowlist proves what it proves by matching; a bare
+            // class proves the value lacks those characters by *not* matching.
+            $matched = $this->patternProof($arguments[0], true);
+
+            if ($matched !== null) {
+                return [true, $matched];
             }
 
-            return $this->patternConstrains($arguments[0], false) ? false : null;
+            $unmatched = $this->patternProof($arguments[0], false);
+
+            return $unmatched === null ? null : [false, $unmatched];
         }
 
         return null;
@@ -670,105 +730,70 @@ final class GuardAnalyzer
     }
 
     /**
-     * Does this `preg_match` prove the value harmless on the edge taken?
+     * What a `preg_match` proves about the value on the edge taken.
      *
      * Two shapes, and they are mirror images.
      *
-     * **Matched, anchored allowlist.** `/^[a-z0-9_-]+$/` succeeding proves the
-     * value is those characters end to end. `/^\d/` proves nothing —
+     * **Matched, anchored class.** `/^[a-z0-9_-]+$/` succeeding proves the
+     * value is those characters end to end. `/^\d/` proves nothing:
      * `1<script>` passes it, because the anchor covers only the first
-     * character.
+     * character. A negated class, `/^[^<>]+$/`, proves the value is anything
+     * but those characters. A `$` without `D` also matches before one final
+     * newline, which carries nothing on its own.
      *
-     * **Not matched, denylist.** `! preg_match( '/[&<>"\']/', $s )` proves the
-     * value contains none of those characters, which is the same conclusion
-     * reached from the other direction. Core's `wp_specialchars()` opens with
-     * exactly that as a fast path, and every plugin that vendors a copy of it
-     * inherited a false positive from us — Duplicator's installer among them.
+     * **Not matched, bare class.** `! preg_match( '/[&<>"\']/', $s )` proves the
+     * value contains none of those characters. Core's `wp_specialchars()`
+     * opens with exactly that as a fast path, and every plugin that vendors a
+     * copy of it inherited a false positive from us, Duplicator's installer
+     * among them.
      *
-     * Anything else is left unconstrained. This suppresses findings, and a
-     * wrong yes hides a real one.
+     * What either proves, kind by kind, is {@see CharacterProof}'s. A proof
+     * that clears nothing is no proof.
      */
-    private function patternConstrains(Operand $operand, bool $matched): bool
+    private function patternProof(Operand $operand, bool $matched): ?CharacterProof
     {
-        $pattern = OperandHelper::literalString($operand);
+        $literal = OperandHelper::literalString($operand);
+        $pattern = $literal === null ? null : CharacterProof::pattern($literal);
 
-        if ($pattern === null || strlen($pattern) < 3) {
-            return false;
+        if ($pattern === null) {
+            return null;
         }
 
-        $delimiter = $pattern[0];
-        $end = strrpos($pattern, $delimiter);
-
-        if ($end === false || $end === 0) {
-            return false;
-        }
-
-        $body = substr($pattern, 1, $end - 1);
+        [$body, $caseless] = $pattern;
+        $class = '((?:[^\]\\\\]|\\\\.)+)';
+        $quantifier = '(?:[+*]|\{\d+(?:,\d*)?\})';
 
         if ($matched) {
-            return preg_match('/^\^\[([^\]]+)\]([+*])\$$/', $body, $matches) === 1
-                && $this->classIsHarmless($matches[1]);
-        }
-
-        // Failing to match a bare class of dangerous characters proves none of
-        // them is present.
-        return preg_match('/^\[([^\]]+)\][+*]?$/', $body, $matches) === 1
-            && ! str_starts_with($matches[1], '^')
-            && $this->classIsOnlyDangerous($matches[1]);
-    }
-
-    /**
-     * A class made up entirely of characters that carry syntax.
-     *
-     * Requiring *only* dangerous characters is what keeps this honest: a
-     * denylist that also mentions harmless ones proves less than it appears to,
-     * and `[a]` failing to match says nothing worth acting on.
-     */
-    private function classIsOnlyDangerous(string $class): bool
-    {
-        $expanded = self::expand($class);
-
-        if ($expanded === null || $expanded === '') {
-            return false;
-        }
-
-        $length = strlen($expanded);
-
-        for ($index = 0; $index < $length; $index++) {
-            if (strpos(self::DANGEROUS, $expanded[$index]) === false) {
-                return false;
+            if (preg_match('/^\^\[(\^?)' . $class . '\]' . $quantifier . '\$$/', $body, $matches) !== 1) {
+                return null;
             }
+
+            $characters = CharacterProof::expandClass($matches[2], $caseless);
+
+            if ($characters === null) {
+                return null;
+            }
+
+            $proof = $matches[1] === '^'
+                ? CharacterProof::ofAllExcept($characters)
+                : CharacterProof::ofCharacters($characters);
+        } else {
+            if (
+                preg_match('/^\[' . $class . '\]' . $quantifier . '?$/', $body, $matches) !== 1
+                || str_starts_with($matches[1], '^')
+            ) {
+                return null;
+            }
+
+            $characters = CharacterProof::expandClass($matches[1], $caseless);
+
+            if ($characters === null) {
+                return null;
+            }
+
+            $proof = CharacterProof::ofAllExcept($characters);
         }
 
-        return true;
-    }
-
-    /**
-     * Every character a class admits, with ranges expanded.
-     *
-     * A negated class admits everything not listed, which is never a
-     * constraint worth crediting.
-     */
-    private function classIsHarmless(string $class): bool
-    {
-        if (str_starts_with($class, '^')) {
-            return false;
-        }
-
-        $expanded = self::expand($class);
-
-        return $expanded !== null && strpbrk($expanded, self::DANGEROUS) === false;
-    }
-
-    /**
-     * A character class with its ranges written out.
-     */
-    private static function expand(string $class): ?string
-    {
-        return preg_replace_callback(
-            '/(\w)-(\w)/',
-            static fn (array $m): string => implode('', range($m[1], $m[2])),
-            $class,
-        );
+        return $proof->clears->isEmpty() ? null : $proof;
     }
 }

@@ -21,11 +21,11 @@ namespace Enshrined\WpTaint\Taint;
  *
  * ## What it can and cannot prove
  *
- * The output can only contain characters the class retained. If none of those
- * characters can carry syntax for a given taint kind, that kind is cleared —
- * per kind, never wholesale. `[^0-9]` clears everything; `[^a-zA-Z0-9 ]` clears
- * HTML and SQL but says nothing useful about a value used as a path, because a
- * bare word is still a filename.
+ * The output can only contain characters the class retained, and what that
+ * proves, kind by kind, is {@see CharacterProof}'s. `[^0-9]` clears everything.
+ * `[^a-zA-Z0-9 ]` clears HTML, and SQL inside quotes only: outside them the
+ * space is enough for `1 OR 1`. It says nothing useful about a value used as a
+ * path, because a bare word is still a filename.
  *
  * Everything here fails closed. A pattern that is not a literal, is not a single
  * negated class, uses a construct this does not understand, or carries a flag
@@ -35,70 +35,32 @@ namespace Enshrined\WpTaint\Taint;
 final class AllowlistPattern
 {
     /**
-     * Characters that can carry syntax for each taint kind.
-     *
-     * Deliberately generous. Being wrong in the direction of "this character is
-     * dangerous" costs a missed sanitizer and a false positive that a reviewer
-     * can dismiss; being wrong the other way launders real taint.
-     *
-     */
-    private const DANGEROUS = [
-        'html' => '<>&"\'`/',
-        'html_attr' => '<>&"\'`= ',
-        // Quotes and escapes end a literal; the rest open comments or stack a
-        // second statement.
-        'sql' => '\'"`\\;-#/*()',
-        'shell' => '`$;|&<>()*?[]{}!\\\'"' . " \n\r\t",
-        // A traversal needs a separator or a dot; without either, the value can
-        // only ever be one path segment.
-        'path' => '/\\.' . "\0",
-        // A scheme or an authority is what turns a string into a different URL.
-        'url' => ':/\\@?#',
-        'header' => "\r\n" . '\\:',
-        'eval' => '$();{}[]<>=+-*/\\\'"`,.' . " \n\r\t",
-        'unserialize' => ':;{}"\\',
-        'ldap' => '()*\\' . "\0",
-        'xpath' => '\'"[]()/@=<>*',
-    ];
-
-    /**
-     * Which taint kinds this call clears, or null when it proves nothing.
+     * What this call proves about its result, or null when it proves nothing.
      *
      * @param string $pattern     the literal first argument
      * @param string $replacement the literal second argument
      */
-    public static function clears(string $pattern, string $replacement): ?TaintSet
+    public static function clears(string $pattern, string $replacement): ?CharacterProof
     {
         // Checked first, because the CSV shape is an anchored *positive* class
         // and `retainedCharacters()` only understands a negated one — it
         // returns null here, and the allowlist path would leave before asking.
         $csv = self::neutralisesCsvFormulas($pattern, $replacement)
-            ? [TaintKind::Csv]
-            : [];
+            ? CharacterProof::clearing(TaintSet::of(TaintKind::Csv))
+            : null;
 
         $retained = self::retainedCharacters($pattern);
 
         if ($retained === null) {
-            return $csv === [] ? null : TaintSet::of(...$csv);
+            return $csv;
         }
 
         // Whatever is substituted in ends up in the output too, so it is held
         // to the same standard as the characters the class kept.
-        $retained .= $replacement;
+        $proof = CharacterProof::ofCharacters($retained . $replacement);
+        $proof = $csv === null ? $proof : $proof->and($csv);
 
-        $kinds = $csv;
-
-        foreach (self::DANGEROUS as $kind => $dangerous) {
-            if (self::sharesNoCharacter($retained, $dangerous)) {
-                $taint = TaintKind::tryFrom($kind);
-
-                if ($taint !== null) {
-                    $kinds[] = $taint;
-                }
-            }
-        }
-
-        return $kinds === [] ? null : TaintSet::of(...$kinds);
+        return $proof->clears->isEmpty() ? null : $proof;
     }
 
     /**
@@ -162,19 +124,7 @@ final class AllowlistPattern
      */
     private static function patternBody(string $pattern): ?string
     {
-        if (strlen($pattern) < 3) {
-            return null;
-        }
-
-        $delimiter = $pattern[0];
-
-        if (str_contains('([{< \\', $delimiter) || ctype_alnum($delimiter)) {
-            return null;
-        }
-
-        $end = strrpos($pattern, $delimiter);
-
-        return $end === false || $end === 0 ? null : substr($pattern, 1, $end - 1);
+        return CharacterProof::pattern($pattern)[0] ?? null;
     }
 
     /**
@@ -187,32 +137,13 @@ final class AllowlistPattern
      */
     private static function retainedCharacters(string $pattern): ?string
     {
-        if (strlen($pattern) < 5) {
+        $parsed = CharacterProof::pattern($pattern);
+
+        if ($parsed === null) {
             return null;
         }
 
-        $delimiter = $pattern[0];
-
-        // Bracket-style delimiters have their own rules; not worth the risk.
-        if (str_contains('([{< \\', $delimiter) || ctype_alnum($delimiter)) {
-            return null;
-        }
-
-        $end = strrpos($pattern, $delimiter);
-
-        if ($end === false || $end === 0) {
-            return null;
-        }
-
-        $body = substr($pattern, 1, $end - 1);
-        $flags = substr($pattern, $end + 1);
-
-        // `u` changes what a class means for anything above ASCII, `x` changes
-        // how whitespace is read, and `m`/`s` are irrelevant but cheap to
-        // refuse. Only `i` is understood, by folding case below.
-        if ($flags !== '' && $flags !== 'i') {
-            return null;
-        }
+        [$body, $caseless] = $parsed;
 
         if (! str_starts_with($body, '[^') || ! str_ends_with($body, ']')) {
             return null;
@@ -226,92 +157,6 @@ final class AllowlistPattern
             return null;
         }
 
-        $characters = self::expand($inner);
-
-        if ($characters === null) {
-            return null;
-        }
-
-        return $flags === 'i'
-            ? $characters . strtoupper($characters) . strtolower($characters)
-            : $characters;
-    }
-
-    /**
-     * Expand a character class body into the literal characters it names.
-     */
-    private static function expand(string $inner): ?string
-    {
-        $out = '';
-        $length = strlen($inner);
-
-        for ($i = 0; $i < $length; $i++) {
-            $char = $inner[$i];
-
-            if ($char === '\\') {
-                $next = $inner[$i + 1] ?? null;
-
-                if ($next === null) {
-                    return null;
-                }
-
-                $expanded = match ($next) {
-                    'd' => '0123456789',
-                    'w' => 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_',
-                    's' => " \t\n\r\v\f",
-                    'n' => "\n",
-                    'r' => "\r",
-                    't' => "\t",
-                    // A negated shorthand inside a negated class, a unicode
-                    // property, a backreference: all beyond this.
-                    'D', 'W', 'S', 'p', 'P', 'b', 'B', 'x', 'u', '0' => null,
-                    default => $next,
-                };
-
-                if ($expanded === null) {
-                    return null;
-                }
-
-                $out .= $expanded;
-                $i++;
-
-                continue;
-            }
-
-            // A range, but not a literal `-` at either end of the class.
-            if ($char === '-' && $out !== '' && $i + 1 < $length && $inner[$i + 1] !== ']') {
-                $from = $out[strlen($out) - 1];
-                $to = $inner[$i + 1];
-
-                if (ord($to) < ord($from)) {
-                    return null;
-                }
-
-                for ($c = ord($from) + 1; $c <= ord($to); $c++) {
-                    $out .= chr($c);
-                }
-
-                $i++;
-
-                continue;
-            }
-
-            $out .= $char;
-        }
-
-        return $out;
-    }
-
-    private static function sharesNoCharacter(string $retained, string $dangerous): bool
-    {
-        $length = strlen($dangerous);
-
-        for ($i = 0; $i < $length; $i++) {
-            if (str_contains($retained, $dangerous[$i])) {
-                return false;
-            }
-        }
-
-        return true;
+        return CharacterProof::expandClass($inner, $caseless);
     }
 }

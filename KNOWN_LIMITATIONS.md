@@ -239,10 +239,36 @@ that name it dominates:
   on the edge where the join is not that constant: `isset( $x ) && ctype_digit(
   $x )` proves `$x` digits where it is true, and says nothing where it is false.
 
-A guarded value keeps only an object id wherever it goes next. That covers
-assigning it, `$query['orderby'] = $params['orderby']`, concatenating it into a
-query, and passing it to a function, whose summary then sees what the guard
-admits.
+**What a guard proves, kind by kind.** A check against a fixed list of
+literals, or a number check, leaves nothing but an object id. A character check
+proves only what the characters it admits allow, the same proof a
+`preg_replace()` strip gets:
+
+- `ctype_digit()` and `/^[0-9]+$/` clear every payload.
+- `/^[a-z0-9 ]+$/` clears HTML, and SQL inside quotes only. Outside quotes the
+  space is enough for `1 OR 1`, so the value is `sql_unquoted` there, as if
+  `esc_sql()` had run. A `-` counts the same way, because the query's own space
+  after it can make `--` a comment.
+- `! preg_match( '/[<>]/', $v )` clears nothing. The value can still carry a
+  quote, and an echo may be inside an attribute or a script.
+- `! preg_match( '/[<>"\']/', $v )` clears HTML. It gives what `esc_html()`
+  gives: no markup in text and no way out of a quoted attribute. An `&` is
+  allowed, because a character reference there is only a character.
+- What a guard settles, it settles for the markers too. Digits written to an
+  option are not an untrusted write, and digits echoed are not unknown output.
+- A character check never settles a name. `ctype_alpha( $name )` before
+  `update_option( $name, … )` is still an arbitrary option write.
+- A pattern with the `m` or `x` modifier proves nothing: with `m`, `^` and `$`
+  match at every line.
+
+What survives goes with the value wherever it goes next. That covers assigning
+it, `$query['orderby'] = $params['orderby']`, concatenating it into a query,
+and passing it to a function, whose summary then sees what the guard admits.
+
+One case is kept on purpose. An `html` sink can be anywhere in the page, so a
+value that cannot hold `<`, `>` or a quote clears it, but a space can still
+end an unquoted attribute: `echo '<div class=' . $v . '>'`. Crediting
+spaces less would report every sanitised title echoed as text.
 
 **Every way past the check has to be checked.** A block counts as guarded when
 every edge into it is the side of a check that passed, or comes from a branch
