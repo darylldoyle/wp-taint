@@ -115,6 +115,15 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A less severe finding could hide a more severe one on the same line. The
+  rule precedence let `wp.xss.escape-voided`, a medium, replace
+  `wp.xss.unescaped-output`, a high, whenever both reported one echo. On one
+  client tree that hid 362 highs. A function returned a value that was raw on
+  one path and voided on another, and each echo of it showed only the medium.
+  The specific finding now wins outright only when it is at least as severe.
+  Two findings whose traces start at one place tell one story: the specific
+  finding stays and takes the higher severity, with a trace step saying why.
+  Two that start apart are two flows, and both are reported.
 - A guard cleared every kind when it proved one. `! preg_match( '/[<>]/', $v )`
   cleared SQL and shell as well as HTML, and a character check such as
   `/^[a-z0-9 ]+$/` or a strip such as `preg_replace( '/[^a-zA-Z0-9 ]/', … )`

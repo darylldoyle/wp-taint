@@ -183,6 +183,103 @@ it('collapses the unescaped-output family to the most specific finding at a line
     expect($withoutVoided->all()[0]->ruleId)->toBe('wp.xss.unescaped-output');
 });
 
+/**
+ * A finding whose flow starts at a source on another line.
+ */
+function makeSourcedFinding(
+    string $ruleId,
+    Severity $severity,
+    TaintKind $kind,
+    int $sourceLine,
+    string $fingerprint,
+): Finding {
+    $finding = makeFinding(ruleId: $ruleId, severity: $severity, kind: $kind, fingerprint: $fingerprint);
+    $source = new TraceStep(
+        TraceVerb::Source,
+        'a.php',
+        $sourceLine,
+        1,
+        null,
+        '$v = x;',
+        'Source.',
+        TaintSet::of($kind),
+    );
+
+    return new Finding(
+        $finding->ruleId,
+        $finding->rule,
+        $finding->severity,
+        $finding->kind,
+        $finding->file,
+        $finding->line,
+        $finding->column,
+        $finding->endColumn,
+        $finding->message,
+        [$source, ...$finding->trace],
+        $finding->fingerprint,
+    );
+}
+
+it('does not hide a more severe finding from another source behind a less severe one', function (): void {
+    // A raw request value and a filtered option reach the same echo. The high
+    // is its own flow, and showing only the medium understated the line.
+    $precedence = ['wp.xss.unescaped-output' => ['wp.xss.escape-voided']];
+
+    $collection = FindingCollection::fromArray([
+        makeSourcedFinding('wp.xss.unescaped-output', Severity::High, TaintKind::Html, 3, '1'),
+        makeSourcedFinding('wp.xss.escape-voided', Severity::Medium, TaintKind::EscapeVoided, 5, '2'),
+    ])->withRulePrecedence($precedence);
+
+    expect(array_map(static fn (Finding $f): string => $f->ruleId, $collection->all()))
+        ->toEqualCanonicalizing(['wp.xss.unescaped-output', 'wp.xss.escape-voided']);
+});
+
+it('reports one story once, as the specific finding at the higher severity', function (): void {
+    // A filter callback that appends raw input to an escaped value: two kinds,
+    // one flow.
+    $precedence = ['wp.xss.unescaped-output' => ['wp.xss.escape-voided']];
+
+    $collection = FindingCollection::fromArray([
+        makeSourcedFinding('wp.xss.unescaped-output', Severity::High, TaintKind::Html, 3, '1'),
+        makeSourcedFinding('wp.xss.escape-voided', Severity::Medium, TaintKind::EscapeVoided, 3, '2'),
+    ])->withRulePrecedence($precedence);
+
+    $finding = $collection->all()[0];
+
+    expect($collection->all())->toHaveCount(1)
+        ->and($finding->ruleId)->toBe('wp.xss.escape-voided')
+        ->and($finding->severity)->toBe(Severity::High)
+        ->and($finding->trace[count($finding->trace) - 1]->description)->toContain('reported at high');
+});
+
+it('keeps one finding for three that tell one story, at the highest severity', function (): void {
+    $precedence = [
+        'wp.output.unescaped-unknown' => ['wp.xss.unescaped-output', 'wp.xss.escape-voided'],
+        'wp.xss.unescaped-output' => ['wp.xss.escape-voided'],
+    ];
+
+    $collection = FindingCollection::fromArray([
+        makeSourcedFinding('wp.output.unescaped-unknown', Severity::Low, TaintKind::Unknown, 3, '1'),
+        makeSourcedFinding('wp.xss.unescaped-output', Severity::High, TaintKind::Html, 3, '2'),
+        makeSourcedFinding('wp.xss.escape-voided', Severity::Medium, TaintKind::EscapeVoided, 3, '3'),
+    ])->withRulePrecedence($precedence);
+
+    expect(array_map(static fn (Finding $f): string => $f->ruleId . ' ' . $f->severity->value, $collection->all()))
+        ->toBe(['wp.xss.escape-voided high']);
+});
+
+it('lets any at least as severe finding supersede an unknown-provenance one', function (): void {
+    $precedence = ['wp.output.unescaped-unknown' => ['wp.xss.unescaped-output', 'wp.xss.escape-voided']];
+
+    $collection = FindingCollection::fromArray([
+        makeSourcedFinding('wp.output.unescaped-unknown', Severity::Low, TaintKind::Unknown, 3, '1'),
+        makeSourcedFinding('wp.xss.unescaped-output', Severity::High, TaintKind::Html, 7, '2'),
+    ])->withRulePrecedence($precedence);
+
+    expect($collection->all())->toHaveCount(1)
+        ->and($collection->all()[0]->ruleId)->toBe('wp.xss.unescaped-output');
+});
+
 it('does not collapse the output family across different lines', function (): void {
     $precedence = ['wp.output.unescaped-unknown' => ['wp.xss.unescaped-output', 'wp.xss.escape-voided']];
 
