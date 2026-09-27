@@ -179,7 +179,9 @@ A property on an object whose class the scan cannot tell has one slot per
 name, shared across the whole scan. A read of `$obj->name` on any such object
 sees every `->name` written on any other. The class is known for `$this`, an
 object made with `new`, a declared parameter, property or return type, and a
-value that one of PHP's own methods is declared to return. A value from a
+value that one of PHP's own methods is declared to return. For a property,
+that holds through a join when every way in agrees on the class, or brings a
+literal, `null`, an array or a local nothing else can set. A value from a
 function or method that declares nothing shares the slot.
 
 The trace does reach back to the source: the map records the trace of the write
