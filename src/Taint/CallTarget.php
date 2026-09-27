@@ -61,12 +61,20 @@ final class CallTarget
         public readonly bool $viaHook = false,
         /**
          * Each argument is the value the callee's parameter at its position
-         * receives. Not so when a dispatcher unpacks an array into the call,
-         * `call_user_func_array()` or `array_map()`, nor for a call written
-         * with `...$args` or a named argument, which php-cfg reads as
-         * positional.
+         * receives. Not so when a dispatcher hands the callee the elements of
+         * an array, `call_user_func_array()` or `array_map()`, nor for a call
+         * written with `...$args`: see {@see ArgumentLayout}.
          */
         public readonly bool $positional = true,
+        /**
+         * Further values a parameter receives besides its argument, by
+         * parameter position. `array_reduce()` hands its callback's `$carry`
+         * the initial value and, after the first call, what the callback
+         * returned, which is built from the items.
+         *
+         * @var array<int, list<Operand>>
+         */
+        public readonly array $moreArguments = [],
     ) {
     }
 
@@ -89,6 +97,7 @@ final class CallTarget
             $this->passesByValue,
             $this->viaHook,
             $this->positional,
+            $this->moreArguments,
         );
     }
 
@@ -108,6 +117,7 @@ final class CallTarget
             $this->passesByValue,
             true,
             $this->positional,
+            $this->moreArguments,
         );
     }
 
@@ -202,6 +212,30 @@ final class CallTarget
             $this->passesByValue,
             $this->viaHook,
             $this->positional,
+            $this->moreArguments,
+        );
+    }
+
+    /**
+     * The same callee, with its arguments laid out by the callee's parameters.
+     *
+     * @param list<Operand>              $arguments one per parameter position
+     * @param array<int, list<Operand>> $more      see {@see $moreArguments}
+     */
+    public function withParameterArguments(array $arguments, array $more, bool $positional): self
+    {
+        return new self(
+            $arguments,
+            $this->matcher,
+            $this->userFunctionKey,
+            $this->displayName,
+            $this->dynamic,
+            $this->resultMode,
+            $this->candidates,
+            $this->passesByValue,
+            $this->viaHook,
+            $positional && $this->positional,
+            $more,
         );
     }
 
@@ -222,6 +256,7 @@ final class CallTarget
             $this->passesByValue,
             $this->viaHook,
             false,
+            $this->moreArguments,
         );
     }
 }

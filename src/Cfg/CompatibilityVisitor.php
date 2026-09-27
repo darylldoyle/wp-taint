@@ -58,8 +58,9 @@ final class CompatibilityVisitor extends NodeVisitorAbstract
 {
     /**
      * The attribute on a call whose arguments do not all go to the parameter
-     * at their position. It reaches the call's op, which copies its node's
-     * attributes.
+     * at their position. It holds one entry per argument: null for a
+     * positional one, `...` for an unpacked one, and the parameter name for a
+     * named one. It reaches the call's op, which copies its node's attributes.
      */
     public const UNPACKED_OR_NAMED_ARGUMENTS = 'wpTaint.unpackedOrNamedArguments';
 
@@ -114,8 +115,12 @@ final class CompatibilityVisitor extends NodeVisitorAbstract
                 : ltrim($this->namespace . '\\' . $node->name->toString(), '\\');
         }
 
-        if ($node instanceof Node\Expr\CallLike && ! $node->isFirstClassCallable() && self::loose($node->getArgs())) {
-            $node->setAttribute(self::UNPACKED_OR_NAMED_ARGUMENTS, true);
+        if ($node instanceof Node\Expr\CallLike && ! $node->isFirstClassCallable()) {
+            $shape = self::shape($node->getArgs());
+
+            if ($shape !== null) {
+                $node->setAttribute(self::UNPACKED_OR_NAMED_ARGUMENTS, $shape);
+            }
         }
 
         if ($node instanceof Node\Stmt\ClassMethod || $node instanceof Node\Stmt\Function_) {
@@ -161,16 +166,21 @@ final class CompatibilityVisitor extends NodeVisitorAbstract
 
     /**
      * @param array<Node\Arg> $arguments
+     *
+     * @return list<string|null>|null see {@see UNPACKED_OR_NAMED_ARGUMENTS}, or null when every argument is positional
      */
-    private static function loose(array $arguments): bool
+    private static function shape(array $arguments): ?array
     {
+        $shape = [];
+        $loose = false;
+
         foreach ($arguments as $argument) {
-            if ($argument->unpack || $argument->name !== null) {
-                return true;
-            }
+            $entry = $argument->unpack ? '...' : $argument->name?->toString();
+            $loose = $loose || $entry !== null;
+            $shape[] = $entry;
         }
 
-        return false;
+        return $loose ? $shape : null;
     }
 
     /**

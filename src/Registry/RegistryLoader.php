@@ -45,7 +45,7 @@ final class RegistryLoader
 
     private const DISPATCHER_KEYS = [
         'function', 'class', 'method', 'static_method',
-        'callable', 'mode', 'argument_start', 'returns', 'hook', 'note', 'hook_modifiers',
+        'callable', 'mode', 'argument_start', 'returns', 'hook', 'note', 'hook_modifiers', 'parameters',
     ];
 
     private const BYREF_KEYS = [
@@ -427,8 +427,38 @@ final class RegistryLoader
                 $this->boolValue($file, $context . ' hook', $entry['hook'] ?? false),
                 $this->optionalString($file, $context . ' note', $entry['note'] ?? null),
                 $this->boolValue($file, $context . ' hook_modifiers', $entry['hook_modifiers'] ?? false),
+                $this->parameterSources($file, $context . ' parameters', $entry['parameters'] ?? null),
             ));
         }
+    }
+
+    /**
+     * `parameters = [[2, 0], [0]]`: for each of the callee's parameters, the
+     * dispatcher's arguments whose taint it receives.
+     *
+     * @return list<list<int>>|null
+     */
+    private function parameterSources(string $file, string $context, mixed $value): ?array
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (! is_array($value) || ! array_is_list($value) || $value === []) {
+            throw RegistryException::at($file, $context, 'must be a list with one list of argument positions per parameter.');
+        }
+
+        $parameters = [];
+
+        foreach ($value as $sources) {
+            if (! is_array($sources) || ! array_is_list($sources) || $sources === []) {
+                throw RegistryException::at($file, $context, 'each parameter must list at least one argument position.');
+            }
+
+            $parameters[] = array_map(fn (mixed $source): int => $this->intValue($file, $context, $source), $sources);
+        }
+
+        return $parameters;
     }
 
     private function loadByRefEffects(string $file, mixed $entries, RegistryAccumulator $accumulator): void

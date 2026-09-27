@@ -48,6 +48,17 @@ final class Dispatcher
          * then start one later.
          */
         public readonly bool $hookModifiers = false,
+        /**
+         * Where each of the callee's parameters gets its value, when the
+         * mode alone does not say: the dispatcher's arguments whose taint it
+         * receives, by parameter. `array_walk( $items, $cb, $extra )` calls
+         * `$cb( $item, $key, $extra )`, which is `[[0], [0], [2]]`. Null hands
+         * the callee the arguments from {@see $argumentStart}, one per
+         * parameter.
+         *
+         * @var list<list<int>>|null
+         */
+        public readonly ?array $parameters = null,
     ) {
     }
 }

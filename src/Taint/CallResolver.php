@@ -33,6 +33,8 @@ final class CallResolver
      * handle. `$wpdb` is a global; the others are the two names plugins almost
      * universally use when they stash it on an object.
      */
+    private readonly ArgumentLayout $layout;
+
     public function __construct(
         private readonly Registry $registry,
         private readonly UserFunctionTable $functions,
@@ -41,6 +43,7 @@ final class CallResolver
         private readonly ReceiverResolver $receivers,
         private readonly ?HookGraph $hooks = null,
     ) {
+        $this->layout = new ArgumentLayout($functions);
     }
 
     /**
@@ -81,12 +84,11 @@ final class CallResolver
     public function resolveAll(Op $op, FunctionContext $context, ClassTypeMap $types): array
     {
         $targets = $this->targetsOf($op, $context, $types);
+        $written = $op->hasAttribute(CompatibilityVisitor::UNPACKED_OR_NAMED_ARGUMENTS)
+            ? ArgumentLayout::written($op)
+            : [];
 
-        if (! $op->hasAttribute(CompatibilityVisitor::UNPACKED_OR_NAMED_ARGUMENTS)) {
-            return $targets;
-        }
-
-        return array_map(static fn (CallTarget $target): CallTarget => $target->notPositional(), $targets);
+        return array_map(fn (CallTarget $target): CallTarget => $this->layout->lay($target, $written), $targets);
     }
 
     /**
@@ -184,10 +186,14 @@ final class CallResolver
 
         // `call_user_func_array( $cb, $args )` hands `$cb` the elements of
         // `$args`, and `array_map( $cb, $items )` hands it one item at a time.
-        if ($dispatcher->mode !== DispatchMode::Rest) {
-            $unpacked = static fn (CallTarget $target): CallTarget => $target->notPositional();
-            $dispatched = array_map($unpacked, $dispatched);
-            $prefixed = array_map($unpacked, $prefixed);
+        if ($dispatcher->mode === DispatchMode::Spread) {
+            $spread = fn (CallTarget $target): CallTarget => $this->layout->spread($target);
+            $dispatched = array_map($spread, $dispatched);
+            $prefixed = array_map($spread, $prefixed);
+        } elseif ($dispatcher->mode === DispatchMode::Elements) {
+            $items = static fn (CallTarget $target): CallTarget => $target->notPositional();
+            $dispatched = array_map($items, $dispatched);
+            $prefixed = array_map($items, $prefixed);
         }
 
         if ($dispatched === []) {
@@ -509,12 +515,23 @@ final class CallResolver
             return [];
         }
 
-        return $this->callables->resolve(
+        $targets = $this->callables->resolve(
             $callable,
             $this->calleeArguments($call, $dispatcher),
             $context,
             $types,
             $this->receivers,
+        );
+
+        if ($dispatcher->parameters === null) {
+            return $targets;
+        }
+
+        $sources = $dispatcher->parameters;
+
+        return array_map(
+            static fn (CallTarget $target): CallTarget => ArgumentLayout::fromSources($target, $call, $sources),
+            $targets,
         );
     }
 
@@ -540,11 +557,11 @@ final class CallResolver
 
             $arguments[] = $argument;
 
-            // `spread` and `elements` both take a single array argument and
-            // unpack it. SSA gives that array one operand, so there is nothing
-            // finer to hand over: the callee's first parameter receives it, and
-            // the analysis reads its element taint from there.
-            if ($dispatcher->mode !== DispatchMode::Rest) {
+            // `spread` takes one array and unpacks it: see
+            // ArgumentLayout::spread(). `elements` hands each array's items
+            // to the next parameter: `array_map( $cb, $a, $b )` calls
+            // `$cb( $a[ $i ], $b[ $i ] )`.
+            if ($dispatcher->mode === DispatchMode::Spread) {
                 break;
             }
         }
