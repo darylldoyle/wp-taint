@@ -2984,12 +2984,18 @@ final class FunctionAnalysis
     }
 
     /**
-     * One of PHP's own functions that the catalogue does not model by hand.
+     * One of PHP's own functions or methods that the catalogue does not model
+     * by hand.
      *
      * Its declaration says what it returns. A result that can hold text holds
      * the text of the arguments that can: `explode( ',', $_GET['ids'] )`.
      * A call written with names or `...` cannot be matched to the declared
      * positions, so every argument counts.
+     *
+     * A method of one of PHP's classes that hold text also reads its object:
+     * `$dom->saveHTML()` returns what `$dom->loadHTML( $html )` kept. And a
+     * method that keeps its arguments puts them into the object, or into the
+     * new object for `new ArrayObject( $_POST )`.
      */
     private function transferInternalFunction(Op\Expr $op, CallTarget $call, InternalFunction $internal): bool
     {
@@ -3007,11 +3013,51 @@ final class FunctionAnalysis
             }
         }
 
+        $name = $call->matcher?->describe() ?? $call->name();
+
+        if ($op instanceof Op\Expr\New_) {
+            if (! $internal->stores) {
+                return $this->writeResult($op->result, TaintSet::empty());
+            }
+
+            return $this->transferUnion(
+                $op,
+                $inputs,
+                sprintf('%s keeps its arguments, so the object holds them.', $name),
+            );
+        }
+
+        $changed = false;
+        $receiver = $op instanceof Op\Expr\MethodCall ? $op->var : null;
+
+        if ($internal->stores && $receiver !== null) {
+            $kept = $this->state->unionOf($inputs);
+
+            if (! $kept->isEmpty()) {
+                $changed = $this->state->addContainerTaint($receiver, $kept, new Provenance(
+                    TraceVerb::Propagate,
+                    $op,
+                    sprintf('%s keeps its arguments, so the object now holds %s.', $name, $kept->describe()),
+                    $inputs,
+                ));
+            }
+        }
+
+        if (! $internal->returnsText) {
+            return $this->writeResult($op->result, TaintSet::empty()) || $changed;
+        }
+
+        if ($internal->receiver && $receiver !== null) {
+            $inputs[] = $receiver;
+        }
+
         return $this->transferUnion($op, $inputs, sprintf(
-            'PHP declares %s to return %s, so the result carries the text of its arguments.',
-            $call->matcher?->describe() ?? $call->name(),
+            $internal->receiver
+                ? 'PHP declares %s to return %s, so the result carries the text of its arguments and its object.'
+                : 'PHP declares %s to return %s, so the result carries the text of its arguments.',
+            $name,
             $internal->returns,
-        ));
+        )) || $changed;
     }
 
     /**
