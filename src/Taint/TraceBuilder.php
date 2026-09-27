@@ -259,7 +259,8 @@ final class TraceBuilder
     {
         return match ($kind) {
             TaintKind::SqlUnquoted => [TaintKind::Sql],
-            TaintKind::SqlSelfQuoted => [TaintKind::SqlUnquoted, TaintKind::Sql],
+            TaintKind::SqlSelfQuoted => [TaintKind::SqlUnquoted, TaintKind::SqlUnticked, TaintKind::Sql],
+            TaintKind::SqlUnticked => [TaintKind::Sql],
             TaintKind::EscapeVoided => [TaintKind::Escaped, TaintKind::Html],
             TaintKind::Escaped => [TaintKind::Html],
             default => [],

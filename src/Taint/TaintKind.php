@@ -104,6 +104,17 @@ enum TaintKind: string
     case SqlSelfQuoted = 'sql_self_quoted';
 
     /**
+     * Escaped for a backtick-quoted SQL identifier, and only for one.
+     *
+     * `str_replace( '`', '``', $v )` doubles every backtick, and removing them
+     * does as well: the value can no longer leave `` `…` ``. It can still hold
+     * a quote, so bare or inside quotes it is as dangerous as ever. A
+     * concatenation that puts it inside backticks it opens and closes trades
+     * it for {@see self::SqlSelfQuoted}.
+     */
+    case SqlUnticked = 'sql_unticked';
+
+    /**
      * Object injection reachable only through data already in the database.
      *
      * The same sink as {@see self::Unserialize} and a different bar to clear.
@@ -250,6 +261,7 @@ enum TaintKind: string
             self::ObjectId => 1 << 20,
             self::SqlUnquoted => 1 << 13,
             self::SqlSelfQuoted => 1 << 21,
+            self::SqlUnticked => 1 << 22,
             self::UnserializeStored => 1 << 14,
             self::Escaped => 1 << 15,
             self::EscapeVoided => 1 << 16,
@@ -286,7 +298,14 @@ enum TaintKind: string
     {
         return in_array(
             $this,
-            [self::SqlUnquoted, self::SqlSelfQuoted, self::Escaped, self::EscapeVoided, self::Unknown],
+            [
+                self::SqlUnquoted,
+                self::SqlSelfQuoted,
+                self::SqlUnticked,
+                self::Escaped,
+                self::EscapeVoided,
+                self::Unknown,
+            ],
             true,
         );
     }
@@ -328,6 +347,7 @@ enum TaintKind: string
             self::ObjectId => 'request-chosen object id',
             self::SqlUnquoted => 'SQL outside quotes',
             self::SqlSelfQuoted => 'SQL inside more quotes',
+            self::SqlUnticked => 'SQL outside backticks',
             self::UnserializeStored => 'stored serialised payload',
             self::Escaped => 'escaped',
             self::EscapeVoided => 'escaping voided by a filter',

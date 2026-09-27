@@ -137,6 +137,12 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `implode()` glue are read the same way. A helper hands its caller the
   residual it made, and a callee records whether its query puts the argument
   bare or inside quotes.
+- An identifier escaped for backticks read as raw SQL. `str_replace( '`',
+  '``', $col )` into `` "SELECT `$col` FROM t" `` was reported, and the same
+  value placed bare was reported only for being raw. Doubling or removing every
+  backtick now makes a value safe inside backticks only, with its own finding
+  when it lands outside them. A `str_replace()` that escapes the backslash and
+  then both quotes is credited like `esc_sql()`.
 - An escaped SQL value stayed escaped through any function. `stripslashes(
   esc_sql( $v ) )`, `rawurldecode()` of it and `trim()` with a mask can each undo
   the escaping. Only the functions the catalogue marks `keeps_residuals` now
