@@ -156,10 +156,10 @@ echo $parts['tip'];       // not reported: nothing reads $field['value']
 
 A callee that uses the parameter any other way receives every element. That
 includes passing it on to another function, returning it, iterating it, or
-reading it with a computed key. So does a call written with `...$args` or a
-named argument, and a callback run by `call_user_func_array()`, `array_map()`
-or their relatives. None of those hands the parameter one argument whose keys
-are the ones written. Type checks, `count()`, `isset()`, `empty()` and
+reading it with a computed key. So does a call written with `...$args`, and a
+callback run by `array_map()`, by `call_user_func_array()` with an array not
+written in the call, or by their relatives. None of those hands the parameter
+one argument whose keys are the ones written. Type checks, `count()`, `isset()`, `empty()` and
 comparisons read no content, so they do not count as a use.
 
 **Direction:** over-approximating at the dynamic ends, exact in the middle.

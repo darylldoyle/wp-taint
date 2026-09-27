@@ -674,7 +674,8 @@ rule_id = "wp.ldap.injection"
 #
 # `callable` is which argument holds the callee. `mode` says how the remaining
 # arguments map onto the callee's parameters, and `returns` says what the
-# dispatcher hands back. An entry that also appears under [[propagators]] falls
+# dispatcher hands back. `parameters`, where the mode alone does not say, lists
+# for each of the callee's parameters the arguments whose taint it receives. An entry that also appears under [[propagators]] falls
 # back to that entry whenever the callee cannot be resolved, so a dispatcher
 # never makes the analysis worse than not having one.
 # ---------------------------------------------------------------------------
@@ -690,7 +691,7 @@ function = "call_user_func_array"
 callable = 0
 mode = "spread"
 returns = "callee"
-note = "The argument array is one SSA operand, so its element taint feeds every parameter."
+note = "A literal array's values go to the parameters their keys name. Any other array's element taint feeds every parameter."
 
 [[dispatchers]]
 function = "array_map"
@@ -705,7 +706,8 @@ callable = 1
 argument_start = 0
 mode = "elements"
 returns = "own"
-note = "Returns a subset of its input, not the predicate's boolean."
+parameters = [[0], [0]]
+note = "Returns a subset of its input, not the predicate's boolean. The callback gets an item, a key, or both."
 
 [[dispatchers]]
 function = "array_walk"
@@ -713,6 +715,8 @@ callable = 1
 argument_start = 0
 mode = "elements"
 returns = "own"
+parameters = [[0], [0], [2]]
+note = "The callback gets an item, its key, and the third argument."
 
 [[dispatchers]]
 function = "array_reduce"
@@ -720,6 +724,8 @@ callable = 1
 argument_start = 0
 mode = "elements"
 returns = "callee"
+parameters = [[2, 0], [0]]
+note = "The carry is the initial value, then what the callback returned, which is built from the items."
 
 [[dispatchers]]
 function = "usort"
@@ -727,6 +733,7 @@ callable = 1
 argument_start = 0
 mode = "elements"
 returns = "own"
+parameters = [[0], [0]]
 
 [[dispatchers]]
 function = "uasort"
@@ -734,6 +741,7 @@ callable = 1
 argument_start = 0
 mode = "elements"
 returns = "own"
+parameters = [[0], [0]]
 
 [[dispatchers]]
 function = "uksort"
@@ -741,6 +749,7 @@ callable = 1
 argument_start = 0
 mode = "elements"
 returns = "own"
+parameters = [[0], [0]]
 
 [[dispatchers]]
 class = "Closure"

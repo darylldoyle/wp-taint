@@ -4146,12 +4146,18 @@ final class FunctionAnalysis
     private function argumentTaint(CallTarget $call, FunctionSummary $summary, int $index, Operand $argument): TaintSet
     {
         $keys = $call->positional ? $summary->keysReadFrom($index) : null;
+        $taint = TaintSet::empty();
 
-        if ($keys === null) {
-            return $this->state->effectiveTaintOf($argument);
+        // What else the parameter receives: `array_reduce()`'s carry.
+        foreach ($call->moreArguments[$index] ?? [] as $more) {
+            $taint = $taint->union($this->state->effectiveTaintOf($more));
         }
 
-        $taint = $this->state->taintOf($argument)->union($this->state->containerTaintOf($argument));
+        if ($keys === null) {
+            return $taint->union($this->state->effectiveTaintOf($argument));
+        }
+
+        $taint = $taint->union($this->state->taintOf($argument))->union($this->state->containerTaintOf($argument));
 
         foreach ($keys as $key) {
             $taint = $taint->union($this->state->keyedTaintOf($argument, $key));

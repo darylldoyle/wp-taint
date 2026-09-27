@@ -115,6 +115,27 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A call's arguments went to the parameter at the same position as written,
+  and several kinds of call do not work that way. Each lost a flow:
+  - `f( ...$args )` handed `$args` to the first parameter and nothing to the
+    rest.
+  - `call_user_func_array( $cb, $args )`, `do_action_ref_array()` and
+    `apply_filters_ref_array()` did the same.
+  - `f( label: $x, field: $y )` handed `$x` to whichever parameter came first.
+  - `function f( $a, ...$rest )` never received a third argument.
+  - `array_map( $cb, $a, $b )` handed `$cb` nothing from `$b`.
+  - `array_walk()` never handed over its third argument, and
+    `array_reduce()` gave its callback's carry the items instead of the
+    initial value.
+
+  An unpacked array now goes to every parameter from its position on. A
+  literal array handed to `call_user_func_array()` goes to the parameters its
+  keys name, and a named argument to the parameter of that name. A variadic
+  parameter collects every argument from its position. A dispatcher's
+  catalogue entry can now list where each of its callback's parameters gets
+  its value, and `array_filter()`, `array_walk()`, `array_reduce()` and the
+  sorts do. An `array_reduce()` carry receives the initial value and the
+  items.
 - A property read on a variable that php-cfg joins from several places lost
   the variable's class. `if ( $on && ( $class = $r->getClosureCalledClass() ) )`
   joins `$class` from before the condition with the one assigned in it, so
@@ -140,9 +161,9 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   now lists the literal keys a function reads each parameter through, when it
   reads the parameter no other way, and a caller hands such a callee only
   those elements. The array's own taint and its computed-key elements still go
-  in. A call written with `...$args` or a named argument, and a callback run
-  by `call_user_func_array()`, `array_map()` or their relatives, still hands
-  on the whole argument, because the array there is not one parameter's value.
+  in. A call written with `...$args`, and a callback run by `array_map()`,
+  `call_user_func_array()` or their relatives, still hands on the whole
+  argument, because the array there is not one parameter's value.
 - A property read on a value that one of PHP's own methods returned shared a
   slot with every write to a property of that name the scan could not place.
   `$r->getClosureCalledClass()->name` read whatever any `$labels->name = …`
