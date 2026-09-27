@@ -996,8 +996,9 @@ A capture whose value is the enclosing function's own parameter is carried the
 way a property write is: the probe run records "parameter reaches capture
 `$msg` of this closure" in the summary, and each call site publishes the taint
 it actually passed, through helper chains, since a probe applying a callee's
-summary re-records the capture into its own. The run that publishes directly
-is still the one that seeds nothing.
+summary re-records the capture into its own. Property writes carry through
+helpers the same way. The run that publishes directly is still the one that
+seeds nothing.
 
 The same holds for the other two ways a function hands its variables outward:
 the scope a file it includes sees, and the `$args` a template it loads with
