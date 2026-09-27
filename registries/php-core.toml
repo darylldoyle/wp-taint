@@ -113,6 +113,13 @@ note = "The body of an HTTP response."
 # PROPAGATORS — pass taint through unchanged
 # =============================================================================
 #
+# An escaped SQL value keeps its residual, `sql_unquoted` or `sql_self_quoted`,
+# only through a propagator marked `keeps_residuals`: one that cannot undo the
+# escaping. Every other propagator turns it back into `sql`, because
+# `stripslashes()`, `rawurldecode()` or `substr()` can. `mask_arg` names the
+# argument that takes the credit away again, and `sprintf()` and `implode()`
+# are read by their format and glue; see SqlQuoteFold.
+#
 # These are string operations. None of them escapes anything. They exist here
 # so that taint survives them, and so that nobody mistakes their presence for
 # sanitisation.
@@ -128,27 +135,38 @@ note = "Removes backslashes recursively. Escapes nothing."
 
 [[propagators]]
 function = "trim"
+keeps_residuals = true
+mask_arg = 1
 
 [[propagators]]
 function = "ltrim"
+keeps_residuals = true
+mask_arg = 1
 
 [[propagators]]
 function = "rtrim"
+keeps_residuals = true
+mask_arg = 1
 
 [[propagators]]
 function = "strtolower"
+keeps_residuals = true
 
 [[propagators]]
 function = "strtoupper"
+keeps_residuals = true
 
 [[propagators]]
 function = "ucfirst"
+keeps_residuals = true
 
 [[propagators]]
 function = "ucwords"
+keeps_residuals = true
 
 [[propagators]]
 function = "lcfirst"
+keeps_residuals = true
 
 [[propagators]]
 function = "substr"
@@ -182,31 +200,42 @@ function = "preg_replace_callback"
 
 [[propagators]]
 function = "sprintf"
+format_arg = 0
 
 [[propagators]]
 function = "vsprintf"
+format_arg = 0
+format_array = true
 
 [[propagators]]
 function = "implode"
+glue_arg = 0
 
 [[propagators]]
 function = "join"
+glue_arg = 0
 
 [[propagators]]
 function = "nl2br"
+keeps_residuals = true
 note = "Converts newlines to <br>. Does not escape the rest of the string."
 
 [[propagators]]
 function = "wordwrap"
+keeps_residuals = true
+mask_arg = 2
 
 [[propagators]]
 function = "str_pad"
+keeps_residuals = true
+mask_arg = 2
 
 [[propagators]]
 function = "strrev"
 
 [[propagators]]
 function = "strval"
+keeps_residuals = true
 
 [[propagators]]
 function = "json_decode"
@@ -214,23 +243,29 @@ note = "Decoded structures carry the taint of the encoded string."
 
 [[propagators]]
 function = "array_map"
+keeps_residuals = true
 
 [[propagators]]
 function = "array_fill"
+keeps_residuals = true
 note = "Repeats a value. Used with implode() to build a prepare() placeholder list for IN (...)."
 
 [[propagators]]
 function = "array_fill_keys"
+keeps_residuals = true
 
 [[propagators]]
 function = "array_pad"
+keeps_residuals = true
 
 [[propagators]]
 function = "str_repeat"
+keeps_residuals = true
 note = "Repeats a literal. The other half of the IN (...) placeholder idiom."
 
 [[propagators]]
 function = "array_slice"
+keeps_residuals = true
 keeps_keys = true
 
 [[propagators]]
@@ -238,132 +273,160 @@ function = "array_keys"
 
 [[propagators]]
 function = "array_combine"
+keeps_residuals = true
 
 [[propagators]]
 function = "array_values"
+keeps_residuals = true
 
 [[propagators]]
 function = "array_filter"
+keeps_residuals = true
 keeps_keys = true
 
 [[propagators]]
 function = "array_merge"
+keeps_residuals = true
 keeps_keys = true
 
 # The rest of PHP's array functions that return their input under its keys.
 # Each of these returns part of its first argument, so only that one counts.
 [[propagators]]
 function = "array_diff"
+keeps_residuals = true
 args = [0]
 keeps_keys = true
 
 [[propagators]]
 function = "array_diff_key"
+keeps_residuals = true
 args = [0]
 keeps_keys = true
 
 [[propagators]]
 function = "array_diff_assoc"
+keeps_residuals = true
 args = [0]
 keeps_keys = true
 
 [[propagators]]
 function = "array_diff_ukey"
+keeps_residuals = true
 args = [0]
 keeps_keys = true
 
 [[propagators]]
 function = "array_diff_uassoc"
+keeps_residuals = true
 args = [0]
 keeps_keys = true
 
 [[propagators]]
 function = "array_udiff"
+keeps_residuals = true
 args = [0]
 keeps_keys = true
 
 [[propagators]]
 function = "array_udiff_assoc"
+keeps_residuals = true
 args = [0]
 keeps_keys = true
 
 [[propagators]]
 function = "array_udiff_uassoc"
+keeps_residuals = true
 args = [0]
 keeps_keys = true
 
 [[propagators]]
 function = "array_intersect"
+keeps_residuals = true
 args = [0]
 keeps_keys = true
 
 [[propagators]]
 function = "array_intersect_key"
+keeps_residuals = true
 args = [0]
 keeps_keys = true
 
 [[propagators]]
 function = "array_intersect_assoc"
+keeps_residuals = true
 args = [0]
 keeps_keys = true
 
 [[propagators]]
 function = "array_intersect_ukey"
+keeps_residuals = true
 args = [0]
 keeps_keys = true
 
 [[propagators]]
 function = "array_intersect_uassoc"
+keeps_residuals = true
 args = [0]
 keeps_keys = true
 
 [[propagators]]
 function = "array_uintersect"
+keeps_residuals = true
 args = [0]
 keeps_keys = true
 
 [[propagators]]
 function = "array_uintersect_assoc"
+keeps_residuals = true
 args = [0]
 keeps_keys = true
 
 [[propagators]]
 function = "array_uintersect_uassoc"
+keeps_residuals = true
 args = [0]
 keeps_keys = true
 
 [[propagators]]
 function = "array_unique"
+keeps_residuals = true
 args = [0]
 keeps_keys = true
 
 [[propagators]]
 function = "array_reverse"
+keeps_residuals = true
 args = [0]
 keeps_keys = true
 
 # These merge every argument under its keys.
 [[propagators]]
 function = "array_replace"
+keeps_residuals = true
 keeps_keys = true
 
 [[propagators]]
 function = "array_replace_recursive"
+keeps_residuals = true
 keeps_keys = true
 
 [[propagators]]
 function = "array_merge_recursive"
+keeps_residuals = true
 keeps_keys = true
 
 
 [[propagators]]
 function = "reset"
+keeps_residuals = true
 
 [[propagators]]
 function = "current"
+keeps_residuals = true
 
 [[propagators]]
 function = "end"
+keeps_residuals = true
 
 [[propagators]]
 function = "urldecode"

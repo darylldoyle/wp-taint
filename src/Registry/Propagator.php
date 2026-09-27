@@ -25,6 +25,32 @@ final class Propagator
          * element under one joins the whole-array slot.
          */
         public readonly bool $keepsKeys = false,
+        /**
+         * The result keeps an escaped SQL value's residual, `sql_unquoted` or
+         * `sql_self_quoted`, because the function cannot undo the escaping:
+         * `strtolower()`, `array_filter()`. Every other propagator turns it
+         * back into `sql`, since `stripslashes()` or `rawurldecode()` can.
+         */
+        public readonly bool $keepsResiduals = false,
+        /**
+         * With an argument at this position the residual goes back to `sql`
+         * after all: `trim( $v, '\\' )` can strip an escaping backslash.
+         */
+        public readonly ?int $maskArgument = null,
+        /**
+         * A `printf` format at this position. A literal one is read, and its
+         * arguments folded where it puts them; see
+         * {@see \Enshrined\WpTaint\Taint\PrintfFormat}.
+         */
+        public readonly ?int $formatArgument = null,
+        /** The values follow the format as one array, as `vsprintf()` takes them. */
+        public readonly bool $formatArray = false,
+        /**
+         * `implode()`'s glue. A literal glue that leaves the quotes as it found
+         * them keeps the elements' residuals; any other glue turns them back
+         * into `sql`.
+         */
+        public readonly ?int $glueArgument = null,
     ) {
     }
 }

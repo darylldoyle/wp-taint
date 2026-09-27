@@ -234,22 +234,26 @@ note = "Removes tags but leaves quotes and ampersands, so it is not sufficient f
 # attributes the usual way read as safe.
 [[propagators]]
 function = "shortcode_atts"
+keeps_residuals = true
 keeps_keys = true
 args = [0, 1]
 
 [[propagators]]
 function = "apply_filters"
+keeps_residuals = true
 keeps_keys = true
 args = [1]
 note = "The filtered value always passes through, even when a callback is registered, because the scan cannot know which callbacks are on the hook when it fires. The callbacks themselves are followed through the hook graph; see [[dispatchers]] below."
 
 [[propagators]]
 function = "apply_filters_ref_array"
+keeps_residuals = true
 keeps_keys = true
 args = [1]
 
 [[propagators]]
 function = "gf_apply_filters"
+keeps_residuals = true
 keeps_keys = true
 args = [1]
 note = "Gravity Forms' apply_filters(). The filtered value passes through for the same reason; its callbacks are followed through the hook graph, see [[dispatchers]]."

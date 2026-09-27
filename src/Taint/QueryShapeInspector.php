@@ -116,39 +116,112 @@ final class QueryShapeInspector
      */
     public function unquotedComponent(Operand $query, callable $atRisk): ?Operand
     {
-        $components = $this->components($query);
+        foreach ($this->placed($query) as [$component, $state]) {
+            if (! $state->isLiteral() && $atRisk($component)) {
+                return $component;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The first component interpolated *inside* quotes or backticks that the
+     * caller says is at risk there.
+     *
+     * The other half of {@see unquotedComponent}: a value carrying
+     * {@see TaintKind::SqlSelfQuoted} brought its own quotes, and inside more
+     * quotes its own close them.
+     *
+     * ```php
+     * $clause = "'" . esc_sql( $n ) . "'";
+     * $wpdb->query( "SELECT * FROM t WHERE title = '$clause'" );
+     * ```
+     *
+     * @param callable(Operand): bool $atRisk
+     */
+    public function quotedComponent(Operand $query, callable $atRisk): ?Operand
+    {
+        foreach ($this->placed($query) as [$component, $state]) {
+            if ($state !== SqlQuote::None && $atRisk($component)) {
+                return $component;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The parts of a built string, each with the text it is known to hold:
+     * a literal's value, or the one string a part folds to. Null for an
+     * operand that is not a built string.
+     *
+     * @return list<array{0: Operand, 1: string|null}>|null
+     */
+    public function parts(Operand $operand): ?array
+    {
+        $components = $this->components($operand);
 
         if ($components === null) {
             return null;
         }
 
-        $inQuotes = false;
+        $parts = [];
 
         foreach ($components as $component) {
-            if ($component instanceof Operand\Literal && is_string($component->value)) {
-                $inQuotes = self::quoteStateAfter($component->value, $inQuotes);
+            $parts[] = [$component, $this->textOf($component)];
+        }
 
-                continue;
+        return $parts;
+    }
+
+    /**
+     * Each non-literal component of a built query, with where it sits.
+     *
+     * A fragment that is not written as a literal may still *be* one, a helper
+     * returning a constant clause, `"WHERE name = '"` built a call away. Its
+     * text carries quote state like any other fragment, and skipping it read
+     * the escaped value that follows as unquoted. Only a fragment folding to
+     * exactly one string counts: two possible texts could disagree about the
+     * state they leave behind.
+     *
+     * @return list<array{0: Operand, 1: SqlQuote}>
+     */
+    private function placed(Operand $query): array
+    {
+        $parts = $this->parts($query);
+
+        if ($parts === null) {
+            return [];
+        }
+
+        $state = SqlQuote::None;
+        $placed = [];
+
+        foreach ($parts as [$component, $text]) {
+            if (! $component instanceof Operand\Literal) {
+                $placed[] = [$component, $state];
             }
 
-            if (! $inQuotes && $atRisk($component)) {
-                return $component;
-            }
-
-            // A fragment that is not written as a literal may still *be* one —
-            // a helper returning a constant clause, `"WHERE name = '"` built a
-            // call away. Its text carries quote state like any other fragment,
-            // and skipping it read the escaped value that follows as unquoted.
-            // Only a fragment folding to exactly one string counts: two
-            // possible texts could disagree about the state they leave behind.
-            $folded = $this->values?->strings($component) ?? [];
-
-            if (count($folded) === 1) {
-                $inQuotes = self::quoteStateAfter($folded[0], $inQuotes);
+            if ($text !== null) {
+                $state = $state->after($text)[0];
             }
         }
 
-        return null;
+        return $placed;
+    }
+
+    private function textOf(Operand $component): ?string
+    {
+        if ($component instanceof Operand\Literal) {
+            $value = $component->value;
+
+            return is_string($value) || is_int($value) || is_float($value) ? (string) $value : null;
+        }
+
+        $folded = $this->values?->strings($component) ?? [];
+
+        return count($folded) === 1 ? $folded[0] : null;
     }
 
     /**
@@ -207,47 +280,6 @@ final class QueryShapeInspector
     }
 
     /**
-     * Whether a run of SQL text leaves us inside a string literal.
-     *
-     * Only single and double quotes, and only unescaped ones. Backticks quote
-     * identifiers rather than values and offer no protection to a value, so
-     * they deliberately do not count as being "in quotes".
-     */
-    private static function quoteStateAfter(string $text, bool $inQuotes): bool
-    {
-        $quote = null;
-        $length = strlen($text);
-
-        for ($index = 0; $index < $length; $index++) {
-            $character = $text[$index];
-
-            if ($character === '\\') {
-                $index++;
-
-                continue;
-            }
-
-            if ($character !== "'" && $character !== '"') {
-                continue;
-            }
-
-            if ($quote === null && ! $inQuotes) {
-                $quote = $character;
-                $inQuotes = true;
-
-                continue;
-            }
-
-            if ($character === $quote || $quote === null) {
-                $quote = null;
-                $inQuotes = false;
-            }
-        }
-
-        return $inQuotes;
-    }
-
-    /**
      * The parts of a concatenated or interpolated string.
      *
      * Null when the operand is not a built string at all, which is how a bare
@@ -299,7 +331,48 @@ final class QueryShapeInspector
             return true;
         }
 
-        return false;
+        return $definition instanceof Op\Expr\FuncCall && $this->collectFormat($definition, $seen, $parts, $depth);
+    }
+
+    /**
+     * `sprintf( "WHERE name = '%s'", $v )` with a literal format builds a
+     * string as a concatenation does: its text, with each argument where the
+     * format puts it. A numeric conversion writes digits.
+     *
+     * @param SplObjectStorage<Operand, true> $seen
+     * @param list<Operand>                   $parts
+     */
+    private function collectFormat(Op\Expr\FuncCall $call, SplObjectStorage $seen, array &$parts, int $depth): bool
+    {
+        $name = strtolower(ltrim((string) OperandHelper::literalString($call->name), '\\'));
+
+        if ($name !== 'sprintf' && $name !== 'vsprintf') {
+            return false;
+        }
+
+        $arguments = array_values(array_filter($call->args, static fn (mixed $arg): bool => $arg instanceof Operand));
+        $format = isset($arguments[0]) ? OperandHelper::literalString($arguments[0]) : null;
+        $pieces = $format === null ? null : PrintfFormat::pieces($format);
+
+        if ($pieces === null) {
+            return false;
+        }
+
+        foreach ($pieces as $piece) {
+            if (is_string($piece)) {
+                $parts[] = new Operand\Literal($piece);
+
+                continue;
+            }
+
+            $argument = $arguments[$name === 'vsprintf' ? 1 : 1 + $piece] ?? null;
+
+            if ($argument !== null) {
+                $this->addPart($argument, $seen, $parts, $depth);
+            }
+        }
+
+        return true;
     }
 
     /**

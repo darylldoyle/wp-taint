@@ -207,8 +207,18 @@ final class TraceBuilder
     {
         $next = $this->carrying($provenance, $kind, $kind);
 
-        if ($next !== [] || ! $kind->isDerived()) {
+        if ($next !== []) {
             return $next;
+        }
+
+        // A value that brought its own quotes into more quotes is `sql` again,
+        // made from the escaped value inside it. See SqlQuoteFold.
+        if ($kind === TaintKind::Sql) {
+            return $this->carrying($provenance, TaintKind::SqlSelfQuoted, TaintKind::SqlSelfQuoted);
+        }
+
+        if (! $kind->isDerived()) {
+            return [];
         }
 
         foreach (self::parentsOf($kind) as $parent) {
@@ -249,6 +259,7 @@ final class TraceBuilder
     {
         return match ($kind) {
             TaintKind::SqlUnquoted => [TaintKind::Sql],
+            TaintKind::SqlSelfQuoted => [TaintKind::SqlUnquoted, TaintKind::Sql],
             TaintKind::EscapeVoided => [TaintKind::Escaped, TaintKind::Html],
             TaintKind::Escaped => [TaintKind::Html],
             default => [],
