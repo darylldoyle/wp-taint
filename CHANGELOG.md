@@ -146,12 +146,12 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `gform_after_submission` now sees the submitted entry, which holds what the
   visitor typed.
 
-  Analysing `gf_apply_filters()` as ordinary code also over-reported. It copies
-  every argument with `func_get_args()`, and its branch for the older form
-  reads the value from that copy. The engine cannot tell that this branch never
-  runs for the array form, so the form id in the hook name reached the result.
-  `echo gravity_form( $id )` with a tainted id was high unescaped output. It is
-  now medium: markup that was escaped and then passed through a filter.
+  A line that echoes a form, such as `echo gravity_form( $id )` with a tainted
+  id, moves from high unescaped output to medium escape-voided.
+  `gf_apply_filters()` now voids escaping the way `apply_filters()` does, so
+  the line gets both findings, and the precedence rule reports only the
+  escape-voided one. The unescaped-output finding is still raised underneath.
+  See "One output line reports once" in KNOWN_LIMITATIONS.md.
 - A file included from a function, or a template loaded with
   `get_template_part()`, was reported as receiving tainted input whenever the
   function had a parameter, even when every caller passed a literal. The
