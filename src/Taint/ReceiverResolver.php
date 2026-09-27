@@ -35,6 +35,60 @@ final class ReceiverResolver
         return $this->resolve($receiver, $context, $types, 0);
     }
 
+    /**
+     * The class whose property `$receiver->p` reads or writes.
+     *
+     * {@see classOf()}, and past it the class PHP's own methods and functions
+     * are declared to return: `$r->getClosureCalledClass()->name` is a
+     * `ReflectionClass`'s name. Without it the read fell to the one slot every
+     * unresolved `->name` shares, and Twig's compiler read Elementor's
+     * request-filled post type labels out of it into `eval()`.
+     *
+     * Only for properties. A method call on such a value stays a dynamic
+     * call, which follows its arguments into its result, where a resolved
+     * call to a method the catalogue does not list returns nothing.
+     *
+     * A class something in the scan extends is not answered: the object could
+     * be the subclass, whose properties are kept under its own name.
+     */
+    public function propertyOwnerOf(Operand $receiver, FunctionContext $context, ClassTypeMap $types): ?string
+    {
+        return $this->classOf($receiver, $context, $types) ?? $this->internalClassOf($receiver, $context, $types, 0);
+    }
+
+    private function internalClassOf(Operand $value, FunctionContext $context, ClassTypeMap $types, int $depth): ?string
+    {
+        if ($depth > self::MAX_CHAIN || $this->declared === null) {
+            return null;
+        }
+
+        $definition = OperandHelper::definingOp($value);
+
+        if ($definition instanceof Op\Expr\Assign) {
+            return $this->classOf($definition->expr, $context, $types)
+                ?? $this->internalClassOf($definition->expr, $context, $types, $depth + 1);
+        }
+
+        $class = null;
+
+        if ($definition instanceof Op\Expr\MethodCall || $definition instanceof Op\Expr\StaticCall) {
+            $method = OperandHelper::literalString($definition->name);
+            $owner = $definition instanceof Op\Expr\StaticCall
+                ? OperandHelper::literalString($definition->class)
+                : $this->classOf($definition->var, $context, $types)
+                    ?? $this->internalClassOf($definition->var, $context, $types, $depth + 1);
+
+            $class = $method === null || $owner === null ? null : InternalTypes::methodReturnClass($owner, $method);
+        } elseif ($definition instanceof Op\Expr\FuncCall) {
+            // Not a namespaced call: the namespace's own function of that name
+            // would be the one called, whatever PHP's returns.
+            $function = OperandHelper::literalString($definition->name);
+            $class = $function === null ? null : InternalTypes::functionReturnClass($function);
+        }
+
+        return $class === null || $this->declared->isExtended($class) ? null : $class;
+    }
+
     private function resolve(Operand $receiver, FunctionContext $context, ClassTypeMap $types, int $depth): ?string
     {
         if ($depth > self::MAX_CHAIN) {

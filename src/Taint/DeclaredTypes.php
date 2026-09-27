@@ -303,6 +303,14 @@ final class DeclaredTypes
     }
 
     /**
+     * Whether a class in the scan extends this one, at any depth.
+     */
+    public function isExtended(string $class): bool
+    {
+        return $this->hierarchy->descendantsOf($class) !== [];
+    }
+
+    /**
      * The declared class of a property, following inheritance.
      *
      * A `protected DB $db` declared on a base class is read through the
