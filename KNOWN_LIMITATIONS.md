@@ -422,6 +422,19 @@ The pair survives a merge only when one incoming operand carried both. That is a
 merge rule rather than path sensitivity: it cannot say which path runs, only
 that no single one of them did both things.
 
+**One output line reports once.** When one echo gets more than one of
+`wp.output.unescaped-unknown`, `wp.xss.unescaped-output` and
+`wp.xss.escape-voided`, only one is reported. Escape-voided wins over
+unescaped-output, and either wins over unescaped-unknown. The usual shape is a
+filter whose callback hands back raw input, and there the escape-voided
+finding names both the defect and the fix.
+
+The rule cannot tell when the raw HTML took a different path from the escaped
+value. The line then reports medium escape-voided and hides a high. Echoing a
+Gravity Forms form with a tainted form id does this. The engine follows the id
+into the form's markup, and the markup is escaped and then filtered on its way
+out.
+
 **Two deliberate exceptions.**
 
 - **Registered escapers never void.** Core ends `esc_html()` with
