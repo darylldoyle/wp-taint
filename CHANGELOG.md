@@ -115,6 +115,13 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A property written two calls below the caller was lost.
+  `acme_configure( $log, $_GET['f'] )` calling `$log->set( $f )` left
+  `$log->file` clean. A setter called directly was followed, but a summary
+  applied inside another function's probe run wrote to the probe's sealed
+  property map and recorded nothing. That run now re-records the write, as it
+  already did for closure captures and included files, and each caller
+  publishes what it passes.
 - A callee that cleared a kind on the way to a property, a closure's capture,
   or a file it included still passed that kind on. The caller published its
   whole argument there. `$this->v = esc_html( $x )` stored HTML taint when the

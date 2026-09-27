@@ -184,3 +184,57 @@ it('keeps a value of unknown origin unknown through a setter that stores it as i
 
     expect($findings)->toContain('wp.output.unescaped-unknown@plugin.php:12');
 });
+
+it('carries a property write up through the helpers that call the setter', function (): void {
+    $findings = sideChannelFindings(scanSideChannelTree([
+        'plugin.php' => <<<'PHP'
+            <?php
+            class Acme_Log {
+                public $file;
+                public function set( $f ) {
+                    $this->file = $f;
+                }
+            }
+            function acme_configure( $log, $f ) {
+                acme_configure_inner( $log, $f );
+            }
+            function acme_configure_inner( $log, $f ) {
+                $log->set( $f );
+            }
+            function acme_run() {
+                $log = new Acme_Log();
+                acme_configure( $log, $_GET['f'] );
+                echo $log->file;
+            }
+            PHP,
+    ]));
+
+    expect($findings)->toContain('wp.xss.unescaped-output@plugin.php:17');
+});
+
+it('carries only what survives each helper up the chain', function (): void {
+    $findings = sideChannelFindings(scanSideChannelTree([
+        'plugin.php' => <<<'PHP'
+            <?php
+            class Acme_Label {
+                public $text;
+                public function set( $t ) {
+                    $this->text = $t;
+                }
+            }
+            function acme_label( $label, $t ) {
+                $label->set( esc_html( $t ) );
+            }
+            function acme_show() {
+                global $wpdb;
+                $label = new Acme_Label();
+                acme_label( $label, $_GET['t'] );
+                echo $label->text;
+                $wpdb->query( "DELETE FROM t WHERE v = '{$label->text}'" );
+            }
+            PHP,
+    ]));
+
+    expect($findings)->not->toContain('wp.xss.unescaped-output@plugin.php:15')
+        ->and($findings)->toContain('wp.sqli.wpdb-query@plugin.php:16');
+});

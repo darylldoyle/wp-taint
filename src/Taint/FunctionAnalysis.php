@@ -3078,8 +3078,8 @@ final class FunctionAnalysis
      *     $log = new Logger( $_GET['f'] );   // Logger::$file gets path taint
      *     $log->write();                      //   → reported, from the real flow
      *
-     * A sealed map makes this a no-op, which is what keeps the caller's own
-     * probe runs from reintroducing the problem one frame up.
+     * A probe run re-records instead of writing, which keeps its seed out of
+     * the shared map and carries the write through a helper chain.
      */
     private function applySummaryProperties(
         Op\Expr $op,
@@ -3097,6 +3097,18 @@ final class FunctionAnalysis
             $taint = self::throughBody($argumentTaint, $kinds);
 
             if ($taint->isEmpty()) {
+                continue;
+            }
+
+            // A probe run cannot write, but it can say where its parameter
+            // went, one frame further up: `acme_configure( $log, $f )` calling
+            // `$log->set( $f )` learns that its own `$f` reaches the property,
+            // and its callers publish what they pass. Captures and scopes
+            // already carried through helpers this way; properties stopped
+            // at the first one.
+            if ($this->seedParameterIndex !== null) {
+                $this->recordPropertyReference($class, $property, $taint);
+
                 continue;
             }
 
