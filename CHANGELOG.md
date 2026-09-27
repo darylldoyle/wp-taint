@@ -115,6 +115,17 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A guard cleared every kind when it proved one. `! preg_match( '/[<>]/', $v )`
+  cleared SQL and shell as well as HTML, and a character check such as
+  `/^[a-z0-9 ]+$/` or a strip such as `preg_replace( '/[^a-zA-Z0-9 ]/', … )`
+  cleared SQL outside quotes, where `1 OR 1` needs only letters and a space.
+  Guards and strips now share one proof, `CharacterProof`: each kind clears
+  when the value cannot hold a character that carries syntax for it, and SQL
+  clears inside quotes only when the value can hold whitespace, a comment
+  opener, a parenthesis, a dash or an operator. A character check no longer
+  settles a name, so `ctype_alpha()` before `update_option()` is still an
+  arbitrary option write. A pattern with the `m` or `x` modifier, which the
+  guard read as if it had none, now proves nothing.
 - The catalogue credited escapers for more than they do, or missed them:
   - `like_escape()` counted as a quote escaper. It escapes the LIKE wildcards
     and the backslash, never a quote, so a LIKE pattern built from it and

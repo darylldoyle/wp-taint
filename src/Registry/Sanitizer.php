@@ -93,11 +93,15 @@ final class Sanitizer
      * `sanitize_callback` WordPress runs on a REST parameter are credited
      * exactly alike.
      *
-     * @param TaintSet|null $strategyCleared what a `clears_by` strategy worked out the call clears, which needs
-     *                                       the call's arguments; null for a sanitizer without one
+     * @param TaintSet|null $strategyCleared    what a `clears_by` strategy worked out the call clears, which
+     *                                          needs the call's arguments; null for a sanitizer without one
+     * @param bool          $strategyQuotedOnly whether the strategy proved SQL safe inside quotes only
      */
-    public function transform(TaintSet $incoming, ?TaintSet $strategyCleared = null): TaintSet
-    {
+    public function transform(
+        TaintSet $incoming,
+        ?TaintSet $strategyCleared = null,
+        bool $strategyQuotedOnly = false,
+    ): TaintSet {
         $cleared = $strategyCleared === null ? $this->apply($incoming) : $incoming->without($strategyCleared);
 
         // Applying any sanitizer settles two questions whatever else it did or
@@ -119,7 +123,7 @@ final class Sanitizer
         // `sql` for `sql_unquoted` is what lets the sink tell those apart, and
         // what keeps a table name from a helper — which never carried `sql` —
         // out of it entirely.
-        if ($this->quotedOnly && $incoming->has(TaintKind::Sql)) {
+        if (($this->quotedOnly || $strategyQuotedOnly) && $incoming->has(TaintKind::Sql)) {
             $cleared = $cleared->union(TaintSet::of(TaintKind::SqlUnquoted));
         }
 
