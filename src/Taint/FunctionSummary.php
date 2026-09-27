@@ -10,6 +10,10 @@ namespace Enshrined\WpTaint\Taint;
  * Summaries are what make the analysis interprocedural without being
  * exponential: each function is analysed once per parameter, and every call
  * site instantiates the result rather than re-walking the body.
+ *
+ * @phpstan-type PropertyReference array{0: string|null, 1: string, 2: TaintSet}
+ * @phpstan-type CaptureReference array{0: string, 1: string, 2: TaintSet}
+ * @phpstan-type ScopeReference array{0: string, 1: string, 2: string, 3: int|string|null, 4: TaintSet}
  */
 final class FunctionSummary
 {
@@ -42,14 +46,17 @@ final class FunctionSummary
          */
         public readonly bool $returnAnchored = false,
         /**
-         * Properties each parameter is written into.
+         * Properties each parameter is written into, and the kinds that reach
+         * them.
          *
          * The write counterpart to {@see $paramToSink}. A probe run's property
          * map is sealed — its seed is a question, not something the code does —
          * so the flow into `$this->file` is recorded here and applied at the
-         * call site with the taint the caller actually passed.
+         * call site with the taint the caller actually passed, less whatever
+         * the body clears on the way. `$this->v = esc_html( $x )` stores no
+         * HTML taint, whatever the caller hands in as `$x`.
          *
-         * @var array<int, list<array{0: string|null, 1: string}>>
+         * @var array<int, list<PropertyReference>>
          */
         public readonly array $paramToProperty = [],
         /**
@@ -60,9 +67,10 @@ final class FunctionSummary
          * capture whose value is the enclosing function's own parameter was
          * published clean whatever the caller passed. The probe run records
          * "parameter reaches capture `$name` of closure `key`" here, and the
-         * call site publishes the caller's actual taint into the scope table.
+         * call site publishes the caller's actual taint into the scope table,
+         * less what the body clears, as for properties.
          *
-         * @var array<int, list<array{0: string, 1: string}>>
+         * @var array<int, list<CaptureReference>>
          */
         public readonly array $paramToCapture = [],
         /**
@@ -77,16 +85,17 @@ final class FunctionSummary
          * writes a by-reference capture back to the function that made it
          * (`out`, the closure's key, the captured name). A probe run records
          * these instead of publishing its seed, and the call site publishes
-         * the caller's actual taint.
+         * the caller's actual taint. The fifth part is the kinds that reach the
+         * scope, and the caller publishes only those, as for properties.
          *
-         * @var array<int, list<array{0: string, 1: string, 2: string, 3: int|string|null}>>
+         * @var array<int, list<ScopeReference>>
          */
         public readonly array $paramToScope = [],
     ) {
     }
 
     /**
-     * @return list<array{0: string, 1: string, 2: string, 3: int|string|null}>
+     * @return list<ScopeReference>
      */
     public function scopesFor(int $parameterIndex): array
     {
@@ -94,9 +103,12 @@ final class FunctionSummary
     }
 
     /**
-     * One shared-scope reference as a string, for deduplicating and comparing.
+     * Which shared scope a reference names, as a string, for deduplicating.
      *
-     * @param array{0: string, 1: string, 2: string, 3: int|string|null} $reference
+     * The kinds are left out: two references to the same scope are one
+     * reference, carrying the kinds of both.
+     *
+     * @param array{0: string, 1: string, 2: string, 3: int|string|null, 4?: TaintSet} $reference
      */
     public static function scopeKey(array $reference): string
     {
@@ -111,7 +123,7 @@ final class FunctionSummary
     }
 
     /**
-     * @return list<array{0: string|null, 1: string}>
+     * @return list<PropertyReference>
      */
     public function propertiesFor(int $parameterIndex): array
     {
@@ -119,7 +131,7 @@ final class FunctionSummary
     }
 
     /**
-     * @return list<array{0: string, 1: string}> closure key, captured name
+     * @return list<CaptureReference> closure key, captured name, kinds
      */
     public function capturesFor(int $parameterIndex): array
     {
@@ -234,22 +246,22 @@ final class FunctionSummary
             $paramToParam,
             $sourcesToParam,
             $this->returnAnchored && $other->returnAnchored,
-            self::mergeReferences($this->paramToProperty, $other->paramToProperty, self::propertyKey(...)),
-            self::mergeReferences($this->paramToCapture, $other->paramToCapture, self::captureKey(...)),
-            self::mergeReferences($this->paramToScope, $other->paramToScope, self::scopeKey(...)),
+            self::mergeProperties($this->paramToProperty, $other->paramToProperty),
+            self::mergeCaptures($this->paramToCapture, $other->paramToCapture),
+            self::mergeScopes($this->paramToScope, $other->paramToScope),
         );
     }
 
     /**
-     * @template T of array<int, int|string|null>
+     * Two bodies' property references, one per property, with the kinds of
+     * both. The captures and scopes below merge the same way.
      *
-     * @param array<int, list<T>> $mine
-     * @param array<int, list<T>> $theirs
-     * @param callable(T): string $identity
+     * @param array<int, list<PropertyReference>> $mine
+     * @param array<int, list<PropertyReference>> $theirs
      *
-     * @return array<int, list<T>>
+     * @return array<int, list<PropertyReference>>
      */
-    private static function mergeReferences(array $mine, array $theirs, callable $identity): array
+    private static function mergeProperties(array $mine, array $theirs): array
     {
         $result = [];
 
@@ -257,12 +269,127 @@ final class FunctionSummary
             $merged = [];
 
             foreach ([...($mine[$index] ?? []), ...($theirs[$index] ?? [])] as $reference) {
-                $merged[$identity($reference)] ??= $reference;
+                $id = self::propertyKey($reference);
+                $kinds = ($merged[$id][2] ?? TaintSet::empty())->union($reference[2]);
+                $merged[$id] = [$reference[0], $reference[1], $kinds];
             }
 
             ksort($merged);
             $result[$index] = array_values($merged);
         }
+
+        return $result;
+    }
+
+    /**
+     * @param array<int, list<CaptureReference>> $mine
+     * @param array<int, list<CaptureReference>> $theirs
+     *
+     * @return array<int, list<CaptureReference>>
+     */
+    private static function mergeCaptures(array $mine, array $theirs): array
+    {
+        $result = [];
+
+        foreach (array_unique([...array_keys($mine), ...array_keys($theirs)]) as $index) {
+            $merged = [];
+
+            foreach ([...($mine[$index] ?? []), ...($theirs[$index] ?? [])] as $reference) {
+                $id = self::captureKey($reference);
+                $kinds = ($merged[$id][2] ?? TaintSet::empty())->union($reference[2]);
+                $merged[$id] = [$reference[0], $reference[1], $kinds];
+            }
+
+            ksort($merged);
+            $result[$index] = array_values($merged);
+        }
+
+        return $result;
+    }
+
+    /**
+     * @param array<int, list<ScopeReference>> $mine
+     * @param array<int, list<ScopeReference>> $theirs
+     *
+     * @return array<int, list<ScopeReference>>
+     */
+    private static function mergeScopes(array $mine, array $theirs): array
+    {
+        $result = [];
+
+        foreach (array_unique([...array_keys($mine), ...array_keys($theirs)]) as $index) {
+            $merged = [];
+
+            foreach ([...($mine[$index] ?? []), ...($theirs[$index] ?? [])] as $reference) {
+                $id = self::scopeKey($reference);
+                $kinds = ($merged[$id][4] ?? TaintSet::empty())->union($reference[4]);
+                $merged[$id] = [$reference[0], $reference[1], $reference[2], $reference[3], $kinds];
+            }
+
+            ksort($merged);
+            $result[$index] = array_values($merged);
+        }
+
+        return $result;
+    }
+
+    /**
+     * The same references in the same places, with the same kinds.
+     *
+     * @template T of array<int, TaintSet|int|string|null>
+     *
+     * @param array<int, list<T>>   $mine
+     * @param array<int, list<T>>   $theirs
+     * @param callable(T): string   $identity
+     * @param callable(T): TaintSet $kindsOf
+     */
+    private static function referencesEqual(
+        array $mine,
+        array $theirs,
+        callable $identity,
+        callable $kindsOf,
+    ): bool {
+        if (array_keys($mine) !== array_keys($theirs)) {
+            return false;
+        }
+
+        foreach ($mine as $index => $references) {
+            $a = self::kindsByIdentity($references, $identity, $kindsOf);
+            $b = self::kindsByIdentity($theirs[$index] ?? [], $identity, $kindsOf);
+
+            if (array_keys($a) !== array_keys($b)) {
+                return false;
+            }
+
+            foreach ($a as $id => $kinds) {
+                if (! $kinds->equals($b[$id] ?? TaintSet::empty())) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @template T of array<int, TaintSet|int|string|null>
+     *
+     * @param list<T>               $references
+     * @param callable(T): string   $identity
+     * @param callable(T): TaintSet $kindsOf
+     *
+     * @return array<string, TaintSet> sorted by identity
+     */
+    private static function kindsByIdentity(array $references, callable $identity, callable $kindsOf): array
+    {
+        $result = [];
+
+        foreach ($references as $reference) {
+            $id = $identity($reference);
+            $result[$id] = ($result[$id] ?? TaintSet::empty())->union($kindsOf($reference));
+        }
+
+        ksort($result);
 
         return $result;
     }
@@ -351,63 +478,39 @@ final class FunctionSummary
         }
 
         // Same reason as the by-reference halves: a summary whose property
-        // writes are still being discovered is not settled.
-        if (array_keys($this->paramToProperty) !== array_keys($other->paramToProperty)) {
+        // writes are still being discovered is not settled. The captures and
+        // shared scopes likewise, and the kinds reaching each of the three.
+        if (
+            ! self::referencesEqual(
+                $this->paramToProperty,
+                $other->paramToProperty,
+                self::propertyKey(...),
+                /** @param PropertyReference $reference */
+                static fn (array $reference): TaintSet => $reference[2],
+            )
+            || ! self::referencesEqual(
+                $this->paramToCapture,
+                $other->paramToCapture,
+                self::captureKey(...),
+                /** @param CaptureReference $reference */
+                static fn (array $reference): TaintSet => $reference[2],
+            )
+            || ! self::referencesEqual(
+                $this->paramToScope,
+                $other->paramToScope,
+                self::scopeKey(...),
+                /** @param ScopeReference $reference */
+                static fn (array $reference): TaintSet => $reference[4],
+            )
+        ) {
             return false;
-        }
-
-        foreach ($this->paramToProperty as $index => $properties) {
-            $mine = array_map(self::propertyKey(...), $properties);
-            $theirs = array_map(self::propertyKey(...), $other->paramToProperty[$index] ?? []);
-
-            sort($mine);
-            sort($theirs);
-
-            if ($mine !== $theirs) {
-                return false;
-            }
-        }
-
-        // And the captures, for the same reason again: a summary still
-        // discovering which closures a parameter reaches is not settled.
-        if (array_keys($this->paramToCapture) !== array_keys($other->paramToCapture)) {
-            return false;
-        }
-
-        foreach ($this->paramToCapture as $index => $captures) {
-            $mine = array_map(self::captureKey(...), $captures);
-            $theirs = array_map(self::captureKey(...), $other->paramToCapture[$index] ?? []);
-
-            sort($mine);
-            sort($theirs);
-
-            if ($mine !== $theirs) {
-                return false;
-            }
-        }
-
-        // And the shared scopes, for the same reason as the captures.
-        if (array_keys($this->paramToScope) !== array_keys($other->paramToScope)) {
-            return false;
-        }
-
-        foreach ($this->paramToScope as $index => $scopes) {
-            $mine = array_map(self::scopeKey(...), $scopes);
-            $theirs = array_map(self::scopeKey(...), $other->paramToScope[$index] ?? []);
-
-            sort($mine);
-            sort($theirs);
-
-            if ($mine !== $theirs) {
-                return false;
-            }
         }
 
         return count($this->paramToSink) === count($other->paramToSink);
     }
 
     /**
-     * @param array{0: string|null, 1: string} $property
+     * @param PropertyReference $property
      */
     private static function propertyKey(array $property): string
     {
@@ -415,7 +518,7 @@ final class FunctionSummary
     }
 
     /**
-     * @param array{0: string, 1: string} $capture
+     * @param CaptureReference $capture
      */
     private static function captureKey(array $capture): string
     {

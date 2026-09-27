@@ -46,25 +46,28 @@ final class FunctionAnalysis
     private const MAX_ASSIGNMENT_HOPS = 16;
 
     /**
-     * Properties the seeded parameter reached, keyed to deduplicate.
+     * Properties the seeded parameter reached, keyed to deduplicate, with the
+     * kinds that reached each.
      *
-     * @var array<string, array{0: string|null, 1: string}>
+     * @var array<string, array{0: string|null, 1: string, 2: TaintSet}>
      */
     private array $propertiesReached = [];
 
     /**
      * Closure captures the seeded parameter reached, keyed so a loop or a
-     * later round records each once. See {@see AnalysisResult::$capturesReached}.
+     * later round records each once, with the kinds that reached each. See
+     * {@see AnalysisResult::$capturesReached}.
      *
-     * @var array<string, array{0: string, 1: string}>
+     * @var array<string, array{0: string, 1: string, 2: TaintSet}>
      */
     private array $capturesReached = [];
 
     /**
      * Shared scopes the seeded parameter reached, keyed so a loop or a later
-     * round records each once. See {@see AnalysisResult::$scopesReached}.
+     * round records each once, with the kinds that reached each. See
+     * {@see AnalysisResult::$scopesReached}.
      *
-     * @var array<string, array{0: string, 1: string, 2: string, 3: int|string|null}>
+     * @var array<string, array{0: string, 1: string, 2: string, 3: int|string|null, 4: TaintSet}>
      */
     private array $scopesReached = [];
 
@@ -359,7 +362,7 @@ final class FunctionAnalysis
         if ($this->seedParameterIndex !== null) {
             foreach ($named['taint'] as $name => $taint) {
                 if (isset($assigned[$name]) && ! $taint->isEmpty()) {
-                    $this->recordScopeReference('out', $this->context->key, $name);
+                    $this->recordScopeReference('out', $this->context->key, $name, $taint);
                 }
             }
 
@@ -621,7 +624,7 @@ final class FunctionAnalysis
             foreach ($targets as $target) {
                 foreach ($visible['taint'] as $name => $taint) {
                     if (! $taint->isEmpty()) {
-                        $this->recordScopeReference('in', strtolower($target . '::{main}'), $name);
+                        $this->recordScopeReference('in', strtolower($target . '::{main}'), $name, $taint);
                     }
                 }
             }
@@ -641,17 +644,19 @@ final class FunctionAnalysis
     }
 
     /**
-     * Note that the seeded parameter reached a shared scope. See
-     * {@see FunctionSummary::$paramToScope} for what the four parts mean.
+     * Note that the seeded parameter reached a shared scope, and with what.
+     * See {@see FunctionSummary::$paramToScope} for what the parts mean.
      */
     private function recordScopeReference(
         string $table,
         string $key,
         string $name,
+        TaintSet $taint,
         int|string|null $arrayKey = null,
     ): void {
-        $reference = [$table, $key, $name, $arrayKey];
-        $this->scopesReached[FunctionSummary::scopeKey($reference)] = $reference;
+        $id = FunctionSummary::scopeKey([$table, $key, $name, $arrayKey]);
+        $kinds = ($this->scopesReached[$id][4] ?? TaintSet::empty())->union($taint);
+        $this->scopesReached[$id] = [$table, $key, $name, $arrayKey, $kinds];
     }
 
     /**
@@ -1411,11 +1416,13 @@ final class FunctionAnalysis
 
                 $this->properties->track($owner, $property);
 
-                // Only when something reached it. A probe run seeds one
-                // parameter and no sources at all, so any taint here is the
-                // seed, which is exactly the edge a caller needs.
+                // Only when something reached it, and with what did. A probe
+                // run seeds one parameter with every kind, so the kinds here
+                // are the ones the body lets through to the property, plus any
+                // its own sources add. The caller publishes the first of
+                // those only: see applySummaryProperties().
                 if (! $taint->isEmpty()) {
-                    $this->recordPropertyReference($owner, $property);
+                    $this->recordPropertyReference($owner, $property, $taint);
                 }
 
                 // Whether the written value carried a literal fragment, so a
@@ -2320,8 +2327,19 @@ final class FunctionAnalysis
                 continue;
             }
 
-            $this->capturesReached[$key . '::' . $name] = [$key, $name];
+            $this->recordCaptureReference($key, $name, $taint);
         }
+    }
+
+    /**
+     * Note that the seeded parameter reached a closure's capture, and with
+     * what. See {@see FunctionSummary::$paramToCapture}.
+     */
+    private function recordCaptureReference(string $closureKey, string $name, TaintSet $taint): void
+    {
+        $id = $closureKey . '::' . $name;
+        $kinds = ($this->capturesReached[$id][2] ?? TaintSet::empty())->union($taint);
+        $this->capturesReached[$id] = [$closureKey, $name, $kinds];
     }
 
     private function transferPassThrough(Op\Expr $op, Operand $input, string $description): bool
@@ -2897,12 +2915,12 @@ final class FunctionAnalysis
                 $key = strtolower($target . '::{main}');
 
                 if (! $flat->isEmpty()) {
-                    $this->recordScopeReference('in', $key, 'args');
+                    $this->recordScopeReference('in', $key, 'args', $flat);
                 }
 
                 foreach ($byKey as $arrayKey => $taint) {
                     if (! $taint->isEmpty()) {
-                        $this->recordScopeReference('in', $key, 'args', $arrayKey);
+                        $this->recordScopeReference('in', $key, 'args', $taint, $arrayKey);
                     }
                 }
             }
@@ -3072,12 +3090,21 @@ final class FunctionAnalysis
     ): bool {
         $changed = false;
 
-        foreach ($summary->propertiesFor($index) as [$class, $property]) {
+        foreach ($summary->propertiesFor($index) as [$class, $property, $kinds]) {
+            // Only what survives the body. The kinds were recorded by the
+            // probe run, whose seed carried every kind: what reached the
+            // property is what the body let through.
+            $taint = self::throughBody($argumentTaint, $kinds);
+
+            if ($taint->isEmpty()) {
+                continue;
+            }
+
             $changed = $this->properties->add(
                 $class,
                 $property,
-                $argumentTaint,
-                $this->propertyWriteTrace($op, $argument, $argumentTaint, $summary, $property, $class),
+                $taint,
+                $this->propertyWriteTrace($op, $argument, $taint, $summary, $property, $class),
             ) || $changed;
 
             // The anchor is the caller's to settle. Inside the callee the value
@@ -3113,21 +3140,26 @@ final class FunctionAnalysis
             return false;
         }
 
-        if ($this->seedParameterIndex !== null) {
-            foreach ($summary->capturesFor($index) as [$closureKey, $name]) {
-                $this->capturesReached[$closureKey . '::' . $name] = [$closureKey, $name];
-            }
-
-            return false;
-        }
-
         $changed = false;
 
-        foreach ($summary->capturesFor($index) as [$closureKey, $name]) {
+        foreach ($summary->capturesFor($index) as [$closureKey, $name, $kinds]) {
+            // Only what survives the body, as for properties.
+            $taint = self::throughBody($argumentTaint, $kinds);
+
+            if ($taint->isEmpty()) {
+                continue;
+            }
+
+            if ($this->seedParameterIndex !== null) {
+                $this->recordCaptureReference($closureKey, $name, $taint);
+
+                continue;
+            }
+
             $changed = $this->scopes->addInto(
                 $closureKey,
-                [$name => $argumentTaint],
-                [$name => $this->captureWriteTrace($op, $argument, $argumentTaint, $summary, $name)],
+                [$name => $taint],
+                [$name => $this->captureWriteTrace($op, $argument, $taint, $summary, $name)],
             ) || $changed;
         }
 
@@ -3157,30 +3189,72 @@ final class FunctionAnalysis
             return false;
         }
 
-        if ($this->seedParameterIndex !== null) {
-            foreach ($references as [$table, $key, $name, $arrayKey]) {
-                $this->recordScopeReference($table, $key, $name, $arrayKey);
-            }
-
-            return false;
-        }
-
         $changed = false;
 
-        foreach ($references as [$table, $key, $name, $arrayKey]) {
-            $origins = [$name => $this->scopeWriteTrace($op, $argument, $argumentTaint, $summary, $table, $name)];
+        foreach ($references as [$table, $key, $name, $arrayKey, $kinds]) {
+            // Only what survives the body, as for properties. A form id that
+            // the callee passes through absint() on its way to an included
+            // file's `$settings` hands that file an object id, not the whole
+            // request it came from.
+            $taint = self::throughBody($argumentTaint, $kinds);
+
+            if ($taint->isEmpty()) {
+                continue;
+            }
+
+            if ($this->seedParameterIndex !== null) {
+                $this->recordScopeReference($table, $key, $name, $taint, $arrayKey);
+
+                continue;
+            }
+
+            $origins = [$name => $this->scopeWriteTrace($op, $argument, $taint, $summary, $table, $name)];
 
             $changed = ($table === 'out'
-                ? $this->scopes->addOutOf($key, [$name => $argumentTaint], $origins)
+                ? $this->scopes->addOutOf($key, [$name => $taint], $origins)
                 : $this->scopes->addInto(
                     $key,
-                    [$name => $argumentTaint],
+                    [$name => $taint],
                     $origins,
-                    $arrayKey === null ? [] : [$name => [$arrayKey => $argumentTaint]],
+                    $arrayKey === null ? [] : [$name => [$arrayKey => $taint]],
                 )) || $changed;
         }
 
         return $changed;
+    }
+
+    /**
+     * What of a caller's argument reaches a place its callee writes it to.
+     *
+     * `$reached` is what the probe run saw arrive there, with the parameter
+     * seeded with every kind. The seed leaves out the four derived kinds,
+     * which only an escaper or the engine may claim, so the record says
+     * nothing about them directly. Each rides with the kind it qualifies:
+     * `escaped` and `escape_voided` with HTML, `sql_unquoted` with SQL, and
+     * `unknown` only when the body cleared nothing, since any sanitiser
+     * settles it. An argument escaped and then filtered keeps that history
+     * through a setter that stores it as it came.
+     *
+     * The callee's own escaping and voiding are in the record already, as
+     * markers it made itself.
+     */
+    private static function throughBody(TaintSet $argument, TaintSet $reached): TaintSet
+    {
+        $carried = TaintSet::empty();
+
+        if ($reached->has(TaintKind::Html)) {
+            $carried = $carried->with(TaintKind::Escaped, TaintKind::EscapeVoided);
+        }
+
+        if ($reached->has(TaintKind::Sql)) {
+            $carried = $carried->with(TaintKind::SqlUnquoted);
+        }
+
+        if (TaintSet::allDataflowKinds()->isSubsetOf($reached)) {
+            $carried = $carried->with(TaintKind::Unknown);
+        }
+
+        return $argument->intersect($reached->union($carried));
     }
 
     /**
@@ -3309,7 +3383,7 @@ final class FunctionAnalysis
 
         foreach ($names as $name) {
             if (! $taint->isEmpty()) {
-                $this->recordPropertyReference(self::OPTION_STORE, $name);
+                $this->recordPropertyReference(self::OPTION_STORE, $name, $taint);
             }
 
             $changed = $this->properties->add(
@@ -4563,13 +4637,15 @@ final class FunctionAnalysis
      * records once — a growing list would make the summary compare unequal to
      * itself and the interprocedural fixed point would never settle.
      */
-    private function recordPropertyReference(?string $class, string $property): void
+    private function recordPropertyReference(?string $class, string $property, TaintSet $taint): void
     {
         if ($this->seedParameterIndex === null) {
             return;
         }
 
-        $this->propertiesReached[strtolower($class ?? '?') . '::' . $property] = [$class, $property];
+        $id = strtolower($class ?? '?') . '::' . $property;
+        $kinds = ($this->propertiesReached[$id][2] ?? TaintSet::empty())->union($taint);
+        $this->propertiesReached[$id] = [$class, $property, $kinds];
     }
 
     private function recordSinkReference(Sink $sink, Op $op, string $identity): void
