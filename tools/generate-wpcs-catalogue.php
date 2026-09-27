@@ -248,6 +248,7 @@ foreach (array_keys($unslashing) as $name) {
     // in the test suite exists to keep it that way.
     $lines[] = '[[propagators]]';
     $lines[] = sprintf('function = "%s"', $name);
+    $lines[] = 'keeps_keys = true';
     $lines[] = 'note = "Removes backslashes. Escapes nothing."';
     $lines[] = '';
     $generated++;

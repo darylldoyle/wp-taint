@@ -17,6 +17,14 @@ final class Propagator
         public readonly Matcher $matcher,
         public readonly ArgumentSelector $arguments,
         public readonly ?string $note = null,
+        /**
+         * The result is an array under its input's keys: `array_filter()`,
+         * `array_merge()`, `apply_filters()` on an array. An element under a
+         * string key stays under that key, so `$args['id']` does not take the
+         * taint of `$args['value']`. An integer key can be renumbered, so an
+         * element under one joins the whole-array slot.
+         */
+        public readonly bool $keepsKeys = false,
     ) {
     }
 }

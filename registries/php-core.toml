@@ -82,6 +82,7 @@ note = "Removes backslashes. Escapes nothing."
 
 [[propagators]]
 function = "stripslashes_deep"
+keeps_keys = true
 note = "Removes backslashes recursively. Escapes nothing."
 
 [[propagators]]
@@ -189,6 +190,7 @@ note = "Repeats a literal. The other half of the IN (...) placeholder idiom."
 
 [[propagators]]
 function = "array_slice"
+keeps_keys = true
 
 [[propagators]]
 function = "array_keys"
@@ -201,9 +203,11 @@ function = "array_values"
 
 [[propagators]]
 function = "array_filter"
+keeps_keys = true
 
 [[propagators]]
 function = "array_merge"
+keeps_keys = true
 
 [[propagators]]
 function = "reset"

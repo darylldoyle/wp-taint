@@ -164,6 +164,21 @@ comparisons read no content, so they do not count as a use.
 
 **Direction:** over-approximating at the dynamic ends, exact in the middle.
 
+**Through a function, an element keeps its key only one level down.** A
+function whose result keeps its input's keys, such as `array_filter()` or
+`apply_filters()` on an array, keeps each element under its string key. An
+integer key can be renumbered, so its element joins the whole-array slot, as
+does every element of a function that builds something else,
+`implode( ',', $row )`. Keys deeper than one level are not tracked: in
+`array( 'a' => array( 'id' => 'x', 'value' => get_option( 'y' ) ) )`, the
+`'id'` read from the inner array takes the stored `'value'`'s taint.
+
+**A key carries only its collection's own taint.** A `foreach` key over `$_GET`
+is request data. A key over a local array is not, whatever its elements hold.
+A key written from request data is not tracked either: after
+`$rows[ $_GET['k'] ] = 1`, the `$k` in `foreach ( $rows as $k => $v )` is
+clean.
+
 ### Object properties are per class, not per instance
 
 `Foo::$value` is one slot. Taint written to `$this->value` in any instance of

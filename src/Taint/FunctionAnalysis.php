@@ -1305,14 +1305,7 @@ final class FunctionAnalysis
                 'Cast to a string keeps the value intact.',
             ),
             $op instanceof Op\Iterator\Value => $this->transferIteratorValue($op),
-            // Keys, not values: `foreach ( $_GET as $k => $v )` has an
-            // attacker-controlled key, but `foreach ( $rows as $k => $v )` after
-            // `$rows[$i] = $tainted` does not.
-            $op instanceof Op\Iterator\Key => $this->transferPassThrough(
-                $op,
-                $op->var,
-                'Keys of an attacker-controlled collection are attacker-controlled too.',
-            ),
+            $op instanceof Op\Iterator\Key => $this->transferIteratorKey($op),
             $op instanceof Op\Expr\Assertion => $this->transferAssertion($op),
             $op instanceof Op\Expr\Print_ => $this->transferPrint($op),
             $op instanceof Op\Expr\Eval_ => $this->transferConstructSink($op, 'eval', $op->expr),
@@ -2201,12 +2194,27 @@ final class FunctionAnalysis
      * the assertion over it set the same slot from the union, and the two
      * disagreed forever.
      *
+     * An element under a literal key is an element too. Leaving it out lost
+     * `implode( ',', array( 'k' => $_GET['v'] ) )` entirely. When the result
+     * has no keys to keep it under, it joins the others. When the result keeps
+     * its input's keys, `array_filter()` or `apply_filters()` on an array, an
+     * element under a string key stays under that key: folding it in made a
+     * stored `'value'` taint the `'id'` read beside it.
+     *
      * @param list<Operand> $inputs
      */
-    private function transferUnion(Op\Expr $op, array $inputs, string $description, bool $imprecise = false): bool
-    {
+    private function transferUnion(
+        Op\Expr $op,
+        array $inputs,
+        string $description,
+        bool $imprecise = false,
+        bool $keepsKeys = false,
+    ): bool {
         $taint = TaintSet::empty();
         $container = TaintSet::empty();
+
+        /** @var list<array{0: Operand, 1: string, 2: TaintSet}> $kept */
+        $kept = [];
 
         // A guarded input brings only what the guard admits, so
         // `'ORDER BY ' . $orderby` behind an allowlist check on $orderby
@@ -2219,19 +2227,48 @@ final class FunctionAnalysis
             $proof = $this->guards->proofFor($input, $this->currentBlock);
             $taint = $taint->union(self::guarded($this->state->taintOf($input), $proof));
             $container = $container->union(self::guarded($this->state->containerTaintOf($input), $proof));
+
+            foreach ($this->state->keyedTaintMapOf($input) as $key => $keyed) {
+                if ($keepsKeys && is_string($key)) {
+                    $kept[] = [$input, $key, self::guarded($keyed, $proof)];
+
+                    continue;
+                }
+
+                $container = $container->union(self::guarded($keyed, $proof));
+            }
         }
 
-        $provenance = $taint->isEmpty() && $container->isEmpty()
+        $hasKept = array_filter($kept, static fn (array $entry): bool => ! $entry[2]->isEmpty()) !== [];
+
+        $provenance = $taint->isEmpty() && $container->isEmpty() && ! $hasKept
             ? null
             : new Provenance(TraceVerb::Propagate, $op, $description, $inputs, imprecise: $imprecise);
 
         $changed = $this->writeResult($op->result, $taint, $provenance);
 
-        if ($container->isEmpty() || $provenance === null) {
+        if ($provenance === null) {
             return $changed;
         }
 
-        return $this->state->addContainerTaint($op->result, $container, $provenance) || $changed;
+        if (! $container->isEmpty()) {
+            $changed = $this->state->addContainerTaint($op->result, $container, $provenance) || $changed;
+        }
+
+        foreach ($kept as [$input, $key, $keyed]) {
+            if ($keyed->isEmpty()) {
+                continue;
+            }
+
+            $changed = $this->state->addKeyedTaint(
+                $op->result,
+                $key,
+                $keyed,
+                $this->state->keyedProvenanceOf($input, $key) ?? $provenance,
+            ) || $changed;
+        }
+
+        return $changed;
     }
 
     /**
@@ -2404,6 +2441,31 @@ final class FunctionAnalysis
         $id = $closureKey . '::' . $name;
         $kinds = ($this->capturesReached[$id][2] ?? TaintSet::empty())->union($taint);
         $this->capturesReached[$id] = [$closureKey, $name, $kinds];
+    }
+
+    /**
+     * Keys, not values: `foreach ( $_GET as $k => $v )` has an
+     * attacker-controlled key, but `foreach ( $rows as $k => $v )` after
+     * `$rows[$i] = $tainted` does not. So the key takes the collection's own
+     * taint and none of its elements'.
+     */
+    private function transferIteratorKey(Op\Iterator\Key $op): bool
+    {
+        $taint = self::guarded(
+            $this->state->taintOf($op->var),
+            $this->guards->proofFor($op->var, $this->currentBlock),
+        );
+
+        return $this->writeResult(
+            $op->result,
+            $taint,
+            $taint->isEmpty() ? null : new Provenance(
+                TraceVerb::Propagate,
+                $op,
+                'Keys of an attacker-controlled collection are attacker-controlled too.',
+                [$op->var],
+            ),
+        );
     }
 
     private function transferPassThrough(Op\Expr $op, Operand $input, string $description): bool
@@ -2859,8 +2921,14 @@ final class FunctionAnalysis
             $propagator = $this->registry->propagator($matcher);
 
             if ($propagator !== null) {
-                return $this->transferPropagator($op, $call, $propagator->arguments, $matcher, $propagator->note)
-                    || $changed;
+                return $this->transferPropagator(
+                    $op,
+                    $call,
+                    $propagator->arguments,
+                    $matcher,
+                    $propagator->note,
+                    $propagator->keepsKeys,
+                ) || $changed;
             }
 
             if ($this->registry->isSafeCall($matcher)) {
@@ -3805,6 +3873,7 @@ final class FunctionAnalysis
         ArgumentSelector $selector,
         Matcher $matcher,
         ?string $note,
+        bool $keepsKeys = false,
     ): bool {
         $inputs = [];
 
@@ -3828,7 +3897,7 @@ final class FunctionAnalysis
             );
         }
 
-        return $this->transferUnion($op, $inputs, $description);
+        return $this->transferUnion($op, $inputs, $description, keepsKeys: $keepsKeys);
     }
 
     /**
@@ -4826,6 +4895,7 @@ final class FunctionAnalysis
                 OperandHelper::describe($unquoted),
                 $identity,
             ),
+            TaintKind::SqlUnquoted,
         );
     }
 
@@ -4910,6 +4980,12 @@ final class FunctionAnalysis
         return $message;
     }
 
+    /**
+     * @param TaintKind|null $traceKind the kind the trace follows, when the finding's
+     *                                  kind is not the one that reached the sink: an
+     *                                  escaped value used unquoted is an `sql` finding
+     *                                  that `sql_unquoted` reached
+     */
     private function emit(
         string $ruleId,
         TaintKind $kind,
@@ -4918,6 +4994,7 @@ final class FunctionAnalysis
         string $identity,
         Operand $operand,
         string $sinkDescription,
+        ?TaintKind $traceKind = null,
     ): void {
         $position = OperandHelper::position($op, $this->context->file->sourceMap);
         $snippet = trim($this->context->file->sourceMap->line($position['line']));
@@ -4931,7 +5008,7 @@ final class FunctionAnalysis
         $this->emitted[$key] = true;
 
         $sinkStep = $this->traces->sinkStep($op, TaintSet::of($kind), $sinkDescription);
-        $trace = $this->traces->build($operand, $kind, $sinkStep);
+        $trace = $this->traces->build($operand, $traceKind ?? $kind, $sinkStep);
 
         $this->findings[] = new Finding(
             $ruleId,

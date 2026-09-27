@@ -115,6 +115,27 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A propagator dropped an array element written under a literal key.
+  `implode( ',', array( 'k' => $_GET['v'] ) )` returned clean, so echoing it
+  was missed. An element under a literal key now travels with the others. A
+  propagator whose result keeps its input's keys, `array_filter()`,
+  `array_merge()`, `array_slice()`, `shortcode_atts()`, the unslashers and the
+  `apply_filters()` family, keeps it under its key, so a stored `'value'` does
+  not taint the `'id'` read beside it. The catalogue says which with
+  `keeps_keys = true`.
+- A trace could stop before its source, or name the wrong one. The walk
+  followed the first predecessor that held the kind in its own slot. So it
+  missed a value held in an array's elements, and in a loop it stopped at the
+  value from the last time round. It now tries each predecessor that holds the
+  kind anywhere, and backs out of any that lead nowhere. When no predecessor
+  holds the kind, the walk used to go on through the first one anyway, so a
+  summary that returns stored `html` whatever its argument was traced back to
+  the request value passed in. The trace now starts there. A kind made from
+  another, `sql_unquoted` from `sql`, is still followed upstream through the
+  kind it was made from.
+- A `foreach` key took the taint of the collection's elements. After
+  `$rows[ $i ] = $_GET['x']`, the `$k` in `foreach ( $rows as $k => $v )` was
+  reported as request data. It now takes the collection's own taint only.
 - A less severe finding could hide a more severe one on the same line. The
   rule precedence let `wp.xss.escape-voided`, a medium, replace
   `wp.xss.unescaped-output`, a high, whenever both reported one echo. On one
