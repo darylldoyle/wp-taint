@@ -25,6 +25,15 @@ use PHPCfg\Operand;
  *
  * Returning an empty set means "no idea", never "no values". The two have very
  * different consequences downstream and callers have to tell them apart.
+ *
+ * Two questions, two methods. {@see strings()} answers "what can this hold?",
+ * and a join with one branch it cannot follow is a join it cannot answer:
+ * `$c ? "'" : $x` could hold anything. A caller deciding what a value is (a
+ * quote in a query, a constant's one value) needs that answer. {@see
+ * knownStrings()} answers "which of its values can be named?", with the
+ * branches that fold and without the rest. A caller deciding what code runs
+ * (a hook, a callback, an include) is better served by the callees it can
+ * name than by none of them.
  */
 final class ValueResolver
 {
@@ -67,11 +76,35 @@ final class ValueResolver
     private const MAX_VALUES = 12;
 
     /**
-     * The constant strings this operand can hold.
+     * Every constant string this operand can hold.
      *
-     * @return list<string> empty when the value cannot be pinned down
+     * @return list<string> empty when any of its values cannot be pinned down
      */
     public function strings(Operand $operand, int $depth = 0): array
+    {
+        return $this->resolve($operand, $depth, false);
+    }
+
+    /**
+     * The constant strings this operand can hold, where they can be followed.
+     *
+     * A join whose other branches will not fold still answers with the ones
+     * that do. Never the answer to "what can this value be": see the class
+     * docblock.
+     *
+     * @return list<string> empty when none of its values can be pinned down
+     */
+    public function knownStrings(Operand $operand, int $depth = 0): array
+    {
+        return $this->resolve($operand, $depth, true);
+    }
+
+    /**
+     * @param bool $partial whether a join may answer with only the branches that fold
+     *
+     * @return list<string>
+     */
+    private function resolve(Operand $operand, int $depth, bool $partial): array
     {
         if ($depth > self::MAX_DEPTH) {
             return [];
@@ -90,17 +123,18 @@ final class ValueResolver
         }
 
         return match (true) {
-            $definition instanceof Op\Expr\Assign => $this->strings($definition->expr, $depth + 1),
+            $definition instanceof Op\Expr\Assign => $this->resolve($definition->expr, $depth + 1, $partial),
             $definition instanceof Op\Expr\ConstFetch => $this->fromConstant($definition),
             $definition instanceof Op\Expr\FuncCall,
-            $definition instanceof Op\Expr\NsFuncCall => $this->fromCall($definition, $depth),
+            $definition instanceof Op\Expr\NsFuncCall => $this->fromCall($definition, $depth, $partial),
             $definition instanceof Op\Expr\MethodCall,
-            $definition instanceof Op\Expr\StaticCall => $this->fromConstantReturn($definition, $depth),
-            $definition instanceof Op\Phi => $this->fromPhi($definition, $depth),
-            $definition instanceof Op\Expr\ConcatList => $this->fromParts($definition->list, $depth),
+            $definition instanceof Op\Expr\StaticCall => $this->fromConstantReturn($definition, $depth, $partial),
+            $definition instanceof Op\Phi => $this->fromPhi($definition, $depth, $partial),
+            $definition instanceof Op\Expr\ConcatList => $this->fromParts($definition->list, $depth, $partial),
             $definition instanceof Op\Expr\BinaryOp\Concat => $this->fromParts(
                 [$definition->left, $definition->right],
                 $depth,
+                $partial,
             ),
             default => [],
         };
@@ -156,22 +190,22 @@ final class ValueResolver
     /**
      * @return list<string>
      */
-    private function fromCall(Op\Expr\FuncCall|Op\Expr\NsFuncCall $op, int $depth): array
+    private function fromCall(Op\Expr\FuncCall|Op\Expr\NsFuncCall $op, int $depth, bool $partial): array
     {
-        $theme = $this->fromThemeLocation($op, $depth);
+        $theme = $this->fromThemeLocation($op, $depth, $partial);
 
         if ($theme !== []) {
             return $theme;
         }
 
-        $pure = $this->fromPureCall($op, $depth);
+        $pure = $this->fromPureCall($op, $depth, $partial);
 
         if ($pure !== []) {
             return $pure;
         }
 
         foreach ($this->callNames($op) as $name) {
-            $folded = $this->foldUserCall($name, null, $op->args, $depth);
+            $folded = $this->foldUserCall($name, null, $op->args, $depth, $partial);
 
             if ($folded !== []) {
                 return $folded;
@@ -199,8 +233,13 @@ final class ValueResolver
      *
      * @return list<string>
      */
-    private function foldUserCall(string $name, ?string $method, array $arguments, int $depth): array
-    {
+    private function foldUserCall(
+        string $name,
+        ?string $method,
+        array $arguments,
+        int $depth,
+        bool $partial,
+    ): array {
         if ($this->returns === null) {
             return [];
         }
@@ -228,7 +267,7 @@ final class ValueResolver
                 return [];
             }
 
-            $values = $this->strings($argument, $depth + 1);
+            $values = $this->resolve($argument, $depth + 1, $partial);
 
             if (count($values) !== 1) {
                 return [];
@@ -243,7 +282,7 @@ final class ValueResolver
     /**
      * @return list<string>
      */
-    private function fromThemeLocation(Op\Expr\FuncCall|Op\Expr\NsFuncCall $op, int $depth): array
+    private function fromThemeLocation(Op\Expr\FuncCall|Op\Expr\NsFuncCall $op, int $depth, bool $partial): array
     {
         if ($this->themes === null || $this->themes->isEmpty()) {
             return [];
@@ -269,7 +308,7 @@ final class ValueResolver
                     return [];
                 }
 
-                $values = $this->strings($file, $depth + 1);
+                $values = $this->resolve($file, $depth + 1, $partial);
 
                 if (count($values) !== 1) {
                     return [];
@@ -292,7 +331,7 @@ final class ValueResolver
     /**
      * @return list<string>
      */
-    private function fromPureCall(Op\Expr\FuncCall|Op\Expr\NsFuncCall $op, int $depth): array
+    private function fromPureCall(Op\Expr\FuncCall|Op\Expr\NsFuncCall $op, int $depth, bool $partial): array
     {
         $name = $this->pureFunctionName($op);
 
@@ -317,7 +356,7 @@ final class ValueResolver
                 return [];
             }
 
-            $resolved = $this->strings($argument, $depth + 1);
+            $resolved = $this->resolve($argument, $depth + 1, $partial);
 
             // One value per argument. A set would mean a cross product, and a
             // path helper applied to an ambiguous path is not worth the
@@ -343,7 +382,7 @@ final class ValueResolver
      *
      * @return list<string>
      */
-    private function fromConstantReturn(Op\Expr\MethodCall|Op\Expr\StaticCall $op, int $depth): array
+    private function fromConstantReturn(Op\Expr\MethodCall|Op\Expr\StaticCall $op, int $depth, bool $partial): array
     {
         if ($this->returns === null) {
             return [];
@@ -376,6 +415,7 @@ final class ValueResolver
             $method,
             $op->args,
             $depth,
+            $partial,
         );
 
         if ($templated !== []) {
@@ -536,7 +576,7 @@ final class ValueResolver
             return null;
         }
 
-        $methods = $this->strings($values[1], $depth + 1);
+        $methods = $this->resolve($values[1], $depth + 1, true);
 
         return $methods === [] ? null : [$values[0], $methods];
     }
@@ -545,18 +585,33 @@ final class ValueResolver
      * Every branch of a join contributes, because at runtime any of them can be
      * the one taken.
      *
+     * So a branch that will not fold makes the whole join unknown, unless the
+     * caller asked for the branches that can be named. Answering with the
+     * others read `$c ? "'" : $x` as a quote, and credited the escaping of
+     * whatever came after it.
+     *
      * @return list<string>
      */
-    private function fromPhi(Op\Phi $phi, int $depth): array
+    private function fromPhi(Op\Phi $phi, int $depth, bool $partial): array
     {
         $values = [];
 
         foreach ($phi->vars as $var) {
             if (! $var instanceof Operand) {
-                continue;
+                if ($partial) {
+                    continue;
+                }
+
+                return [];
             }
 
-            foreach ($this->strings($var, $depth + 1) as $value) {
+            $branch = $this->resolve($var, $depth + 1, $partial);
+
+            if ($branch === [] && ! $partial) {
+                return [];
+            }
+
+            foreach ($branch as $value) {
                 if (! in_array($value, $values, true)) {
                     $values[] = $value;
                 }
@@ -617,7 +672,7 @@ final class ValueResolver
                 break;
             }
 
-            $options = $this->strings($part, $depth + 1);
+            $options = $this->resolve($part, $depth + 1, true);
 
             if ($options === []) {
                 $stopped = true;
@@ -679,7 +734,7 @@ final class ValueResolver
      *
      * @return list<string>
      */
-    private function fromParts(array $parts, int $depth): array
+    private function fromParts(array $parts, int $depth, bool $partial): array
     {
         $combinations = [''];
 
@@ -688,7 +743,7 @@ final class ValueResolver
                 return [];
             }
 
-            $options = $this->strings($part, $depth + 1);
+            $options = $this->resolve($part, $depth + 1, $partial);
 
             if ($options === []) {
                 return [];

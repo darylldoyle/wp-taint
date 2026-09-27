@@ -92,10 +92,6 @@ function = "is_email"
 clears = ["html", "html_attr", "header"]
 
 [[sanitizers]]
-function = "like_escape"
-clears = ["sql"]
-
-[[sanitizers]]
 function = "number_format"
 clears = "*"
 

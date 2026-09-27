@@ -82,7 +82,6 @@ const KINDS = [
 
     // SQL.
     'esc_sql' => ['sql'],
-    'like_escape' => ['sql'],
 
     // JavaScript string context.
     'esc_js' => ['html', 'html_attr'],
@@ -146,6 +145,7 @@ const SKIPPED = [
     'wp_safe_redirect' => 'Validates the host rather than escaping; modelled by hand.',
     'validate_file' => 'Returns a status code, not a sanitised path.',
     'wp_strip_all_tags' => 'Removes tags but leaves quotes and ampersands. Modelled by hand as a propagator.',
+    'like_escape' => 'Escapes the LIKE wildcards and the backslash, never a quote. Modelled by hand as a propagator.',
     'wp_handle_upload' => 'Returns a structure, not a scalar.',
     'wp_handle_sideload' => 'Returns a structure, not a scalar.',
     'wp_kses_allowed_html' => 'Returns the allowlist, not a sanitised value.',

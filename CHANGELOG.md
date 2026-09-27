@@ -115,6 +115,24 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The catalogue credited escapers for more than they do, or missed them:
+  - `like_escape()` counted as a quote escaper. It escapes the LIKE wildcards
+    and the backslash, never a quote, so a LIKE pattern built from it and
+    quoted read as safe. It and `wpdb::esc_like()` now pass their argument
+    through.
+  - `addslashes()`, `mysqli_real_escape_string()`, `wpdb::_escape()` and the
+    deprecated `wpdb::escape()` were unlisted. An unlisted function returns
+    clean, so they cleared every kind in every context. They are now quote
+    escapers like `esc_sql()`: safe inside quotes, reported outside them.
+  - `_wp_specialchars()` was unlisted. It now clears HTML in text only. By
+    default it encodes no quote, so an attribute built from it is reported.
+- A value one of whose branches could not be followed was read as the
+  branches that could. `$c ? "'" : $x` folded to a quote, so an `esc_sql()`
+  value after it read as quoted even when `$x` is not a quote. A join now
+  folds only when every branch does, for the query shape rule and for
+  constants. Hook, callback, class and include resolution still use the
+  branches that fold, through a separate `ValueResolver::knownStrings()`,
+  because the callees it can name are better than none.
 - A call's arguments went to the parameter at the same position as written,
   and several kinds of call do not work that way. Each lost a flow:
   - `f( ...$args )` handed `$args` to the first parameter and nothing to the
