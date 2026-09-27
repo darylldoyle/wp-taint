@@ -122,6 +122,42 @@ final class GuardAnalyzer
     }
 
     /**
+     * Whether this condition coming out true proves the value safe.
+     *
+     * The same test a branch is put to, for a condition that is not a branch:
+     * `return in_array( $type, array( 'post', 'term' ), true );` in a REST
+     * permission callback lets a request through only when it is true.
+     */
+    public function provesWhenTrue(Operand $condition, Operand $value): bool
+    {
+        $names = $this->namesOf($value);
+        $positive = true;
+
+        if ($names === []) {
+            return false;
+        }
+
+        while (true) {
+            $definition = OperandHelper::definingOp($condition);
+
+            if ($definition instanceof Op\Expr\BooleanNot) {
+                $positive = ! $positive;
+                $condition = $definition->expr;
+
+                continue;
+            }
+
+            if (! $definition instanceof Op\Expr\FuncCall && ! $definition instanceof Op\Expr\NsFuncCall) {
+                return false;
+            }
+
+            $safeWhen = $this->safeWhen($definition, $names);
+
+            return $safeWhen !== null && $safeWhen === $positive;
+        }
+    }
+
+    /**
      * Does this branch prove the value safe on the edge we arrived by?
      *
      * `if ( ! ctype_digit( $id ) ) { return; }` validates on the *else* edge;

@@ -1394,6 +1394,27 @@ callback runs:
   cast, and a string `format` runs its sanitizer
 - an empty `sanitize_callback` runs nothing, and neither does a plain string
 
+The route's permission callback narrows it too. WordPress refuses a request
+when that callback returns `false`, `null` or a `WP_Error`. So when every other
+return is behind a check that admits the parameter only from a fixed list, the
+callback reads one of those values. The checks are the ones a guard clause is
+credited for: a strict `in_array()` against literals, `array_key_exists()`
+against a literal array, an anchored `preg_match()`, and the character-class
+predicates. A return that hands back a helper's answer, given the same
+request, takes the helper's list, as does a return whose value is the check
+itself:
+
+```php
+function acme_permissions( $request ) {
+    $type = $request->get_param( 'objectType' );
+    return in_array( $type, array( 'post', 'term', 'user' ), true );
+}
+```
+
+Only a parameter read into a variable is followed, because the check is tied to
+the variable's name. `in_array( $request->get_param( 'type' ), … )` admits
+nothing.
+
 A callback on several routes is sanitised only as far as every one of them
 sanitises the parameter, and a route whose `args` are built by a method call,
 as `WP_REST_Controller` subclasses build theirs, sanitises nothing. A

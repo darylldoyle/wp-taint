@@ -1570,17 +1570,30 @@ final class FunctionAnalysis
 
         if ($name !== null && $this->isRouteRequest($request) && $this->restRoutes !== null) {
             $routes = $this->restRoutes->routesFor($this->context->key);
-            $sanitized = $this->restParameters->sanitize($kinds, $name, $routes);
 
-            if (! $sanitized->equals($kinds)) {
+            if ($this->restRoutes->admitsOnlyFromList($routes, $name)) {
+                // One of a fixed list of literals, which carries no payload,
+                // though it can still name somebody else's row.
+                $kinds = $kinds->intersect(TaintSet::of(TaintKind::ObjectId));
                 $description .= sprintf(
-                    ' The route\'s args schema sanitises \'%s\' before the callback runs, which leaves %s.',
+                    ' The route\'s permission callback lets a request through only when \'%s\' is one of a fixed '
+                        . 'list, which leaves %s.',
                     $name,
-                    $sanitized->isEmpty() ? 'nothing' : $sanitized->describe(),
+                    $kinds->isEmpty() ? 'nothing' : $kinds->describe(),
                 );
-            }
+            } else {
+                $sanitized = $this->restParameters->sanitize($kinds, $name, $routes);
 
-            $kinds = $sanitized;
+                if (! $sanitized->equals($kinds)) {
+                    $description .= sprintf(
+                        ' The route\'s args schema sanitises \'%s\' before the callback runs, which leaves %s.',
+                        $name,
+                        $sanitized->isEmpty() ? 'nothing' : $sanitized->describe(),
+                    );
+                }
+
+                $kinds = $sanitized;
+            }
         }
 
         if ($kinds->isEmpty()) {
