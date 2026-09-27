@@ -1431,6 +1431,14 @@ cwe = "CWE-89"
 message = "$wpdb->prepare() cannot protect a format string built from untrusted input."
 
 [[rules]]
+id = "wp.sqli.identifier-choice"
+title = "Request chooses a database identifier"
+description = "A value from the request names a column or table inside backticks. Escaping the backticks keeps it one identifier, but the request still chooses which: `user_pass` as readily as `post_title`."
+remediation = "Check the name against a fixed list of the identifiers the query may use, for example with in_array( $col, array( 'date', 'title' ), true )."
+cwe = "CWE-89"
+message = "The request chooses a column or table name in a database query."
+
+[[rules]]
 id = "wp.sqli.unprepared-query"
 phpcs_sniffs = ["WordPress.DB.PreparedSQL.NotPrepared", "WordPress.DB.PreparedSQL.InterpolatedNotPrepared"]
 title = "Variable interpolated into a database query"

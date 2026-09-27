@@ -9,6 +9,10 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `wp.sqli.identifier-choice`, at medium: a request value names a column or
+  table inside backticks. Escaping the backticks keeps it one identifier, and
+  the request still chooses which. A check against a fixed list settles it.
+
 - `registries/php-generated.toml`, written by `tools/generate-php-catalogue.php`
   from reflection: each of PHP's own functions declared to return something
   that can hold text, with the parameters declared to hold text. The engine
