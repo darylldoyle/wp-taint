@@ -86,3 +86,38 @@ it('reports an identifier escaped for backticks that a callee places bare', func
         }
         PHP))->toContain('wp.sqli.unprepared-query@4');
 });
+
+it('reads the escape from a variable that holds the backtick', function (): void {
+    // Yoast's ORM, `quote_identifier_part()`. The early return is `'*'`,
+    // which the strict comparison settles.
+    expect(identifierEscapeFindings(<<<'PHP'
+        class Acme_ORM {
+            protected function quote_identifier_part( $part ) {
+                if ( $part === '*' ) {
+                    return $part;
+                }
+                $quote_character = '`';
+                return $quote_character
+                    . \str_replace( $quote_character, $quote_character . $quote_character, $part )
+                    . $quote_character;
+            }
+            public function run() {
+                global $wpdb;
+                $col = $this->quote_identifier_part( $_GET['col'] );
+                $wpdb->get_results( "SELECT $col FROM t" );
+                $wpdb->get_results( "SELECT * FROM t WHERE name = '$col'" );
+            }
+        }
+        PHP))->toBe(['wp.sqli.wpdb-query@16']);
+});
+
+it('credits an escaper entry that returns its own quotes where it is written bare', function (): void {
+    expect(identifierEscapeFindings(<<<'PHP'
+        function acme_run() {
+            global $wpdb;
+            $table = UpdraftPlus_Database_Utility::escape_table_name( $_GET['t'] );
+            $wpdb->query( "DROP TABLE $table" );
+            $wpdb->query( "SELECT * FROM t WHERE name = '$table'" );
+        }
+        PHP))->toBe(['wp.sqli.wpdb-query@6']);
+});

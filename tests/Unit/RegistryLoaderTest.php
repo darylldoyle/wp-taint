@@ -86,6 +86,21 @@ it('treats an unknown key as a hard error', function (): void {
         TOML))->toThrow(RegistryException::class, 'unknown key "clesrs"');
 });
 
+it('refuses a value that brings its own quotes without clearing sql', function (string $entry): void {
+    expect(static fn (): Registry => loadRegistry(<<<TOML
+        [meta]
+        name = "custom"
+
+        [[sanitizers]]
+        function = "acme_quote_name"
+        {$entry}
+        self_quoted = true
+        TOML))->toThrow(RegistryException::class, 'sets self_quoted');
+})->with([
+    'no sql' => ['clears = ["html"]'],
+    'safe only inside quotes' => ["clears = [\"sql\"]\nquoted_only = true"],
+]);
+
 it('names the file and the entry in every error', function (): void {
     try {
         loadRegistry(<<<'TOML'

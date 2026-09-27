@@ -1186,18 +1186,32 @@ final class FunctionAnalysis
     /**
      * A phi node unions its incoming operands. This is the whole of the
      * engine's branch and loop handling: the IR did the hard part.
+     *
+     * Each operand brings only what a guard on every way here leaves it. A
+     * guard proves what it proves about the value it tested, not about a
+     * value written after it, so a join of the two has to take the proof from
+     * the operand that was tested:
+     *
+     *     if ( ! ctype_digit( $id ) ) { return; }
+     *     if ( $pad ) { $id = str_pad( $id, 8, '0' ); }
+     *     echo $id;
      */
     private function applyPhi(Op\Phi $phi): bool
     {
         $incoming = [];
+        $merged = TaintSet::empty();
 
         foreach ($phi->vars as $var) {
             if ($var instanceof Operand) {
                 $incoming[] = $var;
+                $merged = $merged->union(self::guarded(
+                    $this->state->effectiveTaintOf($var),
+                    $this->guards->proofFor($var, $this->currentBlock),
+                ));
             }
         }
 
-        $merged = self::withoutSplitEscapeClaim($this->state->unionOf($incoming), $incoming, $this->state);
+        $merged = self::withoutSplitEscapeClaim($merged, $incoming, $this->state);
 
         if ($merged->isEmpty()) {
             return $this->state->set($phi->result, $merged);
@@ -4250,8 +4264,12 @@ final class FunctionAnalysis
     }
 
     /**
-     * The strings an argument holds when it is a literal string or an array
+     * The strings an argument holds when it is one known string or an array
      * literal of them, in order. Null for anything else.
+     *
+     * Known the way a concatenation's fragments are: a literal, or a value that
+     * folds to exactly one string. Yoast's ORM keeps the backtick in a
+     * variable, `str_replace( $q, $q . $q, $part )`.
      *
      * @return list<string>|null
      */
@@ -4261,7 +4279,7 @@ final class FunctionAnalysis
             return null;
         }
 
-        $single = OperandHelper::literalString($operand);
+        $single = $this->knownText($operand);
 
         if ($single !== null) {
             return [$single];
@@ -4280,7 +4298,7 @@ final class FunctionAnalysis
         $strings = [];
 
         foreach ($definition->values as $value) {
-            $string = $value instanceof Operand ? OperandHelper::literalString($value) : null;
+            $string = $value instanceof Operand ? $this->knownText($value) : null;
 
             if ($string === null) {
                 return null;

@@ -487,14 +487,19 @@ note = "Only sanitises with a literal first argument. Interpolating a variable i
 # Identifier escapers in widely used plugins. A table or column name cannot be
 # a prepare() placeholder before %i, so plugins that build names escape them by
 # hand: double every backtick, then wrap the name in backticks. That is MySQL's
-# rule for a quoted identifier, and the result carries its own quotes, so it is
-# safe wherever the query puts it. Unlike esc_sql(), nothing is left for an
-# unquoted context.
+# rule for a quoted identifier, and the result carries its own quotes. It is
+# safe where the query writes it bare, and not inside more quotes.
+#
+# An escaper written in one function is read from its body, as Yoast's ORM is.
+# This one doubles the backticks in one function and adds them in another, and
+# a function summary does not carry an escaped value's quotes through a
+# callee's own concatenation. Until it does, this entry says what it returns.
 [[sanitizers]]
 class = "UpdraftPlus_Database_Utility"
 static_method = "escape_table_name"
 clears = ["sql"]
-note = "Doubles every backtick and wraps the name in backticks: a complete quoted identifier."
+self_quoted = true
+note = "Doubles every backtick and wraps the name in backticks: one quoted identifier, safe bare."
 
 # =============================================================================
 # EXPLICITLY SAFE — do not re-add these as sinks

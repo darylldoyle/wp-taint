@@ -9,6 +9,14 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A comparison with a literal is a guard. `===` and `!==` with a literal or a
+  constant hold the value to it. A loose `==`, `!=` and a `switch` case count
+  only against a string that is not numeric, which a loose comparison cannot
+  stretch. `empty()` counts too. Both sides of `&&` and `||` are read both
+  ways, so `'grid' === $mode || 'list' === $mode` is a two-value allowlist.
+- A `self_quoted` key for `[[sanitizers]]`: the entry returns one quoted
+  literal or identifier of its own, safe where the query writes it bare.
+
 - `wp.sqli.identifier-choice`, at medium: a request value names a column or
   table inside backticks. Escaping the backticks keeps it one identifier, and
   the request still chooses which. A check against a fixed list settles it.
@@ -129,6 +137,17 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the scanned file.
 
 ### Fixed
+
+- A guard credited a value written after it under the same name. `if ( empty(
+  $x ) ) { $x = $_POST['y']; echo $x; }` and a digit check followed by `$id =
+  $id . $_GET['s']` went unreported. A guard now covers the value it tested,
+  and a join carries the proof only from the operand that was tested.
+- UpdraftPlus's `escape_table_name()` cleared `sql` wherever its result went.
+  It returns one quoted identifier, so a result placed inside quotes is now
+  reported.
+- A `str_replace()` identifier escaper read its search and replacement only
+  when they were written as literals. Yoast's ORM keeps the backtick in a
+  variable, so its quoted column names were reported as injections.
 
 - An escaped SQL value's quotes were read only at the sink. A clause built as
   `"AND name LIKE '%" . esc_sql( $s ) . "%' "` and joined into a query later
