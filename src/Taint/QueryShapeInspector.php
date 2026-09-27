@@ -50,11 +50,15 @@ final class QueryShapeInspector
     /**
      * The first component of a built query string whose origin the engine
      * could not account for, or null when there is none.
+     *
+     * @param (callable(Operand): bool)|null $vouched components the caller can
+     *     account for itself, such as one a guard checked against a list
      */
     public function unaccountedComponent(
         Operand $query,
         FunctionContext $context,
         ClassTypeMap $types,
+        ?callable $vouched = null,
     ): ?Operand {
         $components = $this->components($query);
 
@@ -64,6 +68,10 @@ final class QueryShapeInspector
 
         foreach ($components as $component) {
             if ($this->literals->isEffectivelyLiteral($component)) {
+                continue;
+            }
+
+            if ($vouched !== null && $vouched($component)) {
                 continue;
             }
 

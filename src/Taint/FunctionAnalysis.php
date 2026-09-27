@@ -1356,7 +1356,14 @@ final class FunctionAnalysis
         }
 
         $value = $op->expr;
-        $taint = $this->state->taintOf($value);
+
+        // A value checked on every path to here against a guard is one of what
+        // the guard admits, wherever it is written: see GuardAnalyzer. Only an
+        // object id survives that, as it survives the check at a sink.
+        // Otherwise `$query['orderby'] = $params['orderby']` behind an
+        // allowlist carried the request into every query built from $query.
+        $guarded = $op instanceof Op\Expr\Assign && $this->guards->isGuarded($value, $this->currentBlock);
+        $taint = self::unlessGuarded($this->state->taintOf($value), $guarded);
 
         $provenance = new Provenance(
             TraceVerb::Propagate,
@@ -1377,7 +1384,7 @@ final class FunctionAnalysis
 
         // `$a = $b` where `$b` is an array with taint written into its elements
         // has to carry that across, or the taint is lost at the assignment.
-        $container = $this->state->containerTaintOf($value);
+        $container = self::unlessGuarded($this->state->containerTaintOf($value), $guarded);
 
         if (! $container->isEmpty()) {
             $changed = $this->state->addContainerTaint($op->var, $container, $provenance) || $changed;
@@ -1385,11 +1392,23 @@ final class FunctionAnalysis
         }
 
         // The per-key slots travel with the array. Without this `$b = $a` would
-        // lose the precision and fall back to the whole-array answer.
-        $changed = $this->state->copyKeyedTaint($value, $op->var) || $changed;
-        $changed = $this->state->copyKeyedTaint($value, $op->result) || $changed;
+        // lose the precision and fall back to the whole-array answer. A guarded
+        // value is one of a few scalars, so it has none worth carrying.
+        if (! $guarded) {
+            $changed = $this->state->copyKeyedTaint($value, $op->var) || $changed;
+            $changed = $this->state->copyKeyedTaint($value, $op->result) || $changed;
+        }
 
         return $this->propagateIndirectWrite($op, $taint->union($container)) || $changed;
+    }
+
+    /**
+     * What survives a guard: an object id, which names a row rather than
+     * carrying a payload, and nothing else.
+     */
+    private static function unlessGuarded(TaintSet $taint, bool $guarded): TaintSet
+    {
+        return $guarded ? $taint->intersect(TaintSet::of(TaintKind::ObjectId)) : $taint;
     }
 
     /**
@@ -2167,8 +2186,21 @@ final class FunctionAnalysis
      */
     private function transferUnion(Op\Expr $op, array $inputs, string $description, bool $imprecise = false): bool
     {
-        $taint = $this->state->unionOfOwn($inputs);
-        $container = $this->state->unionOfContainers($inputs);
+        $taint = TaintSet::empty();
+        $container = TaintSet::empty();
+
+        // A guarded input brings only what the guard admits, so
+        // `'ORDER BY ' . $orderby` behind an allowlist check on $orderby
+        // builds a query from a listed value.
+        foreach ($inputs as $input) {
+            if ($input === null) {
+                continue;
+            }
+
+            $guarded = $this->guards->isGuarded($input, $this->currentBlock);
+            $taint = $taint->union(self::unlessGuarded($this->state->taintOf($input), $guarded));
+            $container = $container->union(self::unlessGuarded($this->state->containerTaintOf($input), $guarded));
+        }
 
         $provenance = $taint->isEmpty() && $container->isEmpty()
             ? null
@@ -3986,7 +4018,11 @@ final class FunctionAnalysis
             // Both slots: the callee receives the whole value, and an array
             // passed in arrives with its elements attached. Reading only the
             // own slot loses every flow through `f( array( $_GET['v'] ) )`.
-            $argumentTaint = $this->state->effectiveTaintOf($argument);
+            // A guarded argument hands the callee what the guard admits.
+            $argumentTaint = self::unlessGuarded(
+                $this->state->effectiveTaintOf($argument),
+                $this->guards->isGuarded($argument, $this->currentBlock),
+            );
 
             if ($argumentTaint->isEmpty()) {
                 continue;
@@ -4596,7 +4632,14 @@ final class FunctionAnalysis
             return;
         }
 
-        $unaccounted = $this->queryShapes->unaccountedComponent($operand, $this->context, $this->types);
+        // A component a guard checked on every path here is one of what the
+        // guard admits, which is accounted for.
+        $unaccounted = $this->queryShapes->unaccountedComponent(
+            $operand,
+            $this->context,
+            $this->types,
+            fn (Operand $component): bool => $this->guards->isGuarded($component, $this->currentBlock),
+        );
 
         if ($unaccounted !== null) {
             $this->emit(
