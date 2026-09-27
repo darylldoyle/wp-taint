@@ -244,6 +244,6 @@ final class OriginClassifier
         FunctionContext $context,
         ClassTypeMap $types,
     ): ?string {
-        return $this->receivers->classOf($fetch->var, $context, $types);
+        return $this->receivers->propertyOwnerOf($fetch->var, $context, $types);
     }
 }

@@ -2064,7 +2064,7 @@ final class FunctionAnalysis
      */
     private function propertyOwnerClass(Op\Expr\PropertyFetch $fetch): ?string
     {
-        return $this->receivers->classOf($fetch->var, $this->context, $this->types);
+        return $this->receivers->propertyOwnerOf($fetch->var, $this->context, $this->types);
     }
 
     private function transferConcatList(Op\Expr\ConcatList $op): bool

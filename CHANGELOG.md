@@ -115,6 +115,14 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A property read on a value that one of PHP's own methods returned shared a
+  slot with every write to a property of that name the scan could not place.
+  `$r->getClosureCalledClass()->name` read whatever any `$labels->name = …`
+  had written, so request data written into a post type's labels reached
+  Twig's template compiler. PHP's reflection says what its own functions and
+  methods return, and a property read or write on such a value now uses that
+  class. Only a concrete class of PHP's own that nothing in the scan extends
+  counts. A method call on the value is still followed as a dynamic call.
 - A guard only suppressed a finding when the sink's argument was the guarded
   variable itself. `if ( ctype_digit( $id ) ) { $wpdb->query( 'DELETE … ' .
   $id ); }` was SQL injection, because the sink's argument is the

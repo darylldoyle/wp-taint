@@ -152,6 +152,13 @@ the property is one storage slot on the instance whichever class's method
 touched it. What stays approximate is the *instance* dimension, not the class
 one.
 
+A property on an object whose class the scan cannot tell has one slot per
+name, shared across the whole scan. A read of `$obj->name` on any such object
+sees every `->name` written on any other. The class is known for `$this`, an
+object made with `new`, a declared parameter, property or return type, and a
+value that one of PHP's own methods is declared to return. A value from a
+function or method that declares nothing shares the slot.
+
 The trace does reach back to the source: the map records the trace of the write
 that tainted a property, and a read splices it in ahead of its own step. Without
 that, roughly a fifth of corpus findings had traces that began "read from

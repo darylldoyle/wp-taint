@@ -228,7 +228,7 @@ final class LiteralAnchor
 
         $class = $this->context === null
             ? null
-            : $this->receivers?->classOf($definition->var, $this->context, $this->types ?? new ClassTypeMap());
+            : $this->receivers?->propertyOwnerOf($definition->var, $this->context, $this->types ?? new ClassTypeMap());
 
         return $this->properties->isAnchored($class, $property);
     }
