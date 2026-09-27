@@ -28,6 +28,13 @@ function runCli(array $arguments): array
     ];
 }
 
+it('can scan its own source tree', function (): void {
+    $result = runCli(['scan', 'src', '--parse-report', '--fail-on=never']);
+
+    expect($result['exit'])->toBe(0);
+    expect($result['stdout'])->toContain('files parsed');
+});
+
 it('exits 0 on a clean file', function (): void {
     $result = runCli(['scan', 'tests/Fixtures/safe/xss-echo-esc-html.php']);
 
