@@ -201,12 +201,15 @@ clears = ["header"]
 
 [[propagators]]
 function = "stripslashes_deep"
+keeps_keys = true
 note = "Removes backslashes. Escapes nothing."
 
 [[propagators]]
 function = "stripslashes_from_strings_only"
+keeps_keys = true
 note = "Removes backslashes. Escapes nothing."
 
 [[propagators]]
 function = "wp_unslash"
+keeps_keys = true
 note = "Removes backslashes. Escapes nothing."

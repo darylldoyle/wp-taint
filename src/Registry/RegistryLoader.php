@@ -34,7 +34,9 @@ final class RegistryLoader
         'clears_by', 'pattern_arg', 'replacement_arg', 'quoted_only',
     ];
 
-    private const PROPAGATOR_KEYS = ['function', 'class', 'method', 'static_method', 'arg', 'args', 'all_args', 'note'];
+    private const PROPAGATOR_KEYS = [
+        'function', 'class', 'method', 'static_method', 'arg', 'args', 'all_args', 'note', 'keeps_keys',
+    ];
 
     private const SINK_KEYS = [
         'construct', 'function', 'class', 'method', 'static_method', 'arg', 'args', 'all_args',
@@ -327,6 +329,7 @@ final class RegistryLoader
                 $this->matcherFor($file, $context, $entry, allowConstruct: false, allowSuperglobal: false),
                 $this->arguments($file, $context, $entry, ArgumentSelector::all()),
                 $this->optionalString($file, $context . ' note', $entry['note'] ?? null),
+                $this->boolValue($file, $context . ' keeps_keys', $entry['keeps_keys'] ?? false),
             ));
         }
     }
