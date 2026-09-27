@@ -1043,8 +1043,14 @@ What that still misses:
 - **A by-reference output** carries nothing unless `[[byref]]` lists it. Most
   are error codes, counts and in-place sorts. `preg_match()`, `parse_str()` and
   the like are listed.
-- **A function declared to return an object** stays clean, and so do the methods
-  of PHP's own classes: `DOMDocument::saveHTML()`, `DateTime::format()`.
+- **Only a few of PHP's classes hold text:** the DOM, SimpleXML, the SPL
+  containers and exceptions. A method of one returns its arguments' text and
+  its object's, and a method that keeps what it is given, `loadHTML()` or
+  `offsetSet()`, puts its arguments into the object. Every other class holds
+  nothing, so `DateTime::format()` stays clean. A plugin's subclass of one of
+  these classes is not covered, and neither is a node whose class the scan
+  cannot pin down, such as `$list->item( 0 )`, which PHP declares as one of
+  three classes.
 - **`filter_var()` and `filter_input()` read the filter constant.** A number
   filter clears every payload, an address filter clears what its alphabet
   cannot hold, and `FILTER_SANITIZE_SPECIAL_CHARS` clears HTML and not SQL. Any

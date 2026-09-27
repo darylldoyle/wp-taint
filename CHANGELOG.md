@@ -126,6 +126,15 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A document or container loaded from the request came back clean.
+  `$dom->loadHTML( $_POST['html'] ); echo $dom->saveHTML();` was missed, and so
+  were `new ArrayObject( $_POST )`, an `SplQueue` of request values,
+  `simplexml_load_string( $_POST['xml'] )->title` and an exception's message.
+  The DOM, SimpleXML, the SPL containers and exceptions now hold what they are
+  given: a method that returns text returns its arguments' and its object's,
+  and one that keeps its arguments puts them into the object. The methods are
+  generated from reflection, and which ones keep their arguments is a reviewed
+  list in the generator.
 - `filter_var()`, `filter_var_array()`, `filter_input()` and
   `filter_input_array()` were unlisted, so they returned clean whatever the
   filter. They now read the filter constant. `FILTER_VALIDATE_INT` and the

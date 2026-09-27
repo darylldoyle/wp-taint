@@ -55,7 +55,10 @@ final class RegistryLoader
         'function', 'class', 'method', 'static_method', 'writes', 'from', 'as_container', 'note',
     ];
 
-    private const INTERNAL_KEYS = ['function', 'returns', 'args', 'args_from'];
+    private const INTERNAL_KEYS = [
+        'function', 'class', 'method', 'static_method', 'returns', 'args', 'args_from', 'returns_text',
+        'receiver', 'stores',
+    ];
 
     private const TEMPLATE_KEYS = [
         'function', 'class', 'method', 'static_method',
@@ -729,10 +732,13 @@ final class RegistryLoader
             }
 
             $accumulator->addInternalFunction(new InternalFunction(
-                Matcher::function($this->requiredString($file, $context . ' function', $entry['function'] ?? null)),
+                $this->matcherFor($file, $context, $entry, allowConstruct: false, allowSuperglobal: false),
                 $this->requiredString($file, $context . ' returns', $entry['returns'] ?? null),
                 $arguments,
                 $from,
+                $this->boolValue($file, $context . ' returns_text', $entry['returns_text'] ?? true),
+                $this->boolValue($file, $context . ' receiver', $entry['receiver'] ?? false),
+                $this->boolValue($file, $context . ' stores', $entry['stores'] ?? false),
             ));
         }
     }

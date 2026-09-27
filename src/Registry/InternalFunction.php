@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Enshrined\WpTaint\Registry;
 
 /**
- * One of PHP's own functions, as reflection declares it.
+ * One of PHP's own functions or methods, as reflection declares it.
  *
  * Generated into `registries/php-generated.toml` by
  * tools/generate-php-catalogue.php, and read only for a function the rest of
@@ -22,12 +22,19 @@ final class InternalFunction
     /**
      * @param list<int> $arguments     the parameters whose declared type can hold text
      * @param int|null  $argumentsFrom a variadic one: every argument from here on
+     * @param bool      $returnsText   whether the result can hold text at all
+     * @param bool      $receiver      a method whose result holds its object's text too
+     * @param bool      $stores        a method that keeps its arguments in its object,
+     *                                 or a constructor whose object holds them
      */
     public function __construct(
         public readonly Matcher $matcher,
         public readonly string $returns,
         public readonly array $arguments,
         public readonly ?int $argumentsFrom,
+        public readonly bool $returnsText = true,
+        public readonly bool $receiver = false,
+        public readonly bool $stores = false,
     ) {
     }
 
