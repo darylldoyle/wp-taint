@@ -2903,18 +2903,34 @@ final class FunctionAnalysis
                 // proven second-order flow, at the severity of what actually
                 // went in, rather than the assumption that something might have.
                 [$storedTaint, $storedOrigin] = $this->optionStoreTaint($matcher, $call);
+                $kinds = $source->kinds->union($storedTaint);
+                $description = sprintf(
+                    '%s returns %s data.',
+                    $matcher->describe(),
+                    $source->stored ? 'stored, user-supplied' : 'user-supplied',
+                );
+
+                // `filter_input( INPUT_GET, 'id', FILTER_VALIDATE_INT )` reads
+                // the request and filters it in one call.
+                if ($source->filterArgument !== null) {
+                    [$kinds, $proof, $filter] = $this->applyFilter(
+                        $call,
+                        $kinds,
+                        $source->filterArgument,
+                        $source->optionsArgument,
+                    );
+                    $description .= $proof === null
+                        ? sprintf(' With %s, it comes back as it was.', $filter)
+                        : sprintf(' With %s, it still carries %s.', $filter, $kinds->describe());
+                }
 
                 return $this->writeResult(
                     $op->result,
-                    $source->kinds->union($storedTaint),
-                    new Provenance(
+                    $kinds,
+                    $kinds->isEmpty() ? null : new Provenance(
                         TraceVerb::Source,
                         $op,
-                        sprintf(
-                            '%s returns %s data.',
-                            $matcher->describe(),
-                            $source->stored ? 'stored, user-supplied' : 'user-supplied',
-                        ),
+                        $description,
                         prefix: $storedOrigin,
                     ),
                 ) || $changed;
@@ -3174,6 +3190,10 @@ final class FunctionAnalysis
         Sanitizer $sanitizer,
         Matcher $matcher,
     ): bool {
+        if ($sanitizer->clearsBy === Sanitizer::FILTER) {
+            return $this->transferFilter($op, $call, $sanitizer, $matcher);
+        }
+
         $incoming = $this->state->unionOf($call->arguments);
 
         // A pattern decides which parts of the subject are replaced. Its own
@@ -3269,6 +3289,77 @@ final class FunctionAnalysis
                 imprecise: $sanitizer->imprecise,
             ),
         );
+    }
+
+    /**
+     * `filter_var( $v, FILTER_VALIDATE_INT )`: the value, less what the filter
+     * proves it cannot carry.
+     */
+    private function transferFilter(Op\Expr $op, CallTarget $call, Sanitizer $sanitizer, Matcher $matcher): bool
+    {
+        $value = $call->argument($sanitizer->arguments->firstIndex());
+        $incoming = $value === null ? TaintSet::empty() : $this->state->effectiveTaintOf($value);
+
+        [$taint, $proof, $filter] = $this->applyFilter(
+            $call,
+            $incoming,
+            $sanitizer->filterArgument,
+            $sanitizer->optionsArgument,
+        );
+
+        if ($taint->isEmpty()) {
+            return $this->writeResult($op->result, $taint);
+        }
+
+        // A kind the filter proved gone can only have come from the options,
+        // so the trace looks there first.
+        $options = $sanitizer->optionsArgument === null ? null : $call->argument($sanitizer->optionsArgument);
+        $inputs = array_values(array_filter($proof === null ? [$value, $options] : [$options, $value]));
+
+        return $this->writeResult($op->result, $taint, new Provenance(
+            $proof === null ? TraceVerb::Propagate : TraceVerb::Sanitize,
+            $op,
+            $proof === null
+                ? sprintf('%s with %s passes the value through.', $matcher->describe(), $filter)
+                : sprintf('%s with %s leaves %s.', $matcher->describe(), $filter, $taint->describe()),
+            $inputs,
+        ));
+    }
+
+    /**
+     * What a filter leaves of a value, and the options as written.
+     *
+     * The options count raw: `options.default` is what comes back when the
+     * filter fails, and it is not filtered.
+     *
+     * @return array{0: TaintSet, 1: CharacterProof|null, 2: string} the taint, the
+     *                                                            filter's proof, and
+     *                                                            the filter's name
+     */
+    private function applyFilter(CallTarget $call, TaintSet $incoming, ?int $filterAt, ?int $optionsAt): array
+    {
+        $name = FilterProof::nameOf($filterAt === null ? null : $call->argument($filterAt));
+        $proof = FilterProof::of($name);
+
+        // A filter that proves something is a sanitizer, and like any other it
+        // settles where the value came from and whether it was cleaned.
+        $taint = $proof === null
+            ? $incoming
+            : $proof->apply($incoming)->without(TaintSet::of(TaintKind::Unknown, TaintKind::Storage));
+
+        $options = $optionsAt === null ? null : $call->argument($optionsAt);
+
+        if ($options !== null) {
+            $taint = $taint->union($this->state->effectiveTaintOf($options));
+        }
+
+        $label = match ($name) {
+            null => 'no filter',
+            '' => 'a filter that is not a constant',
+            default => $name,
+        };
+
+        return [$taint, $proof, $label];
     }
 
     /**
