@@ -36,6 +36,11 @@ use PhpParser\NodeFinder;
  * a helper for the right reason: `acf_verify_ajax()` counts because it calls
  * `wp_verify_nonce`, which we can see.
  *
+ * The walk follows direct calls only. A callback on a hook that the handler
+ * fires may not be registered when the hook runs, and a check inside it decides
+ * what the callback does, not whether the handler runs. See
+ * {@see \Enshrined\WpTaint\Taint\CallGraph}.
+ *
  * The name heuristic it replaced accepted any call containing `can`, `nonce`,
  * `verify` and six other fragments. It credited `acf_verify_ajax()` by accident
  * and would have credited `$this->can_haz_cheeseburger()` too. It survives only

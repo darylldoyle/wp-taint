@@ -179,7 +179,10 @@ Those run as separate rules over the syntax, and they are reachability
 questions rather than name matching. "Does this callback reach a capability
 check, through however many helpers" is answered by walking the call graph,
 which is what credits a helper for the right reason: `acme_verify_ajax()` counts
-because it calls `wp_verify_nonce()`, which the engine can see.
+because it calls `wp_verify_nonce()`, which the engine can see. The walk follows
+direct calls only. A check inside a callback on a hook the handler fires may not
+run, and when it does, it decides what that callback does, not whether the
+handler runs.
 
 ## The catalogue is data
 

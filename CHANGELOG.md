@@ -115,6 +115,16 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The authorization rules credited a check inside a hook callback. Walking the
+  call graph from an AJAX or `admin_post_` handler, a REST permission callback,
+  or a helper guarding an object operation, the walk followed hook dispatches
+  into their callbacks. A public AJAX endpoint that read a plugin option was
+  credited with the `current_user_can()` inside a filter on that option, four
+  calls down. That check shapes the option's value and guards nothing in the
+  handler. The scan also cannot know which callbacks are on a hook when it
+  fires, the reason a filter callback is not credited as a sanitiser either.
+  The walk now follows direct calls only. Hook callbacks still have a caller,
+  so they are not treated as entry points.
 - A file included from a function, or a template loaded with
   `get_template_part()`, was reported as receiving tainted input whenever the
   function had a parameter, even when every caller passed a literal. The

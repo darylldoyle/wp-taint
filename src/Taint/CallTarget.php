@@ -49,6 +49,16 @@ final class CallTarget
          * so the callee cannot write back through them whatever it is.
          */
         public readonly bool $passesByValue = false,
+        /**
+         * A hook dispatch runs this callback; nothing calls it by name.
+         *
+         * The scan cannot know which callbacks are on a hook when it fires. A
+         * registration can sit behind a condition, `remove_filter()` can take
+         * it off, and code outside the scan can add or remove callbacks. So
+         * the callback may run, which is enough to follow its dataflow, but
+         * it is not something the caller does.
+         */
+        public readonly bool $viaHook = false,
     ) {
     }
 
@@ -69,6 +79,25 @@ final class CallTarget
             $mode,
             $this->candidates,
             $this->passesByValue,
+            $this->viaHook,
+        );
+    }
+
+    /**
+     * The same callee, run by a hook dispatch. See {@see $viaHook}.
+     */
+    public function runByHook(): self
+    {
+        return new self(
+            $this->arguments,
+            $this->matcher,
+            $this->userFunctionKey,
+            $this->displayName,
+            $this->dynamic,
+            $this->resultMode,
+            $this->candidates,
+            $this->passesByValue,
+            true,
         );
     }
 
@@ -161,6 +190,7 @@ final class CallTarget
             $this->resultMode,
             $this->candidates,
             $this->passesByValue,
+            $this->viaHook,
         );
     }
 }
