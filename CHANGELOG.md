@@ -115,6 +115,17 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A property read on a variable that php-cfg joins from several places lost
+  the variable's class. `if ( $on && ( $class = $r->getClosureCalledClass() ) )`
+  joins `$class` from before the condition with the one assigned in it, so
+  `$class->name` fell to the slot every unresolved `->name` shares. That let
+  Elementor's request-filled post type labels reach bundled Twig's `eval()`.
+  A property's owner is now read through a join when every way in names the
+  same class. A literal, `null`, an array, or a local nothing else can set
+  carries no object and does not count against it. A local counts as unset
+  only in a function that never passes it to a call, binds it by reference,
+  declares it global or static, or uses `include`, `eval`, `extract()` or a
+  variable variable.
 - A function that returned an array lost the taint of its elements.
   `$a['title'] = $_GET['title']; return $a;` was clean to every caller, and so
   was an element written under a computed key. A summary now records what each
