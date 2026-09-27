@@ -48,9 +48,9 @@
     },
     "loginizer": {
         "version": "2.1.0",
-        "findings": 11,
+        "findings": 9,
         "bySeverity": {
-            "high": 7,
+            "high": 5,
             "medium": 4
         },
         "warnings": 0,

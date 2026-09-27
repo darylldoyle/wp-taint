@@ -192,6 +192,44 @@ plugin vendoring a copy of it was reported until this existed.
 A guard also narrows a value on the path that **returns** it, not only on the
 path to a sink, which is the shape that fast path uses.
 
+**What a guard reaches.** The check is tied to a name, so it covers every use of
+that name it dominates:
+
+- a variable, and an element under a literal key: `ctype_digit( $_GET['id'] )`
+  covers a later `$_GET['id']`, and `in_array( $params['orderby'], … )` covers
+  `$params['orderby']`
+- a normalised copy, where the check and the use apply the same normaliser:
+  `in_array( strtoupper( $dir ), … )` covers `strtoupper( $dir )`. The
+  normalisers are `strtoupper`, `strtolower`, `trim`, `ltrim`, `rtrim` and
+  `sanitize_key`.
+- either side of `&&` and `||`. php-cfg joins a constant from the path that
+  short-circuited with the right-hand side, so the right-hand side is known only
+  on the edge where the join is not that constant: `isset( $x ) && ctype_digit(
+  $x )` proves `$x` digits where it is true, and says nothing where it is false.
+
+A guarded value keeps only an object id wherever it goes next. That covers
+assigning it, `$query['orderby'] = $params['orderby']`, concatenating it into a
+query, and passing it to a function, whose summary then sees what the guard
+admits.
+
+**Every way past the check has to be checked.** A block counts as guarded when
+every edge into it is the side of a check that passed, or comes from a branch
+that ended first: a `return`, `throw` or `exit`, or a call to `wp_die()`,
+`wp_send_json()` and its variants, or `wp_nonce_ays()`. A branch that replaces
+the checked variable with a literal counts too, since that is the fallback form
+of an allowlist: `if ( ! in_array( $mode, … ) ) { $mode = 'grid'; }`. A branch
+that does something else and falls through leaves the value unchecked:
+
+```php
+if ( ! ctype_digit( $x ) ) {
+    $y = 1;            // falls through, never checked $x
+}
+echo $x;               // reported
+```
+
+A plugin's own function that always dies is not known to, so a guard clause
+that calls one reports the value after it.
+
 **What it will not claim.**
 
 - **Loose `in_array()` is not a guard.** Type juggling smuggles values past it.

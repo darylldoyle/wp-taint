@@ -115,6 +115,21 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A guard only suppressed a finding when the sink's argument was the guarded
+  variable itself. `if ( ctype_digit( $id ) ) { $wpdb->query( 'DELETE … ' .
+  $id ); }` was SQL injection, because the sink's argument is the
+  concatenation. So was a check on an element, `in_array( $params['orderby'],
+  … )`, and a check on the right-hand side of `isset( $x ) && …`, which php-cfg
+  lowers to a join the guard could not read. A guarded value now keeps only an
+  object id wherever it is assigned, concatenated or passed. Elements under a
+  literal key and normalised copies are guarded by name, and both sides of
+  `&&` and `||` are read.
+- A guard was credited when only one way into the code after it had passed
+  the check. `if ( ! ctype_digit( $x ) ) { $y = 1; } echo $x;` reported
+  nothing, though the branch that failed the check falls into the echo. Every
+  way in now has to pass the check, end first by returning, throwing, exiting
+  or calling `wp_die()` or `wp_send_json()` and its variants, or replace the
+  value with a literal.
 - A REST parameter that the route's permission callback admits only from a
   fixed list was read as arbitrary request data. Rank Math's schema routes let
   a request through only when `objectType` is `post`, `term` or `user`, and

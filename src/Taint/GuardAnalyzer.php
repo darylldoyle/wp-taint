@@ -78,8 +78,28 @@ final class GuardAnalyzer
         'is_numeric', 'is_int', 'is_integer', 'is_long', 'is_float', 'is_double', 'is_bool',
     ];
 
+    /**
+     * Functions that normalise a value without adding to it, so that a check
+     * of the normalised value and a later use of it are the same value.
+     */
+    private const NORMALISERS = ['strtoupper', 'strtolower', 'trim', 'ltrim', 'rtrim', 'sanitize_key'];
+
+    /**
+     * WordPress functions that end the request, so a branch calling one never
+     * reaches the code after it.
+     */
+    private const NEVER_RETURN = [
+        'wp_die', 'wp_send_json', 'wp_send_json_success', 'wp_send_json_error', 'wp_nonce_ays',
+    ];
+
     /** Dominators, per function. */
     private ?BlockDominators $dominators = null;
+
+    /** @var array<string, bool> isGuarded() answers for this function, by operand and block */
+    private array $answers = [];
+
+    /** The function's first block, the one block with no parents that runs. */
+    private ?Block $entry = null;
 
     /**
      * Start a new function. Dominance is a property of one block graph.
@@ -89,11 +109,26 @@ final class GuardAnalyzer
     public function forFunction(array $blocks): void
     {
         $this->dominators = BlockDominators::compute($blocks);
+        $this->entry = $blocks[0] ?? null;
+        $this->answers = [];
     }
 
     public function isGuarded(Operand $operand, ?Block $block): bool
     {
         if ($block === null || $this->dominators === null || ! $this->dominators->covers($block)) {
+            return false;
+        }
+
+        // Fixed for the function, and asked again on every pass of the fixed
+        // point for every input to a concatenation.
+        $key = spl_object_id($operand) . ':' . spl_object_id($block);
+
+        return $this->answers[$key] ??= $this->answer($operand, $block);
+    }
+
+    private function answer(Operand $operand, Block $block): bool
+    {
+        if ($this->dominators === null) {
             return false;
         }
 
@@ -106,13 +141,159 @@ final class GuardAnalyzer
         $dominating = $this->dominators->of($block);
 
         // Every block that must have been passed through to get here. If one of
-        // them is the validating side of a guard on this value, there was no
-        // way round it.
+        // them can only be entered by the validating side of a guard on this
+        // value, there was no way round it.
+        //
+        // Every way in has to validate or be a dead end, not just one.
+        // `if ( ! ctype_digit( $x ) ) { $y = 1; }` jumps straight to the block
+        // after it on the edge where the check passed, and falls into the same
+        // block from the branch that never looked at $x. Crediting the one
+        // edge left `echo $x` after it unreported. A branch that returns or
+        // dies first still falls in as far as the CFG says, and never runs
+        // that far.
         foreach ($dominating as $candidate) {
-            foreach ($candidate->parents as $parent) {
-                $terminal = $parent->children[count($parent->children) - 1] ?? null;
+            if ($this->enteredOnlyValidated($candidate, $names)) {
+                return true;
+            }
+        }
 
-                if ($terminal instanceof Op\Stmt\JumpIf && $this->validatesOnEdge($terminal, $candidate, $names)) {
+        return false;
+    }
+
+    /**
+     * Whether every edge into this block is the validating side of a guard,
+     * or comes from a block that never gets as far as its jump, and at least
+     * one validates.
+     *
+     * @param list<string> $names
+     */
+    private function enteredOnlyValidated(Block $block, array $names): bool
+    {
+        $validated = false;
+
+        foreach ($block->parents as $parent) {
+            $terminal = $parent->children[count($parent->children) - 1] ?? null;
+
+            if ($terminal instanceof Op\Stmt\JumpIf && $this->validatesOnEdge($terminal, $block, $names)) {
+                $validated = true;
+
+                continue;
+            }
+
+            if (! $this->endsBeforeJumping($parent) && ! $this->replacesWithLiteral($parent, $names)) {
+                return false;
+            }
+        }
+
+        return $validated;
+    }
+
+    /**
+     * Whether this branch, or the straight line of blocks leading only to it,
+     * replaces the checked variable with a literal before falling through.
+     *
+     * The fallback form of an allowlist:
+     *
+     * ```php
+     * if ( ! in_array( $mode, array( 'grid', 'list' ), true ) ) {
+     *     $mode = 'grid';
+     * }
+     * ```
+     *
+     * The branch that failed the check does not carry the unchecked value on.
+     * Only a literal counts. Anything else could be as tainted as what it
+     * replaced, and a guarded sink is not reported at all.
+     *
+     * @param list<string> $names
+     */
+    private function replacesWithLiteral(Block $block, array $names): bool
+    {
+        for ($depth = 0; $depth < 8; $depth++) {
+            foreach ($block->children as $op) {
+                if (
+                    $op instanceof Op\Expr\Assign
+                    && array_intersect($this->namesOf($op->var), $names) !== []
+                    && self::isLiteralValue($op->expr)
+                ) {
+                    return true;
+                }
+            }
+
+            $parent = count($block->parents) === 1 ? reset($block->parents) : null;
+
+            if (! $parent instanceof Block) {
+                return false;
+            }
+
+            $terminal = $parent->children[count($parent->children) - 1] ?? null;
+
+            // Up to the branch that decided, not past it.
+            if ($terminal instanceof Op\Stmt\JumpIf) {
+                return false;
+            }
+
+            $block = $parent;
+        }
+
+        return false;
+    }
+
+    private static function isLiteralValue(Operand $operand): bool
+    {
+        if ($operand instanceof Operand\Literal) {
+            return true;
+        }
+
+        $definition = OperandHelper::definingOp($operand);
+
+        return $definition instanceof Op\Expr\ConstFetch;
+    }
+
+    /**
+     * Whether control never leaves this block by its last op: it, or the
+     * straight line of blocks leading only to it, returns, throws, exits or
+     * calls something that never returns, or nothing reaches it at all.
+     *
+     * php-cfg ends the block at a `return` and starts a fresh one for
+     * whatever follows, which then falls through to the block after the
+     * `if`. That edge never runs, which is why a guard clause works.
+     */
+    private function endsBeforeJumping(Block $block): bool
+    {
+        for ($depth = 0; $depth < 8; $depth++) {
+            if (self::stops($block)) {
+                return true;
+            }
+
+            $parent = count($block->parents) === 1 ? reset($block->parents) : null;
+
+            if (! $parent instanceof Block) {
+                return $block->parents === [] && $block !== $this->entry;
+            }
+
+            $block = $parent;
+        }
+
+        return false;
+    }
+
+    private static function stops(Block $block): bool
+    {
+        foreach ($block->children as $op) {
+            if (
+                $op instanceof Op\Terminal\Return_
+                || $op instanceof Op\Terminal\Throw_
+                || $op instanceof Op\Terminal\Exit_
+            ) {
+                return true;
+            }
+
+            // Inside a namespace an unqualified call is an NsFuncCall, whose
+            // `name` is the global function it falls back to.
+            if ($op instanceof Op\Expr\FuncCall || $op instanceof Op\Expr\NsFuncCall) {
+                $name = strtolower(ltrim(OperandHelper::literalString($op->name) ?? '', '\\'));
+
+                if (in_array($name, self::NEVER_RETURN, true)) {
                     return true;
                 }
             }
@@ -147,6 +328,26 @@ final class GuardAnalyzer
                 continue;
             }
 
+            if ($definition instanceof Op\Expr\Cast\Bool_) {
+                $condition = $definition->expr;
+
+                continue;
+            }
+
+            // True overall only tells us about the joined operand when true is
+            // not the constant it was joined with. See validatesOnEdge().
+            if ($definition instanceof Op\Phi) {
+                $joined = self::shortCircuited($definition);
+
+                if ($joined === null || $positive === $joined[0]) {
+                    return false;
+                }
+
+                $condition = $joined[1];
+
+                continue;
+            }
+
             if (! $definition instanceof Op\Expr\FuncCall && ! $definition instanceof Op\Expr\NsFuncCall) {
                 return false;
             }
@@ -155,6 +356,39 @@ final class GuardAnalyzer
 
             return $safeWhen !== null && $safeWhen === $positive;
         }
+    }
+
+    /**
+     * The join php-cfg writes for `&&` and `||`: a constant from the path that
+     * short-circuited, and the right-hand operand from the path that did not.
+     *
+     * `a && b` joins `false` with `b`, and `a || b` joins `true` with `b`.
+     * Wherever the join is not that constant, it is `b`'s value, and `a` came
+     * out the way that let `b` run. Wherever it is the constant, nothing is
+     * known about `b`.
+     *
+     * @return array{0: bool, 1: Operand}|null the constant, and the joined operand
+     */
+    private static function shortCircuited(Op\Phi $phi): ?array
+    {
+        if (count($phi->vars) !== 2) {
+            return null;
+        }
+
+        $vars = array_values($phi->vars);
+        $first = $vars[0] ?? null;
+        $second = $vars[1] ?? null;
+
+        foreach ([[$first, $second], [$second, $first]] as [$constant, $operand]) {
+            if (
+                $constant instanceof Operand\Literal && is_bool($constant->value)
+                && $operand instanceof Operand && ! $operand instanceof Operand\Literal
+            ) {
+                return [$constant->value, $operand];
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -177,6 +411,33 @@ final class GuardAnalyzer
             if ($definition instanceof Op\Expr\BooleanNot) {
                 $positive = ! $positive;
                 $operand = $definition->expr;
+
+                continue;
+            }
+
+            if ($definition instanceof Op\Expr\Cast\Bool_) {
+                $operand = $definition->expr;
+
+                continue;
+            }
+
+            // `isset( $x ) && in_array( $x, … )` joins `false`, from the path
+            // where isset() failed, with in_array()'s result. The join tells
+            // us in_array() came out true only on the edge where it is not
+            // that constant: see shortCircuited().
+            if ($definition instanceof Op\Phi) {
+                $joined = self::shortCircuited($definition);
+
+                if ($joined === null) {
+                    return false;
+                }
+
+                [$constant, $operand] = $joined;
+                $informative = $positive === ! $constant ? $jump->if : $jump->else;
+
+                if ($informative !== $arrivedAt) {
+                    return false;
+                }
 
                 continue;
             }
@@ -275,7 +536,7 @@ final class GuardAnalyzer
      *
      * @return list<string>
      */
-    private function namesOf(Operand $operand): array
+    private function namesOf(Operand $operand, int $depth = 0): array
     {
         $names = [];
 
@@ -291,7 +552,64 @@ final class GuardAnalyzer
             }
         }
 
+        if ($depth < 4) {
+            $expression = $this->expressionName($operand, $depth);
+
+            if ($expression !== null) {
+                $names[] = $expression;
+            }
+        }
+
         return array_values(array_unique($names));
+    }
+
+    /**
+     * A name for an expression that means the same thing each time it is
+     * written.
+     *
+     * An element under a literal key, `$params['orderby']`, is read afresh
+     * into a new temporary each time, so it has no variable name to be tied
+     * by. Named `params['orderby']` here, the guard and the use match:
+     *
+     * ```php
+     * if ( in_array( $params['orderby'], array( 'ip', 'url' ), true ) ) {
+     *     $query['orderby'] = $params['orderby'];
+     * }
+     * ```
+     *
+     * A normaliser around a named value, `strtoupper( $params['direction'] )`,
+     * is named the same way, because checking the normalised value against a
+     * list and then using it is the other common form. No variable name can
+     * contain `[` or `(`, so these cannot collide with one.
+     */
+    private function expressionName(Operand $operand, int $depth): ?string
+    {
+        $definition = OperandHelper::definingOp($operand);
+
+        if ($definition instanceof Op\Expr\ArrayDimFetch && $definition->dim instanceof Operand) {
+            $key = OperandHelper::literalKey($definition->dim);
+            $base = $this->namesOf($definition->var, $depth + 1)[0] ?? null;
+
+            return $key === null || $base === null ? null : $base . '[' . var_export($key, true) . ']';
+        }
+
+        if (
+            ($definition instanceof Op\Expr\FuncCall || $definition instanceof Op\Expr\NsFuncCall)
+            && count($definition->args) === 1
+        ) {
+            $function = strtolower(ltrim(OperandHelper::literalString($definition->name) ?? '', '\\'));
+            $argument = $definition->args[0] ?? null;
+
+            if (! in_array($function, self::NORMALISERS, true) || ! $argument instanceof Operand) {
+                return null;
+            }
+
+            $base = $this->namesOf($argument, $depth + 1)[0] ?? null;
+
+            return $base === null ? null : $function . '(' . $base . ')';
+        }
+
+        return null;
     }
 
     /**
