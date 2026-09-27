@@ -40,7 +40,7 @@ it('reads the class PHP declares a method to return', function (): void {
 });
 
 it('answers nothing for a union, an interface, a builtin type, or a class that is not PHP\'s', function (): void {
-    expect(InternalTypes::methodReturnClass('DateTime', 'modify'))->toBeNull()
+    expect(InternalTypes::methodReturnClass('DateTime', 'createFromFormat'))->toBeNull()
         ->and(InternalTypes::methodReturnClass('Exception', 'getPrevious'))->toBeNull()
         ->and(InternalTypes::methodReturnClass('ReflectionClass', 'getName'))->toBeNull()
         ->and(InternalTypes::methodReturnClass(Scanner::class, 'scan'))->toBeNull()
