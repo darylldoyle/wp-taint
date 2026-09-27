@@ -518,18 +518,30 @@ The pair survives a merge only when one incoming operand carried both. That is a
 merge rule rather than path sensitivity: it cannot say which path runs, only
 that no single one of them did both things.
 
-**One output line reports once.** When one echo gets more than one of
-`wp.output.unescaped-unknown`, `wp.xss.unescaped-output` and
-`wp.xss.escape-voided`, only one is reported. Escape-voided wins over
+**One output line reports once for each flow.** When one echo gets more than
+one of `wp.output.unescaped-unknown`, `wp.xss.unescaped-output` and
+`wp.xss.escape-voided`, the more specific finding wins. Escape-voided wins over
 unescaped-output, and either wins over unescaped-unknown. The usual shape is a
 filter whose callback hands back raw input, and there the escape-voided
 finding names both the defect and the fix.
 
-The rule cannot tell when the raw HTML took a different path from the escaped
-value. The line then reports medium escape-voided and hides a high. Echoing a
-Gravity Forms form with a tainted form id does this. The engine follows the id
-into the form's markup, and the markup is escaped and then filtered on its way
-out.
+A line never reports less than it holds. The specific finding wins outright
+only when it is at least as severe. Otherwise:
+
+- When both traces start at the same place, they tell one story at two
+  severities. The specific finding stays and takes the higher severity, with a
+  trace step saying so. A filter callback that appends raw input to an escaped
+  value makes the value both voided and raw. The line reports escape-voided,
+  which names the fix, at high.
+- Otherwise they are two flows, and both stay. A request value that reaches an
+  echo raw and a filtered option that reaches it voided report a high and a
+  medium.
+
+A finding's source is where its trace starts, to the column. Two different
+flows that start at one call count as one story. `echo get_option( 'x',
+esc_html( $_GET['v'] ) )` voids the escaped default and returns a stored value
+raw, and the line reports one escape-voided finding at the stored value's
+severity.
 
 **Two deliberate exceptions.**
 

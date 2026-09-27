@@ -77,6 +77,54 @@ final class Finding
     }
 
     /**
+     * This finding stands for a more severe one about the same flow, so it
+     * takes that one's severity and a trace step saying why.
+     *
+     * `wp.xss.escape-voided` names the fix for a filter that undid an escaper.
+     * When the value it describes also reaches the echo raw, the line is as
+     * severe as the raw flow.
+     */
+    public function raisedBy(self $other): self
+    {
+        $steps = $this->trace;
+        $end = end($steps);
+        $last = $end === false ? null : $end;
+
+        $note = new TraceStep(
+            $last === null ? TraceVerb::Sink : $last->verb,
+            $this->file,
+            $this->line,
+            $this->column,
+            $this->endColumn,
+            $last === null ? '' : $last->snippet,
+            sprintf(
+                'The same flow also reaches here with %s taint intact (%s), so this is reported at %s.',
+                $other->kind->value,
+                $other->ruleId,
+                $other->severity->value,
+            ),
+            TaintSet::of($other->kind),
+        );
+
+        return new self(
+            $this->ruleId,
+            $this->rule,
+            $other->severity,
+            $this->kind,
+            $this->file,
+            $this->line,
+            $this->column,
+            $this->endColumn,
+            $this->message,
+            [...$this->trace, $note],
+            $this->fingerprint,
+            $this->imprecise,
+            $this->sinkIdentity,
+            $this->acknowledgement,
+        );
+    }
+
+    /**
      * The author marked this line reviewed with a matching `phpcs:ignore`, so
      * the finding drops to a notice and gains a trace step saying why. The
      * fingerprint is unchanged, so a baseline or a suppression still matches.

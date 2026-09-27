@@ -116,6 +116,18 @@ final class FindingCollection implements IteratorAggregate, Countable
      *
      * Reporting one defect twice is how a scanner earns a reputation for noise.
      *
+     * But a line must never report less than it holds. For each pair on a
+     * line:
+     *
+     * - The specific finding wins when it is at least as severe.
+     * - When it is less severe and both traces start at the same place, they
+     *   tell one story at two severities. The specific finding stays and takes
+     *   the higher severity. A filter callback that appends raw input to an
+     *   escaped value makes it both voided and raw: escape-voided names the
+     *   fix, and the raw flow says how severe it is.
+     * - Otherwise they are two flows, and both stay. A request value can
+     *   reach an echo raw while a filtered option reaches it voided.
+     *
      * @param array<string, list<string>> $precedence superseded rule id => rule
      *                                                ids that supersede it; an
      *                                                empty list means any other
@@ -123,43 +135,90 @@ final class FindingCollection implements IteratorAggregate, Countable
      */
     public function withRulePrecedence(array $precedence): self
     {
-        $anchors = [];
         $byLine = [];
 
         foreach ($this->findings as $finding) {
-            $anchors[$finding->file . ':' . $finding->line . ':' . $finding->kind->value][$finding->ruleId] = true;
-            $byLine[$finding->file . ':' . $finding->line][$finding->ruleId] = true;
+            $byLine[$finding->file . ':' . $finding->line][] = $finding;
         }
 
-        return $this->filter(static function (Finding $finding) use ($precedence, $anchors, $byLine): bool {
-            $supersededBy = $precedence[$finding->ruleId] ?? null;
+        $kept = [];
 
-            if ($supersededBy === null) {
-                return true;
-            }
+        foreach ($this->findings as $finding) {
+            $source = self::sourceOf($finding);
+            $raisedBy = null;
 
-            // The wildcard — "any other finding here supersedes this one" —
-            // stays scoped to the kind, so an html finding at the same line
-            // cannot silence an sql one. A rule *named* as superseding matches
-            // across kinds: the pairs in the map are pairs because they say
-            // the same thing about the same line, whatever kind each carries.
-            if ($supersededBy === []) {
-                $atLocation = $anchors[$finding->file . ':' . $finding->line . ':' . $finding->kind->value] ?? [];
-                unset($atLocation[$finding->ruleId]);
+            foreach ($byLine[$finding->file . ':' . $finding->line] ?? [] as $other) {
+                $sameStory = $source !== null && self::sourceOf($other) === $source;
 
-                return $atLocation === [];
-            }
+                // A specific finding says what this one says, as severely or
+                // about the same flow.
+                if (
+                    self::supersedes($precedence, $other, $finding)
+                    && ($sameStory || $other->severity->atLeast($finding->severity))
+                ) {
+                    continue 2;
+                }
 
-            $atLine = $byLine[$finding->file . ':' . $finding->line] ?? [];
-
-            foreach ($supersededBy as $ruleId) {
-                if (isset($atLine[$ruleId])) {
-                    return false;
+                // This one stands for a more severe finding about the same
+                // flow, so it reports at that severity.
+                if (
+                    $sameStory
+                    && self::supersedes($precedence, $finding, $other)
+                    && ! $finding->severity->atLeast($other->severity)
+                    && ($raisedBy === null || ! $raisedBy->severity->atLeast($other->severity))
+                ) {
+                    $raisedBy = $other;
                 }
             }
 
-            return true;
-        });
+            $kept[] = $raisedBy === null ? $finding : $finding->raisedBy($raisedBy);
+        }
+
+        return new self($kept);
+    }
+
+    /**
+     * Whether the precedence lets one finding on a line replace another.
+     *
+     * The wildcard, "any other finding here supersedes this one", stays scoped
+     * to the kind, so an html finding at the same line cannot silence an sql
+     * one. A rule *named* as superseding matches across kinds: the pairs in the
+     * map are pairs because they say the same thing about the same line,
+     * whatever kind each carries.
+     *
+     * @param array<string, list<string>> $precedence
+     */
+    private static function supersedes(array $precedence, Finding $winner, Finding $loser): bool
+    {
+        $supersededBy = $precedence[$loser->ruleId] ?? null;
+
+        if ($supersededBy === null || $winner === $loser || $winner->ruleId === $loser->ruleId) {
+            return false;
+        }
+
+        return $supersededBy === []
+            ? $winner->kind === $loser->kind
+            : in_array($winner->ruleId, $supersededBy, true);
+    }
+
+    /**
+     * Where a finding's flow starts: the first step of its trace that names a
+     * place, to the column. Two flows can start on one line:
+     * `$c ? $_GET['a'] : apply_filters( 'x', $v )`.
+     *
+     * A join has no place of its own, so a trace that starts at one starts at
+     * the step after it. Null for a trace with no place at all, which says
+     * nothing about whether two findings share a flow.
+     */
+    private static function sourceOf(Finding $finding): ?string
+    {
+        foreach ($finding->trace as $step) {
+            if ($step->line > 0) {
+                return $step->file . ':' . $step->line . ':' . $step->column;
+            }
+        }
+
+        return null;
     }
 
     /**
