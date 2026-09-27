@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Taint;
 
+use Enshrined\WpTaint\Cfg\CompatibilityVisitor;
 use Enshrined\WpTaint\Hooks\HookGraph;
 use Enshrined\WpTaint\Registry\Dispatcher;
 use Enshrined\WpTaint\Registry\DispatchMode;
@@ -78,6 +79,20 @@ final class CallResolver
      * @return list<CallTarget>
      */
     public function resolveAll(Op $op, FunctionContext $context, ClassTypeMap $types): array
+    {
+        $targets = $this->targetsOf($op, $context, $types);
+
+        if (! $op->hasAttribute(CompatibilityVisitor::UNPACKED_OR_NAMED_ARGUMENTS)) {
+            return $targets;
+        }
+
+        return array_map(static fn (CallTarget $target): CallTarget => $target->notPositional(), $targets);
+    }
+
+    /**
+     * @return list<CallTarget>
+     */
+    private function targetsOf(Op $op, FunctionContext $context, ClassTypeMap $types): array
     {
         $direct = $this->resolve($op, $context, $types);
 
@@ -165,6 +180,14 @@ final class CallResolver
             );
         } else {
             $dispatched = $this->dispatched($direct, $dispatcher, $context, $types);
+        }
+
+        // `call_user_func_array( $cb, $args )` hands `$cb` the elements of
+        // `$args`, and `array_map( $cb, $items )` hands it one item at a time.
+        if ($dispatcher->mode !== DispatchMode::Rest) {
+            $unpacked = static fn (CallTarget $target): CallTarget => $target->notPositional();
+            $dispatched = array_map($unpacked, $dispatched);
+            $prefixed = array_map($unpacked, $prefixed);
         }
 
         if ($dispatched === []) {

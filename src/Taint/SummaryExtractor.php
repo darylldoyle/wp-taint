@@ -21,9 +21,17 @@ namespace Enshrined\WpTaint\Taint;
  */
 final class SummaryExtractor
 {
+    /**
+     * Each function's parameter keys, which do not change between rounds.
+     *
+     * @var array<string, array<int, list<array-key>>>
+     */
+    private array $parameterKeys = [];
+
     public function __construct(
         private readonly IntraproceduralAnalyzer $analyzer,
         private readonly AnalysisOptions $options,
+        private readonly ParameterKeyReads $keyReads,
     ) {
     }
 
@@ -43,12 +51,26 @@ final class SummaryExtractor
         $paramToProperty = [];
         $paramToCapture = [];
         $paramToScope = [];
+        $paramToReturnContainer = [];
+        $paramToReturnKeyed = [];
         $imprecise = $parameterCount > $analysed;
 
         for ($index = 0; $index < $analysed; $index++) {
             $result = $this->analyzer->analyze($context, $summaries, $properties, $scopes, $index, false);
 
             $paramToReturn[$index] = $result->returnTaint;
+
+            // And what it puts into the returned array's elements, which a
+            // caller reads the way it reads a local array's.
+            if ($result->returnContainer !== null && ! $result->returnContainer->isEmpty()) {
+                $paramToReturnContainer[$index] = $result->returnContainer;
+            }
+
+            if ($result->returnKeyed !== []) {
+                $keyed = $result->returnKeyed;
+                ksort($keyed);
+                $paramToReturnKeyed[$index] = $keyed;
+            }
             $clears[$index] = TaintSet::allDataflowKinds()->without($result->returnTaint);
             $paramToSink[$index] = self::deduplicate($result->sinksReached);
             $imprecise = $imprecise || $result->imprecise;
@@ -105,7 +127,24 @@ final class SummaryExtractor
             $paramToProperty,
             $paramToCapture,
             $paramToScope,
+            $paramToReturnContainer,
+            $paramToReturnKeyed,
+            $baseline->returnContainer,
+            self::sorted($baseline->returnKeyed),
+            $this->parameterKeys[$context->key] ??= $this->keyReads->of($context->func),
         );
+    }
+
+    /**
+     * @param array<array-key, TaintSet> $keyed
+     *
+     * @return array<array-key, TaintSet>
+     */
+    private static function sorted(array $keyed): array
+    {
+        ksort($keyed);
+
+        return $keyed;
     }
 
     /**

@@ -139,6 +139,29 @@ computed key could be any key, so it sees everything, including every per-key
 slot. Both are what the analysis did for all arrays before, and both are still
 the fallback.
 
+The slots cross a function boundary in both directions. A function that
+returns an array hands its caller the elements, under the keys they were
+written with. A function that reads a parameter only through literal keys
+receives only those elements of the array it is handed:
+
+```php
+function acme_describe( $field ) {
+    return array( 'tip' => $field['desc'] );
+}
+
+$field['value'] = get_option( 'acme_value' );
+$parts = acme_describe( $field );
+echo $parts['tip'];       // not reported: nothing reads $field['value']
+```
+
+A callee that uses the parameter any other way receives every element. That
+includes passing it on to another function, returning it, iterating it, or
+reading it with a computed key. So does a call written with `...$args` or a
+named argument, and a callback run by `call_user_func_array()`, `array_map()`
+or their relatives. None of those hands the parameter one argument whose keys
+are the ones written. Type checks, `count()`, `isset()`, `empty()` and
+comparisons read no content, so they do not count as a use.
+
 **Direction:** over-approximating at the dynamic ends, exact in the middle.
 
 ### Object properties are per class, not per instance

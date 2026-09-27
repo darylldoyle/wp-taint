@@ -36,6 +36,11 @@ use PhpParser\NodeVisitorAbstract;
  * 1,680 sites in the corpus — and it has to happen here because this is the only
  * point that knows which file the AST came from.
  *
+ * And it marks a call written with `...$args` or a named argument, with
+ * {@see UNPACKED_OR_NAMED_ARGUMENTS}. php-cfg drops both the `...` and the
+ * name, so the call reads as though each argument went to the parameter at its
+ * position. The mark tells the analysis which calls that is not true of.
+ *
  * Two of those — `match` and `?->` — have been in the language since PHP 8.0
  * and are ordinary in any plugin written in the last few years. Without this
  * shim the corpus parse rate falls far below the 99.5% the project treats as a
@@ -51,6 +56,13 @@ use PhpParser\NodeVisitorAbstract;
  */
 final class CompatibilityVisitor extends NodeVisitorAbstract
 {
+    /**
+     * The attribute on a call whose arguments do not all go to the parameter
+     * at their position. It reaches the call's op, which copies its node's
+     * attributes.
+     */
+    public const UNPACKED_OR_NAMED_ARGUMENTS = 'wpTaint.unpackedOrNamedArguments';
+
     /** @var array<string, int> */
     private array $lowered = [];
 
@@ -102,6 +114,10 @@ final class CompatibilityVisitor extends NodeVisitorAbstract
                 : ltrim($this->namespace . '\\' . $node->name->toString(), '\\');
         }
 
+        if ($node instanceof Node\Expr\CallLike && ! $node->isFirstClassCallable() && self::loose($node->getArgs())) {
+            $node->setAttribute(self::UNPACKED_OR_NAMED_ARGUMENTS, true);
+        }
+
         if ($node instanceof Node\Stmt\ClassMethod || $node instanceof Node\Stmt\Function_) {
             $this->functionStack[] = $node->name->toString();
         } elseif ($node instanceof Node\FunctionLike) {
@@ -141,6 +157,20 @@ final class CompatibilityVisitor extends NodeVisitorAbstract
             $node instanceof Node\Expr\New_ => $this->lowerFirstClassCallable($node),
             default => null,
         };
+    }
+
+    /**
+     * @param array<Node\Arg> $arguments
+     */
+    private static function loose(array $arguments): bool
+    {
+        foreach ($arguments as $argument) {
+            if ($argument->unpack || $argument->name !== null) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

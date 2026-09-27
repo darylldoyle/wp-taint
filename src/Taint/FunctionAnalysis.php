@@ -86,6 +86,16 @@ final class FunctionAnalysis
 
     private TaintSet $returnTaint;
 
+    /** What the returned array's elements carry under a computed key. */
+    private TaintSet $returnContainer;
+
+    /**
+     * What the returned array's elements carry under each literal key.
+     *
+     * @var array<array-key, TaintSet>
+     */
+    private array $returnKeyed = [];
+
     /** Null until the first return is seen; then AND-ed across every return. */
     private ?bool $returnAnchored = null;
 
@@ -239,6 +249,7 @@ final class FunctionAnalysis
         $this->guards = new GuardAnalyzer();
         $this->capabilityGuards = new CapabilityGuard($registry, $callGraph);
         $this->returnTaint = TaintSet::empty();
+        $this->returnContainer = TaintSet::empty();
         $this->returnAnchored = null;
         $this->blocks = BlockOrder::of($this->context->func->cfg);
         $this->guards->forFunction($this->blocks);
@@ -315,6 +326,8 @@ final class FunctionAnalysis
             array_values($this->propertiesReached),
             array_values($this->capturesReached),
             array_values($this->scopesReached),
+            $this->returnContainer,
+            $this->returnKeyed,
         );
     }
 
@@ -1793,9 +1806,15 @@ final class FunctionAnalysis
             return $this->state->set($op->result, $taint);
         }
 
-        $provenance = $keyed->isEmpty()
-            ? $this->state->containerProvenanceOf($op->var) ?? $this->state->provenanceOf($op->var)
-            : $this->state->keyedProvenanceOf($op->var, $key);
+        // When only the element carries the taint, the trace follows the
+        // element: its write, or the call whose return put it there. The
+        // array's own provenance says nothing about it, and following that
+        // left a returned element's trace at "read out of" with no source.
+        $element = $fallback->isEmpty() ? $this->state->keyedProvenanceOf($op->var, $key) : null;
+
+        if ($element !== null) {
+            return $this->state->set($op->result, $taint, $element);
+        }
 
         return $this->state->set(
             $op->result,
@@ -1805,7 +1824,6 @@ final class FunctionAnalysis
                 $op,
                 sprintf("Read out of %s['%s'].", OperandHelper::describe($op->var), $key),
                 [$op->var],
-                prefix: $provenance === null ? [] : [],
             ),
         );
     }
@@ -2413,15 +2431,35 @@ final class FunctionAnalysis
         //
         // and every plugin vendoring a copy of it handed us a false positive,
         // because the early return carried the argument's taint out untouched.
-        $taint = $this->guards->isGuarded($op->expr, $this->currentBlock)
-            ? TaintSet::empty()
-            : $this->state->taintOf($op->expr);
+        $guarded = $this->guards->isGuarded($op->expr, $this->currentBlock);
+        $taint = $guarded ? TaintSet::empty() : $this->state->taintOf($op->expr);
 
-        $this->reportShortcodeReturn($op, $op->expr, $taint);
+        // The elements travel as elements. Returning only the value's own
+        // taint lost everything written into it: `$a['k'] = $_GET['x'];
+        // return $a;` handed every caller a clean array.
+        $container = $guarded ? TaintSet::empty() : $this->state->containerTaintOf($op->expr);
+        $keyed = $guarded ? [] : $this->state->keyedTaintMapOf($op->expr);
+
+        $this->reportShortcodeReturn(
+            $op,
+            $op->expr,
+            $guarded ? TaintSet::empty() : $this->state->effectiveTaintOf($op->expr),
+        );
 
         $merged = $this->returnTaint->union($taint);
         $changed = ! $merged->equals($this->returnTaint);
         $this->returnTaint = $merged;
+
+        $merged = $this->returnContainer->union($container);
+        $changed = ! $merged->equals($this->returnContainer) || $changed;
+        $this->returnContainer = $merged;
+
+        foreach ($keyed as $key => $kinds) {
+            $existing = $this->returnKeyed[$key] ?? TaintSet::empty();
+            $merged = $existing->union($kinds);
+            $changed = ! $merged->equals($existing) || $changed;
+            $this->returnKeyed[$key] = $merged;
+        }
 
         return $changed;
     }
@@ -4009,18 +4047,18 @@ final class FunctionAnalysis
         }
 
         $result = $summary->introduces();
+        $elements = $summary->introducesContainer();
+        $keyed = $summary->introducesKeyed;
         $contributors = [];
+        $contributorKeys = [];
         $viaParameters = [];
         $anyArgumentTainted = false;
         $changed = false;
 
         foreach ($call->arguments as $index => $argument) {
-            // Both slots: the callee receives the whole value, and an array
-            // passed in arrives with its elements attached. Reading only the
-            // own slot loses every flow through `f( array( $_GET['v'] ) )`.
             // A guarded argument hands the callee what the guard admits.
             $argumentTaint = self::unlessGuarded(
-                $this->state->effectiveTaintOf($argument),
+                $this->argumentTaint($call, $summary, $index, $argument),
                 $this->guards->isGuarded($argument, $this->currentBlock),
             );
 
@@ -4032,8 +4070,25 @@ final class FunctionAnalysis
 
             $returned = $argumentTaint->intersect($summary->returnTaintFor($index));
 
-            if (! $returned->isEmpty()) {
+            // What the argument put into the returned array's elements, as
+            // for a property: the kinds that got through the body.
+            $intoElements = self::throughBody($argumentTaint, $summary->returnContainerFor($index));
+            $elements = $elements->union($intoElements);
+
+            foreach ($summary->returnKeyedFor($index) as $element => $kinds) {
+                $into = self::throughBody($argumentTaint, $kinds);
+                $keyed[$element] = ($keyed[$element] ?? TaintSet::empty())->union($into);
+                $intoElements = $intoElements->union($into);
+            }
+
+            if (! $returned->isEmpty() || ! $intoElements->isEmpty()) {
                 $result = $result->union($returned);
+                $keys = $call->positional ? $summary->keysReadFrom($index) : null;
+
+                if ($keys !== null) {
+                    $contributorKeys[count($contributors)] = $keys;
+                }
+
                 $contributors[] = $argument;
                 $viaParameters[] = $index;
             }
@@ -4048,25 +4103,98 @@ final class FunctionAnalysis
         }
 
         $result = self::withoutUnearnedEscapeMarkers($result, $anyArgumentTainted);
+        $elements = self::withoutUnearnedEscapeMarkers($elements, $anyArgumentTainted);
 
         $changed = $this->applySummaryByRefEffects($op, $call, $summary) || $changed;
 
-        if ($result->isEmpty()) {
+        $everything = $result->union($elements);
+
+        foreach ($keyed as $element => $kinds) {
+            $keyed[$element] = self::withoutUnearnedEscapeMarkers($kinds, $anyArgumentTainted);
+            $everything = $everything->union($keyed[$element]);
+        }
+
+        if ($everything->isEmpty()) {
             return $this->writeResult($op->result, $result) || $changed;
         }
 
-        return $this->writeResult(
-            $op->result,
-            $result,
-            new Provenance(
-                TraceVerb::Return_,
-                $op,
-                $this->describeReturn($summary, $viaParameters, $result),
-                $contributors,
-                callee: $summary->displayName,
-                parameterIndex: $viaParameters[0] ?? null,
-            ),
-        ) || $changed;
+        $provenance = new Provenance(
+            TraceVerb::Return_,
+            $op,
+            $this->describeReturn($summary, $viaParameters, $everything),
+            $contributors,
+            callee: $summary->displayName,
+            parameterIndex: $viaParameters[0] ?? null,
+            predecessorKeys: $contributorKeys,
+        );
+
+        $changed = $this->writeResult($op->result, $result, $provenance) || $changed;
+
+        return $this->writeReturnedElements($op->result, $elements, $keyed, $provenance) || $changed;
+    }
+
+    /**
+     * The taint an argument hands the callee's parameter.
+     *
+     * Every slot of it: the callee receives the whole value, and an array
+     * passed in arrives with its elements attached. Reading only the own slot
+     * loses every flow through `f( array( $_GET['v'] ) )`. A callee that reads
+     * the parameter only through literal keys sees only those elements, and
+     * what the array carries as a whole or under a computed key. See
+     * {@see ParameterKeyReads}.
+     */
+    private function argumentTaint(CallTarget $call, FunctionSummary $summary, int $index, Operand $argument): TaintSet
+    {
+        $keys = $call->positional ? $summary->keysReadFrom($index) : null;
+
+        if ($keys === null) {
+            return $this->state->effectiveTaintOf($argument);
+        }
+
+        $taint = $this->state->taintOf($argument)->union($this->state->containerTaintOf($argument));
+
+        foreach ($keys as $key) {
+            $taint = $taint->union($this->state->keyedTaintOf($argument, $key));
+        }
+
+        return $taint;
+    }
+
+    /**
+     * Put a callee's returned array's elements on the call result, where a
+     * read of them finds them as it would on a local array.
+     *
+     * A call whose result is discarded writes nothing, and one whose result a
+     * dispatcher collects into an array, `array_map()`, has no keys of its own
+     * to keep them under.
+     *
+     * @param array<array-key, TaintSet> $keyed
+     */
+    private function writeReturnedElements(
+        Operand $result,
+        TaintSet $elements,
+        array $keyed,
+        Provenance $provenance,
+    ): bool {
+        if ($this->resultMode === CallResultMode::Discard) {
+            return false;
+        }
+
+        if ($this->resultMode === CallResultMode::Container) {
+            foreach ($keyed as $kinds) {
+                $elements = $elements->union($kinds);
+            }
+
+            return $this->state->addContainerTaint($result, $elements, $provenance);
+        }
+
+        $changed = $this->state->addContainerTaint($result, $elements, $provenance);
+
+        foreach ($keyed as $key => $kinds) {
+            $changed = $this->state->addKeyedTaint($result, $key, $kinds, $provenance) || $changed;
+        }
+
+        return $changed;
     }
 
     /**
@@ -4106,7 +4234,8 @@ final class FunctionAnalysis
             $contributors = [];
 
             foreach ($call->arguments as $index => $source) {
-                $moved = $this->state->effectiveTaintOf($source)->intersect($summary->byRefTaintFrom($index, $target));
+                $moved = $this->argumentTaint($call, $summary, $index, $source)
+                    ->intersect($summary->byRefTaintFrom($index, $target));
 
                 if (! $moved->isEmpty()) {
                     $taint = $taint->union($moved);
@@ -4272,7 +4401,12 @@ final class FunctionAnalysis
             );
 
             $trace = [
-                ...$this->traces->build($argument, $reference->kind, $callStep),
+                ...$this->traces->build(
+                    $argument,
+                    $reference->kind,
+                    $callStep,
+                    $call->positional ? $summary->keysReadFrom($index) : null,
+                ),
                 $sinkStep,
             ];
 

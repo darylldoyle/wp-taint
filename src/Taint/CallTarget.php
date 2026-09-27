@@ -59,6 +59,14 @@ final class CallTarget
          * it is not something the caller does.
          */
         public readonly bool $viaHook = false,
+        /**
+         * Each argument is the value the callee's parameter at its position
+         * receives. Not so when a dispatcher unpacks an array into the call,
+         * `call_user_func_array()` or `array_map()`, nor for a call written
+         * with `...$args` or a named argument, which php-cfg reads as
+         * positional.
+         */
+        public readonly bool $positional = true,
     ) {
     }
 
@@ -80,6 +88,7 @@ final class CallTarget
             $this->candidates,
             $this->passesByValue,
             $this->viaHook,
+            $this->positional,
         );
     }
 
@@ -98,6 +107,7 @@ final class CallTarget
             $this->candidates,
             $this->passesByValue,
             true,
+            $this->positional,
         );
     }
 
@@ -191,6 +201,27 @@ final class CallTarget
             $this->candidates,
             $this->passesByValue,
             $this->viaHook,
+            $this->positional,
+        );
+    }
+
+    /**
+     * The same callee, with arguments that are not each a parameter's value.
+     * See {@see $positional}.
+     */
+    public function notPositional(): self
+    {
+        return new self(
+            $this->arguments,
+            $this->matcher,
+            $this->userFunctionKey,
+            $this->displayName,
+            $this->dynamic,
+            $this->resultMode,
+            $this->candidates,
+            $this->passesByValue,
+            $this->viaHook,
+            false,
         );
     }
 }

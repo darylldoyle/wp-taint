@@ -40,6 +40,14 @@ final class Provenance
          * @var list<TraceStep>
          */
         public readonly array $prefix = [],
+        /**
+         * For a predecessor the flow can come from only some elements of, by
+         * its position in {@see $predecessors}: those elements' keys. An
+         * argument to a callee that reads it only through literal keys.
+         *
+         * @var array<int, list<array-key>>
+         */
+        public readonly array $predecessorKeys = [],
     ) {
     }
 }
