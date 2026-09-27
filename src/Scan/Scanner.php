@@ -13,6 +13,7 @@ use Enshrined\WpTaint\Cfg\ThemeRoots;
 use Enshrined\WpTaint\Finding\Finding;
 use Enshrined\WpTaint\Finding\FindingCollection;
 use Enshrined\WpTaint\Hooks\HookGraphBuilder;
+use Enshrined\WpTaint\Hooks\RestRoute;
 use Enshrined\WpTaint\Hooks\RestRouteCollector;
 use Enshrined\WpTaint\Hooks\RestRouteTable;
 use Enshrined\WpTaint\Registry\Registry;
@@ -41,6 +42,7 @@ use Enshrined\WpTaint\Taint\FunctionBodies;
 use Enshrined\WpTaint\Taint\FunctionMeta;
 use Enshrined\WpTaint\Taint\InterproceduralResolver;
 use Enshrined\WpTaint\Taint\IntraproceduralAnalyzer;
+use Enshrined\WpTaint\Taint\PermissionAllowlist;
 use Enshrined\WpTaint\Taint\ReceiverResolver;
 use Enshrined\WpTaint\Taint\SummaryExtractor;
 use Enshrined\WpTaint\Taint\TaintGraphWriter;
@@ -628,6 +630,22 @@ final class Scanner
         CallGraph $callGraph,
     ): RestRouteTable {
         $guard = new CapabilityGuard($this->registry, $callGraph);
+        $allowlist = new PermissionAllowlist($functions, $bodies);
+
+        /** @var array<int, true> $seen routes already asked, by object id */
+        $seen = [];
+
+        foreach ($table->callbackKeys() as $key) {
+            foreach ($table->routesFor($key) as $route) {
+                if (isset($seen[spl_object_id($route)])) {
+                    continue;
+                }
+
+                $seen[spl_object_id($route)] = true;
+                $bodies->reclaim();
+                $table->admitFromList($route, $this->admittedFromList($route, $functions, $bodies, $allowlist));
+            }
+        }
 
         foreach ($table->callbackKeys() as $key) {
             $entitled = true;
@@ -662,6 +680,34 @@ final class Scanner
         $this->entitleCallees($table, $functions->all(), $callGraph);
 
         return $table;
+    }
+
+    /**
+     * The parameters every one of a route's permission callbacks admits only
+     * from a fixed list. None when the route has no permission callback, or
+     * one this cannot see into.
+     *
+     * @return array<string, true>
+     */
+    private function admittedFromList(
+        RestRoute $route,
+        UserFunctionTable $functions,
+        FunctionBodies $bodies,
+        PermissionAllowlist $allowlist,
+    ): array {
+        /** @var array<string, true>|null $admitted */
+        $admitted = null;
+
+        foreach ($route->permission ?? [] as $permission) {
+            $meta = $permission->dynamic || $permission->userFunctionKey === null
+                ? null
+                : $functions->get($permission->userFunctionKey);
+
+            $here = $meta === null ? [] : $allowlist->parametersOf($bodies->context($meta));
+            $admitted = $admitted === null ? $here : array_intersect_key($admitted, $here);
+        }
+
+        return $admitted ?? [];
     }
 
     /**

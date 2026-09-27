@@ -23,6 +23,14 @@ final class RestRouteTable
     /** @var list<array{file: string, line: int, reason: string}> */
     private array $unresolved = [];
 
+    /**
+     * Per route, by object id, the request parameters its permission
+     * callback admits only from a fixed list.
+     *
+     * @var array<int, array<string, true>>
+     */
+    private array $admitted = [];
+
     public function add(RestRoute $route): void
     {
         foreach ($route->callbacks as $callback) {
@@ -70,6 +78,34 @@ final class RestRouteTable
     public function isEntitled(string $callbackKey): bool
     {
         return isset($this->entitled[strtolower($callbackKey)]);
+    }
+
+    /**
+     * Record the parameters a route's permission callback admits only from a
+     * fixed list. See {@see \Enshrined\WpTaint\Taint\PermissionAllowlist}.
+     *
+     * @param array<string, true> $parameters
+     */
+    public function admitFromList(RestRoute $route, array $parameters): void
+    {
+        $this->admitted[spl_object_id($route)] = $parameters;
+    }
+
+    /**
+     * Whether every one of these routes lets a request through only when this
+     * parameter is one of a fixed list.
+     *
+     * @param list<RestRoute> $routes
+     */
+    public function admitsOnlyFromList(array $routes, string $parameter): bool
+    {
+        foreach ($routes as $route) {
+            if (! isset($this->admitted[spl_object_id($route)][$parameter])) {
+                return false;
+            }
+        }
+
+        return $routes !== [];
     }
 
     /**

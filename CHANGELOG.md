@@ -115,6 +115,14 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A REST parameter that the route's permission callback admits only from a
+  fixed list was read as arbitrary request data. Rank Math's schema routes let
+  a request through only when `objectType` is `post`, `term` or `user`, and
+  the callback builds a table name from it. That read as SQL injection. When
+  every return that lets a request through is behind a strict allowlist check
+  on the parameter, directly or in a helper handed the same request, the
+  callback now reads it as one of a fixed list: no payload, though it can
+  still name another object.
 - UpdraftPlus's table-name escaper was read as passing SQL taint through.
   `UpdraftPlus_Database_Utility::escape_table_name()` doubles every backtick and
   wraps the name in backticks, MySQL's rule for a quoted identifier, and the
