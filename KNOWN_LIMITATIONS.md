@@ -1146,6 +1146,29 @@ survives only where the graph cannot speak, a callback that will not resolve, or
 a walk that ran into something unfollowable, and findings resting on it are
 marked `imprecise`.
 
+**A check inside a hook callback does not count.** The walk follows direct
+calls only. `apply_filters( 'acme_record', $record )` below a handler runs
+whatever is registered on `acme_record` when it fires, and the scan cannot know
+that set. A registration can sit behind a condition, and `remove_filter()` can
+take it off. A check inside such a callback also decides what the callback
+does, not whether the handler runs:
+
+```php
+add_filter( 'acme_record', function ( $record ) {
+    if ( is_super_admin() ) {  // decides what this filter strips,
+        return $record;        // not who may call the handler
+    }
+    unset( $record['restricted'] );
+    return $record;
+} );
+```
+
+The same walk decides whether a helper counts as a guard for
+`wp.authz.object-id-from-request`, and whether a REST permission callback
+reaches a check, so the same rule holds there. A plugin that fires its own
+action from the handler and does its check in a callback on it is reported.
+Calling the check by name fixes that, and is clearer to a reviewer.
+
 A computed method name that folds to exactly one string resolves:
 
 ```php

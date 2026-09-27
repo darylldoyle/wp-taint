@@ -12,9 +12,10 @@ use PHPCfg\Op;
  * Walks every function body once and records what it calls.
  *
  * Uses the same {@see CallResolver} the taint pass uses, so the two cannot
- * disagree about what a call site means. A callback registered on a hook is an
- * edge like any other: an AJAX handler that does its capability check inside
- * something it hooks is doing a real check, and the walk should find it.
+ * disagree about what a call site means. A callback registered on a hook the
+ * function dispatches is an edge too, marked as one: it gives the callback a
+ * caller, but the authorization walk does not credit a check inside it. See
+ * {@see CallGraph}.
  */
 final class CallGraphBuilder
 {
@@ -56,7 +57,7 @@ final class CallGraphBuilder
                         }
 
                         if ($target->userFunctionKey !== null) {
-                            $graph->addEdge($context->key, $target->userFunctionKey);
+                            $graph->addEdge($context->key, $target->userFunctionKey, $target->viaHook);
                         }
 
                         if ($target->matcher !== null) {

@@ -17,6 +17,14 @@ namespace Enshrined\WpTaint\Taint;
  * credited `acf_verify_ajax()` for the right reason by accident and
  * `$this->can_haz_cheeseburger()` for no reason at all. Walking real edges
  * credits a helper because of what it actually calls.
+ *
+ * The walk does not cross an edge that only a hook dispatch made. Which
+ * callbacks are on a hook when it fires is not something the scan can know,
+ * so a check inside one is not a check the caller made. An AJAX handler that
+ * loaded a record through a helper was credited with the `is_super_admin()`
+ * call inside another plugin's filter on that record, five calls down. That
+ * call decides what the filter does to the record, and guards nothing in the
+ * handler.
  */
 final class CallGraph
 {
@@ -59,6 +67,17 @@ final class CallGraph
     private array $imprecise = [];
 
     /**
+     * Edges that a hook dispatch made and no direct call did, by caller.
+     *
+     * Still edges: a callback on a filter the scan dispatches has a caller,
+     * and it is analysed after that caller's callees like any other. Only the
+     * authorization walk leaves them out.
+     *
+     * @var array<string, array<string, true>>
+     */
+    private array $viaHook = [];
+
+    /**
      * Function keys something in the scan calls.
      *
      * The reverse of `$edges`, kept as it is built rather than derived on
@@ -73,11 +92,23 @@ final class CallGraph
         $this->known[$key] = true;
     }
 
-    public function addEdge(string $from, string $to): void
+    public function addEdge(string $from, string $to, bool $viaHook = false): void
     {
         if (! in_array($to, $this->edges[$from] ?? [], true)) {
             $this->edges[$from][] = $to;
             $this->called[$to] = true;
+
+            if ($viaHook) {
+                $this->viaHook[$from][$to] = true;
+            }
+
+            return;
+        }
+
+        // A function the caller also calls by name is a direct callee, however
+        // many of its hooks it is registered on as well.
+        if (! $viaHook) {
+            unset($this->viaHook[$from][$to]);
         }
     }
 
@@ -118,6 +149,9 @@ final class CallGraph
      * is not walked twice. The depth cap is a cost control rather than a
      * correctness one: a capability check ten helpers deep is not something a
      * reviewer would credit either.
+     *
+     * Only direct calls are followed. See the class comment for why a hook
+     * callback's check does not count.
      *
      * @param list<string> $identities catalogue matcher identities to look for
      */
@@ -166,7 +200,7 @@ final class CallGraph
                 }
 
                 foreach ($this->edges[$current] ?? [] as $callee) {
-                    if (isset($seen[$callee])) {
+                    if (isset($seen[$callee]) || isset($this->viaHook[$current][$callee])) {
                         continue;
                     }
 

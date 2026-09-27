@@ -140,6 +140,11 @@ final class CallResolver
         if ($dispatcher->hook) {
             [$dispatched, $prefixed] = $this->dispatchedByHook($direct, $dispatcher);
 
+            $dispatched = array_map(
+                static fn (CallTarget $target): CallTarget => $target->runByHook(),
+                $dispatched,
+            );
+
             // A prefix join is a bounded guess, so it gets half the treatment
             // an exact match gets: the callback is analysed — its parameters
             // receive the dispatch's arguments and its sinks fire — but its
@@ -147,7 +152,9 @@ final class CallResolver
             // added. Neither replaces the dispatcher's own semantics: every
             // apply_filters() voids escaping and hands back its own argument.
             $prefixed = array_map(
-                static fn (CallTarget $target): CallTarget => $target->returningTo(CallResultMode::Discard),
+                static fn (CallTarget $target): CallTarget => $target
+                    ->runByHook()
+                    ->returningTo(CallResultMode::Discard),
                 $prefixed,
             );
         } else {
