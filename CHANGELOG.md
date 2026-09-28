@@ -9,6 +9,12 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Class constants resolve. `Acme::KEY`, and `self::KEY` inside the class, fold
+  to the value the class declares. A `switch` or loose comparison against one
+  is a guard when it holds a string that is not numeric, and a quote kept in a
+  class constant is known text to the SQL quote reading. `static::`,
+  `parent::` and a constant a class inherits do not resolve.
+
 - A comparison with a literal is a guard. `===` and `!==` with a literal or a
   constant hold the value to it. A loose `==`, `!=` and a `switch` case count
   only against a string that is not numeric, which a loose comparison cannot
@@ -137,6 +143,9 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the scanned file.
 
 ### Fixed
+
+- A class constant was recorded as a global constant under its bare name, so
+  `class A { const VERSION = '1'; }` defined `VERSION` for the whole scan.
 
 - A core table name counted as a safe database identifier on any receiver, so
   a plugin's own `$this->options` in a query was accounted for as

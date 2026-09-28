@@ -125,6 +125,7 @@ final class ValueResolver
         return match (true) {
             $definition instanceof Op\Expr\Assign => $this->resolve($definition->expr, $depth + 1, $partial),
             $definition instanceof Op\Expr\ConstFetch => $this->fromConstant($definition),
+            $definition instanceof Op\Expr\ClassConstFetch => $this->fromClassConstant($definition),
             $definition instanceof Op\Expr\FuncCall,
             $definition instanceof Op\Expr\NsFuncCall => $this->fromCall($definition, $depth, $partial),
             $definition instanceof Op\Expr\MethodCall,
@@ -537,6 +538,32 @@ final class ValueResolver
         }
 
         return [];
+    }
+
+    /**
+     * A class constant's value, from the same table, under the class it names.
+     *
+     * `self::` is named for its class before the CFG is built: see
+     * {@see \Enshrined\WpTaint\Cfg\CompatibilityVisitor}. `static::` and
+     * `parent::` are not, and a constant a class inherits is not found under
+     * the class it is read through, so each of those answers nothing.
+     *
+     * @return list<string>
+     */
+    private function fromClassConstant(Op\Expr\ClassConstFetch $op): array
+    {
+        $class = OperandHelper::literalString($op->class);
+        $name = OperandHelper::literalString($op->name);
+
+        if ($this->constants === null || $class === null || $name === null) {
+            return [];
+        }
+
+        if (in_array(strtolower(ltrim($class, '\\')), ['self', 'static', 'parent'], true)) {
+            return [];
+        }
+
+        return $this->constants->classConstantValuesOf($class, $name);
     }
 
     /**

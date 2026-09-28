@@ -74,9 +74,23 @@ final class ConstantTableBuilder
             $nextReturns = new ConstantReturnTable();
 
             foreach ($contexts as $context) {
+                // A class's body is a block of its own, reached after the op
+                // that declares the class. Its constants are the class's.
+                $classBodies = [];
+
                 foreach (BlockOrder::of($context->func->cfg) as $block) {
+                    $class = $classBodies[spl_object_id($block)] ?? null;
+
                     foreach ($block->children as $op) {
-                        $this->collect($next, $resolver, $op);
+                        if ($op instanceof Op\Stmt\ClassLike) {
+                            $name = OperandHelper::literalString($op->name);
+
+                            if ($name !== null) {
+                                $classBodies[spl_object_id($op->stmts)] = $name;
+                            }
+                        }
+
+                        $this->collect($next, $resolver, $op, $class);
                     }
                 }
 
@@ -272,15 +286,25 @@ final class ConstantTableBuilder
         return $flat;
     }
 
-    private function collect(ConstantTable $table, ValueResolver $resolver, mixed $op): void
+    private function collect(ConstantTable $table, ValueResolver $resolver, mixed $op, ?string $class = null): void
     {
         // `const NAME = 'value';` — php-cfg gives it its own terminal, with the
-        // name already resolved.
+        // name already resolved. Inside a class body it is the class's, and
+        // its name is the bare one: recorded as a global, `class A { const
+        // VERSION = '1'; }` defined `VERSION` for the whole scan.
         if ($op instanceof Op\Terminal\Const_) {
             $name = OperandHelper::literalString($op->name);
 
-            if ($name !== null) {
-                $table->define($name, self::single($resolver->strings($op->value)));
+            if ($name === null) {
+                return;
+            }
+
+            $value = self::single($resolver->strings($op->value));
+
+            if ($class !== null) {
+                $table->defineClassConstant($class, $name, $value);
+            } else {
+                $table->define($name, $value);
             }
 
             return;

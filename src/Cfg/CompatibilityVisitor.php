@@ -156,6 +156,7 @@ final class CompatibilityVisitor extends NodeVisitorAbstract
             $node instanceof Node\IntersectionType => $this->lowerIntersectionType($node),
             $node instanceof Node\Expr\YieldFrom => $this->lowerYieldFrom($node),
             $node instanceof Node\StaticVar => $this->giveStaticVarADefault($node),
+            $node instanceof Node\Expr\ClassConstFetch => $this->nameSelf($node),
             $node instanceof Node\Expr\FuncCall,
             $node instanceof Node\Expr\MethodCall,
             $node instanceof Node\Expr\StaticCall,
@@ -217,6 +218,32 @@ final class CompatibilityVisitor extends NodeVisitorAbstract
         $this->record('magic_constant');
 
         return new Node\Scalar\String_($value, $node->getAttributes());
+    }
+
+    /**
+     * `self::X` inside a class, as the class it names.
+     *
+     * The class is in hand here and nowhere later: php-cfg keeps `self` as the
+     * word, and a constant table keyed by class cannot look that up. Not a
+     * compatibility fix, so it is not recorded as one. Inside a trait `self`
+     * is the using class, which is not known, so a trait is left alone, as its
+     * `__CLASS__` is. `static::` can name a subclass, and `parent::` needs the
+     * imports this runs ahead of, so both are left too.
+     */
+    private function nameSelf(Node\Expr\ClassConstFetch $node): ?Node
+    {
+        $class = end($this->classStack) === false ? '' : (string) end($this->classStack);
+
+        if (
+            $class === '' || $this->traitDepth > 0
+            || ! $node->class instanceof Node\Name || $node->class->toLowerString() !== 'self'
+        ) {
+            return null;
+        }
+
+        $node->class = new Node\Name\FullyQualified($class, $node->class->getAttributes());
+
+        return $node;
     }
 
     private function record(string $construct): void

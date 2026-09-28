@@ -102,6 +102,14 @@ final class GuardAnalyzer
     /** Dominators, per function. */
     private ?BlockDominators $dominators = null;
 
+    /**
+     * @param ValueResolver|null $values folds a constant to the strings it can
+     *     hold, so a loose comparison with one can be credited
+     */
+    public function __construct(private readonly ?ValueResolver $values = null)
+    {
+    }
+
     /** @var array<string, CharacterProof|null> proofFor() answers for this function, by operand and block */
     private array $answers = [];
 
@@ -558,7 +566,7 @@ final class GuardAnalyzer
 
             $case = $switch->cases[$index] ?? null;
 
-            if (! $case instanceof Operand || ! self::isLooseSafeLiteral($case)) {
+            if (! $case instanceof Operand || ! $this->isLooseSafeLiteral($case)) {
                 return null;
             }
 
@@ -598,7 +606,7 @@ final class GuardAnalyzer
             return null;
         }
 
-        $settles = $strict ? self::isLiteralValue($other) : self::isLooseSafeLiteral($other);
+        $settles = $strict ? self::isLiteralValue($other) : $this->isLooseSafeLiteral($other);
 
         if (! $settles) {
             return null;
@@ -611,14 +619,40 @@ final class GuardAnalyzer
     }
 
     /**
-     * A literal a loose comparison cannot stretch: a string that is not
-     * numeric.
+     * A value a loose comparison cannot stretch: a string that is not numeric.
+     *
+     * A constant counts when it holds exactly one such string. Duplicator
+     * dismisses a notice by name with `case AdminNotices::OPTION_KEY_…:`, and a
+     * constant of unknown value could be `true`, which every non-empty string
+     * loosely equals.
      */
-    private static function isLooseSafeLiteral(Operand $operand): bool
+    private function isLooseSafeLiteral(Operand $operand): bool
     {
         $value = OperandHelper::literalValue($operand);
 
+        if (! $operand instanceof Operand\Literal) {
+            $strings = $this->constantStrings($operand);
+            $value = count($strings) === 1 ? $strings[0] : null;
+        }
+
         return is_string($value) && $value !== '' && ! is_numeric(trim($value));
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function constantStrings(Operand $operand): array
+    {
+        $definition = OperandHelper::definingOp($operand);
+
+        if (
+            $this->values === null
+            || (! $definition instanceof Op\Expr\ConstFetch && ! $definition instanceof Op\Expr\ClassConstFetch)
+        ) {
+            return [];
+        }
+
+        return $this->values->strings($operand);
     }
 
     /**
