@@ -144,6 +144,12 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A promoted constructor parameter, `__construct( private string $name )`,
+  never wrote its property, so a value handed to the constructor did not reach
+  the methods that read `$this->name`. The parameter is now lowered to a
+  declared property and an assignment at the top of the constructor, as PHP
+  defines it.
+
 - A class constant was recorded as a global constant under its bare name, so
   `class A { const VERSION = '1'; }` defined `VERSION` for the whole scan.
 
