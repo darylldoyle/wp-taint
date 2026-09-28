@@ -248,6 +248,7 @@ after `--` is required.
 | `wp.sqli.wpdb-query` | Untrusted input reaches a `$wpdb` query |
 | `wp.sqli.unprepared-query` | A variable interpolated into a query, origin unaccounted for |
 | `wp.sqli.prepare-non-literal` | `prepare()` with a format string built from a variable |
+| `wp.sqli.identifier-choice` | A request value names a column or table inside backticks |
 
 ### Authorization and CSRF
 

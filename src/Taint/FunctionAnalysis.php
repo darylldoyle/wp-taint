@@ -44,6 +44,12 @@ final class FunctionAnalysis
      */
     private const UNPREPARED_QUERY_RULE = 'wp.sqli.unprepared-query';
 
+    /**
+     * A request value naming a column or table, escaped correctly or not. See
+     * {@see checkQueryShape()}.
+     */
+    private const IDENTIFIER_CHOICE_RULE = 'wp.sqli.identifier-choice';
+
     /** How far {@see throughAssignments} follows `$a = $b = $c` before giving up. */
     private const MAX_ASSIGNMENT_HOPS = 16;
 
@@ -5417,6 +5423,31 @@ final class FunctionAnalysis
                     $identity,
                 ),
                 TaintKind::SqlUnticked,
+            );
+        }
+
+        // Escaping keeps an identifier one identifier. It does not stop the
+        // request choosing which: `user_pass` as readily as `post_title`. A
+        // fixed list settles that, and clears `identifier` with it.
+        $chosen = $this->queryShapes->backtickedComponent(
+            $operand,
+            fn (Operand $component): bool => $this->guardedEffectiveTaintOf($component)->has(TaintKind::Identifier),
+        );
+
+        if ($chosen !== null) {
+            $this->emit(
+                self::IDENTIFIER_CHOICE_RULE,
+                TaintKind::Identifier,
+                Severity::Medium,
+                $op,
+                $identity,
+                $chosen,
+                sprintf(
+                    '%s names a column or table inside backticks in the query passed to %s(), and the request '
+                        . 'chooses it. Check it against a fixed list of the names the query may use.',
+                    OperandHelper::describe($chosen),
+                    $identity,
+                ),
             );
         }
 

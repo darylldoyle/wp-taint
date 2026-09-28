@@ -694,6 +694,15 @@ inside quotes where a quote it holds gets out, it is reported. A
 characters is credited like `esc_sql()`. One that escapes the quotes first, or
 only one of them, gets no credit.
 
+**A name the request chooses is its own finding.** Escaping keeps an
+identifier one identifier. It does not stop the request choosing which, and
+`user_pass` is as easy to name as `post_title`. A request value inside
+backticks is reported as `wp.sqli.identifier-choice`, at medium, unless a
+check against a fixed list settles it. On a line that already reports an
+injection, the injection stands for it. A bare name, `ORDER BY $col` after
+`sanitize_key()`, is not reported: bare, a value of digits is a number rather
+than a name, and the scan does not keep which characters a value can hold.
+
 **Only some functions keep the escaping.** A value keeps `sql_unquoted` or
 `sql_self_quoted` through a propagator the catalogue marks `keeps_residuals`:
 the case functions, `trim()` without a mask, `strval()`, the array functions

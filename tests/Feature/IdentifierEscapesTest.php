@@ -16,6 +16,8 @@ function identifierEscapeFindings(string $body): array
 }
 
 it('credits an identifier escaped for the backticks it sits in', function (string $replace): void {
+    // Not an injection. The request still chooses the name, which is its own
+    // finding: see IdentifierChoiceTest.
     expect(identifierEscapeFindings(<<<PHP
         function acme_run() {
             global \$wpdb;
@@ -23,7 +25,7 @@ it('credits an identifier escaped for the backticks it sits in', function (strin
             \$wpdb->get_results( "SELECT `\$col` FROM t" );
             \$wpdb->get_results( 'SELECT `' . \$col . '` FROM t' );
         }
-        PHP))->toBe([]);
+        PHP))->toBe(['wp.sqli.identifier-choice@5', 'wp.sqli.identifier-choice@6']);
 })->with([
     'doubled' => ["'``'"],
     'removed' => ["''"],

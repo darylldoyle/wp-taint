@@ -170,6 +170,23 @@ final class QueryShapeInspector
     }
 
     /**
+     * The first component inside backticks, a column or table name, that the
+     * caller says is at risk there.
+     *
+     * @param callable(Operand): bool $atRisk
+     */
+    public function backtickedComponent(Operand $query, callable $atRisk): ?Operand
+    {
+        foreach ($this->placed($query) as [$component, $state]) {
+            if ($state === SqlQuote::Backtick && $atRisk($component)) {
+                return $component;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * The parts of a built string, each with the text it is known to hold:
      * a literal's value, or the one string a part folds to. Null for an
      * operand that is not a built string.
