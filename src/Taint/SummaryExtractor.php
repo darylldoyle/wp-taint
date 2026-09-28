@@ -28,6 +28,13 @@ final class SummaryExtractor
      */
     private array $parameterKeys = [];
 
+    /**
+     * Each function's parameter parts, which do not change between rounds.
+     *
+     * @var array<string, array<int, list<list<int|string>>>>
+     */
+    private array $parameterParts = [];
+
     public function __construct(
         private readonly IntraproceduralAnalyzer $analyzer,
         private readonly AnalysisOptions $options,
@@ -57,8 +64,18 @@ final class SummaryExtractor
         $revertedResiduals = [];
         $imprecise = $parameterCount > $analysed;
 
+        $parts = $this->parameterParts[$context->key] ??= ParameterParts::of($context->func);
+
         for ($index = 0; $index < $analysed; $index++) {
-            $result = $this->analyzer->analyze($context, $summaries, $properties, $scopes, $index, false);
+            $result = $this->analyzer->analyze(
+                $context,
+                $summaries,
+                $properties,
+                $scopes,
+                $index,
+                false,
+                $parts[$index] ?? [],
+            );
 
             $paramToReturn[$index] = $result->returnTaint;
 
@@ -145,6 +162,11 @@ final class SummaryExtractor
             $revertedResiduals,
             $paramToReturnKeys,
             $baseline->returnKeys,
+            array_filter(
+                $parts,
+                static fn (int $index): bool => $index < $analysed,
+                ARRAY_FILTER_USE_KEY,
+            ),
         );
     }
 
@@ -169,8 +191,12 @@ final class SummaryExtractor
     {
         $unique = [];
 
+        // One sink reached through two parts is reached by both.
         foreach ($references as $reference) {
-            $unique[$reference->identityKey()] ??= $reference;
+            $key = $reference->identityKey();
+            $unique[$key] = isset($unique[$key])
+                ? $unique[$key]->withParts($unique[$key]->parts | $reference->parts)
+                : $reference;
         }
 
         $result = array_values($unique);

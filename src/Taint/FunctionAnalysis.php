@@ -252,6 +252,13 @@ final class FunctionAnalysis
         private readonly array $printedReturns = [],
         private readonly ?RestRouteTable $restRoutes = null,
         private readonly ?AdministratorReach $administrators = null,
+        /**
+         * In a probe run, the parts the seeded parameter is read through,
+         * each seeded under its own number: see {@see ParameterParts}.
+         *
+         * @var list<list<int|string>>
+         */
+        private readonly array $seedParts = [],
     ) {
         $this->state = new TaintState();
         $this->restParameters = new RestParameterSanitizer($registry, $summaries);
@@ -845,20 +852,53 @@ final class FunctionAnalysis
             return;
         }
 
-        $this->state->set(
-            $param->result,
-            TaintSet::allDataflowKinds()->with(TaintKind::Seed),
-            new Provenance(
-                TraceVerb::Source,
-                $param,
-                sprintf(
-                    'Parameter %d (%s) of %s, assumed tainted while summarising the function.',
-                    $this->seedParameterIndex,
-                    $this->context->parameterName($this->seedParameterIndex),
-                    $this->context->displayName,
-                ),
+        $seed = TaintSet::allDataflowKinds()->with(TaintKind::Seed);
+        $provenance = new Provenance(
+            TraceVerb::Source,
+            $param,
+            sprintf(
+                'Parameter %d (%s) of %s, assumed tainted while summarising the function.',
+                $this->seedParameterIndex,
+                $this->context->parameterName($this->seedParameterIndex),
+                $this->context->displayName,
             ),
         );
+
+        if ($this->seedParts === []) {
+            $this->state->set($param->result, $seed, $provenance);
+
+            return;
+        }
+
+        // Part 0 is the parameter's own taint, which every part inherits.
+        // Each part the body reads the parameter through is seeded as well,
+        // under its own number, so the summary can say which reached what.
+        $this->state->set($param->result, $seed->fromPart(0), $provenance);
+
+        foreach ($this->seedParts as $position => $path) {
+            $part = self::shapeAtPart($path, $seed->fromPart($position + 1));
+            $this->state->addShape($param->result, $part, $provenance);
+        }
+    }
+
+    /**
+     * A shape holding `$taint` at `$path` and nothing else: under each literal
+     * key in turn, under any element for {@see ParameterParts::ANY}, and in the
+     * keys for a path that ends in {@see ParameterParts::KEYS}.
+     *
+     * @param list<int|string> $path
+     */
+    private static function shapeAtPart(array $path, TaintSet $taint): Shape
+    {
+        $last = $path === [] ? null : $path[count($path) - 1];
+        $shape = $last === ParameterParts::KEYS ? Shape::keys($taint) : Shape::of($taint);
+        $steps = $last === ParameterParts::KEYS ? array_slice($path, 0, -1) : $path;
+
+        foreach (array_reverse($steps) as $step) {
+            $shape = $step === ParameterParts::ANY ? Shape::rest($shape) : Shape::element($step, $shape);
+        }
+
+        return $shape;
     }
 
     /**
@@ -4919,69 +4959,74 @@ final class FunctionAnalysis
         $changed = false;
 
         foreach ($call->arguments as $index => $argument) {
-            // A guarded argument hands the callee what the guard admits.
-            $argumentTaint = self::guarded(
-                $this->argumentTaint($call, $summary, $index, $argument),
-                $this->proofFor($argument, $this->currentBlock),
-            );
+            $proof = $this->proofFor($argument, $this->currentBlock);
 
-            if ($argumentTaint->isEmpty()) {
-                continue;
-            }
+            // A callee summarised part by part gets each part of the argument
+            // through the record of that part: see argumentPieces().
+            foreach ($this->argumentPieces($call, $summary, $index, $argument) as [$record, $piece]) {
+                // A guarded argument hands the callee what the guard admits.
+                $argumentTaint = self::guarded($piece, $proof);
 
-            $anyArgumentTainted = true;
-            $reverts = $summary->revertedResidualsFor($index);
-
-            // A callee that may undo escaping, called on SQL-carrying data
-            // here, may undo it for this run's caller too.
-            $this->noteReverted($reverts, $argumentTaint);
-
-            $reached = $summary->returnTaintFor($index);
-            $returned = $argumentTaint->intersect($reached)
-                ->union(self::madeFrom($argumentTaint, $reached))
-                ->union(self::residualsThrough($argumentTaint, $reached, $reverts));
-
-            // What the argument put into the returned array's elements, as
-            // for a property: the kinds that got through the body.
-            $intoElements = self::throughBody($argumentTaint, $summary->returnContainerFor($index), $reverts);
-            $elements = $elements->union($intoElements);
-
-            foreach ($summary->returnKeyedFor($index) as $element => $kinds) {
-                $into = self::throughBody($argumentTaint, $kinds, $reverts);
-                $keyed[$element] = ($keyed[$element] ?? TaintSet::empty())->union($into);
-                $intoElements = $intoElements->union($into);
-            }
-
-            // And what it made the returned array's keys carry.
-            $intoKeys = self::throughBody($argumentTaint, $summary->returnKeysFor($index), $reverts);
-            $returnedKeys = $returnedKeys->union($intoKeys);
-
-            if (! $returned->isEmpty() || ! $intoElements->isEmpty() || ! $intoKeys->isEmpty()) {
-                $result = $result->union($returned);
-                $keys = $call->positional ? $summary->keysReadFrom($index) : null;
-
-                if ($keys !== null) {
-                    $contributorKeys[count($contributors)] = $keys;
+                if ($argumentTaint->isEmpty()) {
+                    continue;
                 }
 
-                $contributors[] = $argument;
-                $viaParameters[] = $index;
-            }
+                $anyArgumentTainted = true;
+                $reverts = $record->revertedResidualsFor($index);
 
-            $this->reportSummarySinks($op, $call, $summary, $index, $argument, $argumentTaint);
-            $changed = $this->applySummaryProperties($op, $summary, $index, $argument, $argumentTaint)
-                || $changed;
-            $changed = $this->applySummaryCaptures($op, $summary, $index, $argument, $argumentTaint)
-                || $changed;
-            $changed = $this->applySummaryScopes($op, $summary, $index, $argument, $argumentTaint)
-                || $changed;
+                // A callee that may undo escaping, called on SQL-carrying data
+                // here, may undo it for this run's caller too.
+                $this->noteReverted($reverts, $argumentTaint);
+
+                $reached = $record->returnTaintFor($index);
+                $returned = $argumentTaint->intersect($reached)
+                    ->union(self::madeFrom($argumentTaint, $reached))
+                    ->union(self::residualsThrough($argumentTaint, $reached, $reverts));
+
+                // What the argument put into the returned array's elements, as
+                // for a property: the kinds that got through the body.
+                $intoElements = self::throughBody($argumentTaint, $record->returnContainerFor($index), $reverts);
+                $elements = $elements->union($intoElements);
+
+                foreach ($record->returnKeyedFor($index) as $element => $kinds) {
+                    $into = self::throughBody($argumentTaint, $kinds, $reverts);
+                    $keyed[$element] = ($keyed[$element] ?? TaintSet::empty())->union($into);
+                    $intoElements = $intoElements->union($into);
+                }
+
+                // And what it made the returned array's keys carry.
+                $intoKeys = self::throughBody($argumentTaint, $record->returnKeysFor($index), $reverts);
+                $returnedKeys = $returnedKeys->union($intoKeys);
+
+                if (! $returned->isEmpty() || ! $intoElements->isEmpty() || ! $intoKeys->isEmpty()) {
+                    $result = $result->union($returned);
+                    $keys = $call->positional ? $summary->keysReadFrom($index) : null;
+
+                    if ($keys !== null) {
+                        $contributorKeys[count($contributors)] = $keys;
+                    }
+
+                    if (! in_array($index, $viaParameters, true)) {
+                        $contributors[] = $argument;
+                        $viaParameters[] = $index;
+                    }
+                }
+
+                $this->reportSummarySinks($op, $call, $record, $index, $argument, $argumentTaint);
+                $changed = $this->applySummaryProperties($op, $record, $index, $argument, $argumentTaint)
+                    || $changed;
+                $changed = $this->applySummaryCaptures($op, $record, $index, $argument, $argumentTaint)
+                    || $changed;
+                $changed = $this->applySummaryScopes($op, $record, $index, $argument, $argumentTaint)
+                    || $changed;
+            }
         }
 
         $result = self::withoutUnearnedEscapeMarkers($result, $anyArgumentTainted);
         $elements = self::withoutUnearnedEscapeMarkers($elements, $anyArgumentTainted);
         $returnedKeys = self::withoutUnearnedEscapeMarkers($returnedKeys, $anyArgumentTainted);
 
-        $changed = $this->applySummaryByRefEffects($op, $call, $summary) || $changed;
+        $changed = $this->applySummaryByRefEffects($op, $call, $summary->withoutParts()) || $changed;
 
         $everything = $result->union($elements)->union($returnedKeys);
 
@@ -5019,6 +5064,149 @@ final class FunctionAnalysis
      * what the array carries as a whole or under a computed key. See
      * {@see ParameterKeyReads}.
      */
+    /**
+     * What a call hands one parameter, split by the parts the callee reads it
+     * through, each piece with the summary as its part sees it.
+     *
+     * A callee summarised part by part knows which of its parameter's parts
+     * reached what: see {@see ParameterParts}. Each node of the argument's
+     * shape goes to the most specific part whose path covers the node, and
+     * what no part covers goes to part 0, the parameter's own taint, which
+     * every part inherits. A part's seed reaches whatever a read of anything
+     * below it reaches, so each piece reaches no more than its part does, and
+     * no less than the argument's taint there would.
+     *
+     *     output_fields( array( array( 'value' => $stored, 'desc' => 'Text' ) ) );
+     *
+     * hands the stored value to part `[*]['value']` only, and nothing to the
+     * part that prints `desc` raw.
+     *
+     * A callee with no parts, or a call that hands it the items of an array,
+     * gets the whole argument, as before.
+     *
+     * @return list<array{FunctionSummary, TaintSet}>
+     */
+    private function argumentPieces(CallTarget $call, FunctionSummary $summary, int $index, Operand $argument): array
+    {
+        $whole = $this->argumentTaint($call, $summary, $index, $argument);
+        $parts = $summary->partsFor($index);
+
+        if ($parts === [] || $whole->isEmpty() || $call->itemsOnly) {
+            return [[$summary->withoutParts(), $whole]];
+        }
+
+        // What the parameter receives besides its argument, array_reduce()'s
+        // carry, and the argument's own taint, reach every part.
+        $pieces = [0 => $this->state->taintOf($argument)];
+
+        foreach ($call->moreArguments[$index] ?? [] as $more) {
+            $pieces[0] = $pieces[0]->union($this->state->effectiveTaintOf($more));
+        }
+
+        $keys = $call->positional ? $summary->keysReadFrom($index) : null;
+        self::splitByParts($this->state->shapeOf($argument), [], $parts, $keys, $pieces);
+
+        $split = [];
+
+        foreach ($pieces as $part => $taint) {
+            if (! $taint->isEmpty()) {
+                $split[] = [$summary->forPart($index, $part), $taint];
+            }
+        }
+
+        return $split;
+    }
+
+    /**
+     * Put each node of `$node`, which sits at `$path` in the argument, into
+     * the piece of the part that covers it.
+     *
+     * @param list<int|string>              $path
+     * @param list<list<int|string>>        $parts
+     * @param list<array-key>|null          $keys  the only literal keys the callee reads at the top, if it reads
+     *                                             the parameter no other way: see {@see ParameterKeyReads}
+     * @param array<int, TaintSet>          $pieces
+     */
+    private static function splitByParts(Shape $node, array $path, array $parts, ?array $keys, array &$pieces): void
+    {
+        $own = $node->own();
+
+        if (! $own->isEmpty()) {
+            $part = self::coveringPart($path, $parts);
+            $pieces[$part] = ($pieces[$part] ?? TaintSet::empty())->union($own);
+        }
+
+        $nodeKeys = $node->keysTaint();
+
+        if (! $nodeKeys->isEmpty()) {
+            $part = self::coveringPart([...$path, ParameterParts::KEYS], $parts);
+            $pieces[$part] = ($pieces[$part] ?? TaintSet::empty())->union($nodeKeys);
+        }
+
+        foreach ($node->elements() as $key => $element) {
+            // An element the callee never reads cannot reach anything.
+            if ($path === [] && $keys !== null && ! in_array($key, $keys, true)) {
+                continue;
+            }
+
+            self::splitByParts($element, [...$path, ParameterParts::step($key)], $parts, $keys, $pieces);
+        }
+
+        $rest = $node->restPart();
+
+        if (! $rest->isEmpty()) {
+            self::splitByParts($rest, [...$path, ParameterParts::ANY], $parts, $keys, $pieces);
+        }
+    }
+
+    /**
+     * The part whose path covers `$path` most closely: the longest, and of
+     * two as long the one with more literal keys. A step of any element covers
+     * a literal key and any element, and the keys cover only the keys. Part 0,
+     * the parameter's own taint, covers everything.
+     *
+     * @param list<int|string>       $path
+     * @param list<list<int|string>> $parts
+     */
+    private static function coveringPart(array $path, array $parts): int
+    {
+        $best = 0;
+        $bestScore = [-1, -1];
+
+        foreach ($parts as $position => $part) {
+            if (count($part) > count($path)) {
+                continue;
+            }
+
+            $literals = 0;
+
+            foreach ($part as $i => $step) {
+                $at = $path[$i] ?? null;
+
+                if ($step === $at) {
+                    $literals += $step === ParameterParts::ANY ? 0 : 1;
+
+                    continue;
+                }
+
+                if ($step === ParameterParts::ANY && $at !== ParameterParts::KEYS) {
+                    continue;
+                }
+
+                continue 2;
+            }
+
+            $score = [count($part), $literals];
+
+            if ($score > $bestScore) {
+                $best = $position + 1;
+                $bestScore = $score;
+            }
+        }
+
+        return $best;
+    }
+
     private function argumentTaint(CallTarget $call, FunctionSummary $summary, int $index, Operand $argument): TaintSet
     {
         $keys = $call->positional ? $summary->keysReadFrom($index) : null;
@@ -5231,7 +5419,9 @@ final class FunctionAnalysis
             // parameter reached no sink. Kept at the callee's location, which
             // is still the line that needs the fix.
             if ($this->seedParameterIndex !== null) {
-                $this->sinksReached[] = $reference;
+                // Reached by whichever parts of this function's own parameter
+                // the argument carries the kind from.
+                $this->sinksReached[] = $reference->withParts($argumentTaint->partsOf($reference->kind));
 
                 continue;
             }
@@ -5619,7 +5809,7 @@ final class FunctionAnalysis
             return;
         }
 
-        $this->recordSinkReference($sink, $op, $identity);
+        $this->recordSinkReference($sink, $op, $identity, $taint->partsOf($sink->kind));
         $this->recordQuoteContext($sink, $op, $operand, $identity);
 
         if (! $this->collecting || ! $this->collectFindings) {
@@ -5677,6 +5867,7 @@ final class FunctionAnalysis
                 ),
                 $op,
                 $identity,
+                $this->state->effectiveTaintOf($unquoted)->parts(),
             );
         }
 
@@ -5826,6 +6017,7 @@ final class FunctionAnalysis
                 new Sink($sink->matcher, $sink->arguments, $kind, Severity::Critical, self::UNPREPARED_QUERY_RULE),
                 $op,
                 $identity,
+                $this->state->effectiveTaintOf($component)->parts(),
             );
         }
     }
@@ -5864,7 +6056,11 @@ final class FunctionAnalysis
         $this->propertiesReached[$id] = [$class, $property, $kinds];
     }
 
-    private function recordSinkReference(Sink $sink, Op $op, string $identity): void
+    /**
+     * @param int $parts the parts of the seeded parameter that carry the
+     *                   sink's kind here: see {@see TaintSet::partsOf()}
+     */
+    private function recordSinkReference(Sink $sink, Op $op, string $identity, int $parts = TaintSet::EVERY_PART): void
     {
         if (! $this->collecting || $this->seedParameterIndex === null) {
             return;
@@ -5885,6 +6081,7 @@ final class FunctionAnalysis
             trim($this->context->file->sourceMap->line($position['line'])),
             $this->context->displayName,
             $this->imprecise,
+            $parts === 0 ? TaintSet::EVERY_PART : $parts,
         );
     }
 

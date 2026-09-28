@@ -30,11 +30,59 @@ final class SinkReference
         public readonly string $snippet,
         public readonly string $functionDisplayName,
         public readonly bool $imprecise = false,
+        /**
+         * The parts of the summarised parameter that reached the sink with
+         * the kind: see {@see TaintSet::partsOf()}.
+         */
+        public readonly int $parts = TaintSet::EVERY_PART,
     ) {
     }
 
     public function identityKey(): string
     {
         return implode('|', [$this->ruleId, $this->relativeFile, (string) $this->line, (string) $this->column]);
+    }
+
+    /**
+     * The sink and the parts that reach it, for telling whether a summary
+     * changed.
+     */
+    public function stateKey(): string
+    {
+        return $this->identityKey() . '|' . $this->parts;
+    }
+
+    /**
+     * The same sink, reached by `$parts`.
+     */
+    public function withParts(int $parts): self
+    {
+        if ($parts === $this->parts) {
+            return $this;
+        }
+
+        return new self(
+            $this->ruleId,
+            $this->kind,
+            $this->severity,
+            $this->sinkIdentity,
+            $this->file,
+            $this->relativeFile,
+            $this->line,
+            $this->column,
+            $this->endColumn,
+            $this->snippet,
+            $this->functionDisplayName,
+            $this->imprecise,
+            $parts,
+        );
+    }
+
+    /**
+     * Whether part `$part` of the summarised parameter reaches the sink.
+     */
+    public function reachedBy(int $part): bool
+    {
+        return ($this->parts & (1 << $part)) !== 0;
     }
 }

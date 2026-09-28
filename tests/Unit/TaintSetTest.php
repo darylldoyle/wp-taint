@@ -86,3 +86,59 @@ it('gives every kind a distinct bit', function (): void {
 
     expect(count(array_unique($bits)))->toBe(count($bits));
 });
+
+it('keeps the parts each kind came from through a union', function (): void {
+    $desc = TaintSet::of(TaintKind::Html, TaintKind::Sql)->fromPart(1);
+    $value = TaintSet::of(TaintKind::Html)->fromPart(2);
+    $both = $desc->union($value);
+
+    expect($both->toStrings())->toBe(['html', 'sql'])
+        ->and($both->partsOf(TaintKind::Html))->toBe((1 << 1) | (1 << 2))
+        ->and($both->partsOf(TaintKind::Sql))->toBe(1 << 1)
+        ->and($both->partsOf(TaintKind::Path))->toBe(0)
+        ->and($both->forPart(1)->toStrings())->toBe(['html', 'sql'])
+        ->and($both->forPart(2)->toStrings())->toBe(['html'])
+        ->and($both->forPart(3)->isEmpty())->toBeTrue();
+});
+
+it('counts a kind from a set that names no parts as every part\'s', function (): void {
+    // A source, an escaper's marker, or an operation that lost the parts:
+    // any part may be behind it, so every part is.
+    $mixed = TaintSet::of(TaintKind::Html)->fromPart(1)->union(TaintSet::of(TaintKind::Html, TaintKind::Url));
+
+    expect($mixed->partsOf(TaintKind::Html))->toBe(TaintSet::EVERY_PART)
+        ->and($mixed->partsOf(TaintKind::Url))->toBe(TaintSet::EVERY_PART)
+        ->and($mixed->forPart(5)->toStrings())->toBe(['html', 'url'])
+        ->and($mixed->namesParts())->toBeFalse()
+        ->and(TaintSet::of(TaintKind::Sql)->forPart(0)->toStrings())->toBe(['sql']);
+});
+
+it('keeps the value\'s parts through a filter, and drops what it removes', function (): void {
+    $value = TaintSet::of(TaintKind::Html, TaintKind::Sql)->fromPart(3);
+
+    $kept = $value->intersect(TaintSet::of(TaintKind::Sql, TaintKind::Path));
+    $cleared = $value->without(TaintSet::of(TaintKind::Html));
+
+    expect($kept->toStrings())->toBe(['sql'])
+        ->and($kept->partsOf(TaintKind::Sql))->toBe(1 << 3)
+        ->and($cleared->equals($kept))->toBeTrue()
+        ->and($value->with(TaintKind::Escaped)->partsOf(TaintKind::Escaped))->toBe(TaintSet::EVERY_PART)
+        ->and($value->without(TaintSet::of(TaintKind::Html, TaintKind::Sql))->namesParts())->toBeFalse();
+});
+
+it('compares parts as well as kinds, and a join adds a part it did not have', function (): void {
+    $one = TaintSet::of(TaintKind::Html)->fromPart(1);
+    $two = TaintSet::of(TaintKind::Html)->fromPart(2);
+
+    expect($one->equals($two))->toBeFalse()
+        ->and($one->isSubsetOf($two))->toBeTrue()
+        ->and($one->isCoveredBy($two))->toBeFalse()
+        ->and($one->isCoveredBy($one->union($two)))->toBeTrue()
+        ->and($one->isCoveredBy(TaintSet::of(TaintKind::Html)))->toBeTrue()
+        ->and(TaintSet::of(TaintKind::Html)->isCoveredBy($one))->toBeFalse()
+        ->and($one->withoutParts()->equals(TaintSet::of(TaintKind::Html)))->toBeTrue();
+});
+
+it('refuses a part number no bit can hold', function (): void {
+    TaintSet::of(TaintKind::Html)->fromPart(TaintSet::MAX_PARTS);
+})->throws(InvalidArgumentException::class);
