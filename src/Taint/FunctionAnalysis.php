@@ -1221,7 +1221,7 @@ final class FunctionAnalysis
                 $incoming[] = $var;
                 $merged = $merged->union(self::guarded(
                     $this->state->effectiveTaintOf($var),
-                    $this->guards->proofFor($var, $this->currentBlock),
+                    $this->proofFor($var, $this->currentBlock),
                 ));
             }
         }
@@ -1405,7 +1405,7 @@ final class FunctionAnalysis
         // survives is what the check leaves possible, kind by kind.
         // Otherwise `$query['orderby'] = $params['orderby']` behind an
         // allowlist carried the request into every query built from $query.
-        $proof = $op instanceof Op\Expr\Assign ? $this->guards->proofFor($value, $this->currentBlock) : null;
+        $proof = $op instanceof Op\Expr\Assign ? $this->proofFor($value, $this->currentBlock) : null;
         $taint = self::guarded($this->state->taintOf($value), $proof);
 
         $provenance = new Provenance(
@@ -1443,6 +1443,32 @@ final class FunctionAnalysis
         }
 
         return $this->propagateIndirectWrite($op, $taint->union($container)) || $changed;
+    }
+
+    /**
+     * What the checks on every way here prove about the value, as of this
+     * pass.
+     *
+     * A proof that rests on a list staying clean holds only while it does:
+     * see {@see CharacterProof::requiringClean()}. Taint only grows across the
+     * passes, so such a proof can be lost and never regained, and the fixed
+     * point stays monotone.
+     */
+    private function proofFor(Operand $operand, ?Block $block): ?CharacterProof
+    {
+        $proof = $this->guards->proofFor($operand, $block);
+
+        if ($proof === null) {
+            return null;
+        }
+
+        foreach ($proof->cleanLists as $list) {
+            if (! $this->state->effectiveTaintOf($list)->isEmpty()) {
+                return null;
+            }
+        }
+
+        return $proof;
     }
 
     /**
@@ -2360,7 +2386,7 @@ final class FunctionAnalysis
                 continue;
             }
 
-            $proof = $this->guards->proofFor($input, $this->currentBlock);
+            $proof = $this->proofFor($input, $this->currentBlock);
             $taint = $taint->union(self::guarded($this->state->taintOf($input), $proof));
             $container = $container->union(self::guarded($this->state->shapeOf($input)->restPart()->flatten(), $proof));
 
@@ -2612,7 +2638,7 @@ final class FunctionAnalysis
     {
         $taint = self::guarded(
             $this->state->taintOf($op->var),
-            $this->guards->proofFor($op->var, $this->currentBlock),
+            $this->proofFor($op->var, $this->currentBlock),
         );
 
         return $this->writeResult(
@@ -2653,7 +2679,7 @@ final class FunctionAnalysis
         //
         // and every plugin vendoring a copy of it handed us a false positive,
         // because the early return carried the argument's taint out untouched.
-        $proof = $this->guards->proofFor($op->expr, $this->currentBlock);
+        $proof = $this->proofFor($op->expr, $this->currentBlock);
         $taint = self::guarded($this->state->taintOf($op->expr), $proof);
 
         // The elements travel as elements. Returning only the value's own
@@ -4792,7 +4818,7 @@ final class FunctionAnalysis
             // A guarded argument hands the callee what the guard admits.
             $argumentTaint = self::guarded(
                 $this->argumentTaint($call, $summary, $index, $argument),
-                $this->guards->proofFor($argument, $this->currentBlock),
+                $this->proofFor($argument, $this->currentBlock),
             );
 
             if ($argumentTaint->isEmpty()) {
@@ -5467,7 +5493,7 @@ final class FunctionAnalysis
             if ($this->callerIsEntitled()) {
                 return;
             }
-        } elseif ($this->guards->proofFor($operand, $this->currentBlock)?->settlesIn($taint, $sink->kind) ?? false) {
+        } elseif ($this->proofFor($operand, $this->currentBlock)?->settlesIn($taint, $sink->kind) ?? false) {
             // Did every path here validate the value? A guard clause is how
             // careful WordPress code constrains a request value, and it lives
             // in the shape of the control flow rather than in the value, so it
@@ -5518,7 +5544,7 @@ final class FunctionAnalysis
             $operand,
             fn (Operand $component): bool => self::guarded(
                 $this->state->effectiveTaintOf($component),
-                $this->guards->proofFor($component, $this->currentBlock),
+                $this->proofFor($component, $this->currentBlock),
             )->has(TaintKind::SqlUnquoted),
         );
 
@@ -5694,7 +5720,7 @@ final class FunctionAnalysis
     {
         return self::guarded(
             $this->state->effectiveTaintOf($operand),
-            $this->guards->proofFor($operand, $this->currentBlock),
+            $this->proofFor($operand, $this->currentBlock),
         );
     }
 

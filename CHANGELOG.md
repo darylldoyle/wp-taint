@@ -9,6 +9,11 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A strict `in_array()` against a list the code built itself is a guard. It
+  counted only against a literal array before. WooCommerce's REST settings
+  controllers check each setting a request names against the ids of their own
+  definitions, and that check now settles the value. The list must carry no
+  taint in any part, so a list read from the request settles nothing.
 - Class constants resolve. `Acme::KEY`, and `self::KEY` inside the class, fold
   to the value the class declares. A `switch` or loose comparison against one
   is a guard when it holds a string that is not numeric, and a quote kept in a
