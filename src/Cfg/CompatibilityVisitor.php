@@ -23,6 +23,10 @@ use PhpParser\NodeVisitorAbstract;
  * | `A&B`                    | 8.1   | the first named type |
  * | `(A&B)\|null`            | 8.2   | the same, inside the union |
  *
+ * Constructor promotion, `__construct( private Cache $cache )`, parses, but
+ * php-cfg drops the property it declares. It is lowered to a declared property
+ * and an assignment at the top of the constructor.
+ *
  * It also folds the identity magic constants — `__NAMESPACE__`, `__CLASS__`,
  * `__FUNCTION__`, `__METHOD__`, `__TRAIT__` — to the strings they stand for.
  * Not a compatibility fix: php-cfg parses them fine, but leaves them opaque, and
@@ -153,6 +157,8 @@ final class CompatibilityVisitor extends NodeVisitorAbstract
             $node instanceof Node\Expr\NullsafeMethodCall => $this->lowerNullsafeMethodCall($node),
             $node instanceof Node\Stmt\EnumCase => $this->lowerEnumCase($node),
             $node instanceof Node\Stmt\Enum_ => $this->lowerEnum($node),
+            $node instanceof Node\Stmt\Class_,
+            $node instanceof Node\Stmt\Trait_ => $this->lowerPromotedParameters($node),
             $node instanceof Node\IntersectionType => $this->lowerIntersectionType($node),
             $node instanceof Node\Expr\YieldFrom => $this->lowerYieldFrom($node),
             $node instanceof Node\StaticVar => $this->giveStaticVarADefault($node),
@@ -363,6 +369,72 @@ final class CompatibilityVisitor extends NodeVisitorAbstract
             ],
             $node->getAttributes(),
         );
+    }
+
+    /**
+     * `__construct( private Cache $cache )` becomes a declared property and an
+     * assignment at the top of the constructor.
+     *
+     * php-cfg reads a promoted parameter as a parameter and drops the property
+     * it declares. Nothing wrote `$this->cache`, so a value handed to the
+     * constructor never reached a method that reads it. PHP treats the two
+     * spellings as one class: the property takes the parameter's visibility,
+     * type and `readonly`, and is assigned before the constructor's first
+     * statement. A parameter with property hooks is left as it is, since its
+     * hooks run on every read and write.
+     */
+    private function lowerPromotedParameters(Node\Stmt\Class_|Node\Stmt\Trait_ $node): ?Node
+    {
+        $constructor = $node->getMethod('__construct');
+
+        if ($constructor === null || $constructor->stmts === null) {
+            return null;
+        }
+
+        $properties = [];
+        $assignments = [];
+
+        foreach ($constructor->params as $param) {
+            // Property hooks came with php-parser 5.2, and the oldest release
+            // this supports has no `hooks` on a parameter at all.
+            $hooks = get_object_vars($param)['hooks'] ?? [];
+
+            if (
+                $param->flags === 0 || $hooks !== []
+                || ! $param->var instanceof Node\Expr\Variable || ! is_string($param->var->name)
+            ) {
+                continue;
+            }
+
+            $name = $param->var->name;
+            $attributes = $param->getAttributes();
+            $properties[] = new Node\Stmt\Property(
+                $param->flags,
+                [new Node\PropertyItem($name, null, $attributes)],
+                $attributes,
+                $param->type === null ? null : clone $param->type,
+                $param->attrGroups,
+            );
+            $assignments[] = new Node\Stmt\Expression(
+                new Node\Expr\Assign(
+                    new Node\Expr\PropertyFetch(new Node\Expr\Variable('this', $attributes), $name, $attributes),
+                    new Node\Expr\Variable($name, $attributes),
+                    $attributes,
+                ),
+                $attributes,
+            );
+            $param->flags = 0;
+        }
+
+        if ($properties === []) {
+            return null;
+        }
+
+        $this->record('constructor-promotion');
+        $constructor->stmts = [...$assignments, ...$constructor->stmts];
+        $node->stmts = [...$properties, ...$node->stmts];
+
+        return $node;
     }
 
     /**
