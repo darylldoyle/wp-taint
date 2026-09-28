@@ -53,12 +53,17 @@ final class SummaryExtractor
         $paramToScope = [];
         $paramToReturnContainer = [];
         $paramToReturnKeyed = [];
+        $revertedResiduals = [];
         $imprecise = $parameterCount > $analysed;
 
         for ($index = 0; $index < $analysed; $index++) {
             $result = $this->analyzer->analyze($context, $summaries, $properties, $scopes, $index, false);
 
             $paramToReturn[$index] = $result->returnTaint;
+
+            if ($result->revertedResiduals !== null && ! $result->revertedResiduals->isEmpty()) {
+                $revertedResiduals[$index] = $result->revertedResiduals;
+            }
 
             // And what it puts into the returned array's elements, which a
             // caller reads the way it reads a local array's.
@@ -132,6 +137,7 @@ final class SummaryExtractor
             $baseline->returnContainer,
             self::sorted($baseline->returnKeyed),
             $this->parameterKeys[$context->key] ??= $this->keyReads->of($context->func),
+            $revertedResiduals,
         );
     }
 

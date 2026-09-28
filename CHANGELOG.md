@@ -138,6 +138,13 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- An escaped SQL value lost its SQL kind through a helper's return.
+  `$q = acme_id( esc_sql( $_GET['x'] ) )` used unquoted was not reported, and
+  neither was a self-quoted value returned into quotes. A helper's summary is
+  built from `sql`, and the escaped kinds were not in it. A helper now hands a
+  residual back with its `sql`, and one that may undo the escaping hands it
+  back as `sql`.
+
 - A guard credited a value written after it under the same name. `if ( empty(
   $x ) ) { $x = $_POST['y']; echo $x; }` and a digit check followed by `$id =
   $id . $_GET['s']` went unreported. A guard now covers the value it tested,
