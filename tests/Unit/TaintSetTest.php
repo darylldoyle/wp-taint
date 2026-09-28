@@ -113,6 +113,18 @@ it('counts a kind from a set that names no parts as every part\'s', function ():
         ->and(TaintSet::of(TaintKind::Sql)->forPart(0)->toStrings())->toBe(['sql']);
 });
 
+it('keeps the parts of the kinds only one side of a union has', function (): void {
+    $labelled = TaintSet::of(TaintKind::Html, TaintKind::Sql)->fromPart(2);
+    $withPlainHtml = $labelled->union(TaintSet::of(TaintKind::Html));
+
+    expect($withPlainHtml->partsOf(TaintKind::Html))->toBe(TaintSet::EVERY_PART)
+        ->and($withPlainHtml->partsOf(TaintKind::Sql))->toBe(1 << 2)
+        ->and(TaintSet::of(TaintKind::Html)->union($labelled)->equals($withPlainHtml))->toBeTrue()
+        ->and($labelled->union(TaintSet::empty())->equals($labelled))->toBeTrue()
+        ->and(TaintSet::empty()->union($labelled)->equals($labelled))->toBeTrue()
+        ->and(TaintSet::of(TaintKind::Html, TaintKind::Sql)->union($labelled)->namesParts())->toBeFalse();
+});
+
 it('keeps the value\'s parts through a filter, and drops what it removes', function (): void {
     $value = TaintSet::of(TaintKind::Html, TaintKind::Sql)->fromPart(3);
 

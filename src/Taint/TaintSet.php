@@ -48,7 +48,10 @@ final class TaintSet
 
     public static function empty(): self
     {
-        return new self(0);
+        /** @var self|null $empty */
+        static $empty = null;
+
+        return $empty ??= new self(0);
     }
 
     /**
@@ -103,6 +106,16 @@ final class TaintSet
 
     public function union(self $other): self
     {
+        // Most unions add nothing to one side, and a side that names no parts
+        // or elements takes in every kind the other has that it has too.
+        if (($other->mask & ~$this->mask) === 0 && $this->parts === null && $this->elements === null) {
+            return $this;
+        }
+
+        if (($this->mask & ~$other->mask) === 0 && $other->parts === null && $other->elements === null) {
+            return $other;
+        }
+
         $mask = $this->mask | $other->mask;
 
         if (
@@ -481,8 +494,14 @@ final class TaintSet
      */
     private static function merged(int $mask, ?array $mine, int $mineMask, ?array $theirs, int $theirsMask): ?array
     {
-        if ($mine === null && $theirs === null) {
-            return null;
+        // A side with no map has every kind it holds from every bit, which
+        // absorbs whatever the other side names for it.
+        if ($mine === null) {
+            return $theirs === null ? null : self::restricted($theirs, ~$mineMask);
+        }
+
+        if ($theirs === null) {
+            return self::restricted($mine, ~$theirsMask);
         }
 
         $merged = [];
