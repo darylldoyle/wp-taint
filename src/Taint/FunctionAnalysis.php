@@ -4150,7 +4150,7 @@ final class FunctionAnalysis
 
     private function formatStringIsUnsafe(Operand $formatArgument): bool
     {
-        if ($this->literals->isEffectivelyLiteral($formatArgument)) {
+        if ($this->literals->isEffectivelyLiteral($formatArgument, $this->context, $this->types)) {
             return false;
         }
 

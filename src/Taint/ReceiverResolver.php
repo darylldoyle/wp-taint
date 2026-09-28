@@ -353,6 +353,18 @@ final class ReceiverResolver
             return $this->resolve($definition->expr, $context, $types, $depth + 1);
         }
 
+        // `$GLOBALS['wpdb']` is the global `$wpdb` by another spelling, and
+        // uninstall scripts use it as often as `global $wpdb`.
+        if (
+            $definition instanceof Op\Expr\ArrayDimFetch
+            && OperandHelper::variableName($definition->var) === 'GLOBALS'
+            && $definition->dim instanceof Operand
+        ) {
+            $global = strtolower(OperandHelper::literalString($definition->dim) ?? '');
+
+            return in_array($global, self::WPDB_RECEIVER_NAMES, true) ? 'wpdb' : null;
+        }
+
         // `code_snippets()` returning `Plugin`, and `Plugin::make()` returning
         // `self`. Declared, never inferred — see DeclaredTypes.
         $returned = $this->returnedClass($definition, $context, $types, $depth);

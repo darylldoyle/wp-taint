@@ -39,15 +39,16 @@ final class Dispatcher
         public readonly bool $hook = false,
         public readonly ?string $note = null,
         /**
-         * True when the hook argument may be an array: a name, then modifiers
-         * that each fire a longer name as well. Gravity Forms dispatches this
-         * way: `gf_do_action( array( 'gform_after_submission', $form_id ),
-         * $entry, $form )` fires `gform_after_submission` and then
+         * The separator a hook's modifiers are joined with, when the hook
+         * argument may be an array: a name, then modifiers that each fire a
+         * longer name as well. Gravity Forms dispatches this way with `_`:
+         * `gf_do_action( array( 'gform_after_submission', $form_id ), $entry,
+         * $form )` fires `gform_after_submission` and then
          * `gform_after_submission_{$form_id}`. The older form passes the
          * modifier as the second argument instead, and the callee's arguments
-         * then start one later.
+         * then start one later. Null for a hook argument that is one name.
          */
-        public readonly bool $hookModifiers = false,
+        public readonly ?string $modifierSeparator = null,
         /**
          * Where each of the callee's parameters gets its value, when the
          * mode alone does not say: the dispatcher's arguments whose taint it

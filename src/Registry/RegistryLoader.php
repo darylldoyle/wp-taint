@@ -507,10 +507,32 @@ final class RegistryLoader
                 $returns,
                 $this->boolValue($file, $context . ' hook', $entry['hook'] ?? false),
                 $this->optionalString($file, $context . ' note', $entry['note'] ?? null),
-                $this->boolValue($file, $context . ' hook_modifiers', $entry['hook_modifiers'] ?? false),
+                $this->modifierSeparator($file, $context . ' hook_modifiers', $entry['hook_modifiers'] ?? null),
                 $this->parameterSources($file, $context . ' parameters', $entry['parameters'] ?? null),
             ));
         }
+    }
+
+    /**
+     * `hook_modifiers = "_"`: the separator a hook's modifiers are joined
+     * with. A dispatcher's conventions are the catalogue's to state, so the
+     * engine has none of its own.
+     */
+    private function modifierSeparator(string $file, string $context, mixed $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (! is_string($value) || $value === '') {
+            throw RegistryException::at(
+                $file,
+                $context,
+                'must be the separator the modifiers are joined with, such as "_".',
+            );
+        }
+
+        return $value;
     }
 
     /**

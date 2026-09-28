@@ -67,7 +67,7 @@ final class QueryShapeInspector
         }
 
         foreach ($components as $component) {
-            if ($this->literals->isEffectivelyLiteral($component)) {
+            if ($this->literals->isEffectivelyLiteral($component, $context, $types)) {
                 continue;
             }
 

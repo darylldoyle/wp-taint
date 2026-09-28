@@ -68,6 +68,7 @@ final class IntraproceduralAnalyzer
         // body as written, so nothing it writes belongs in the shared property
         // map. See PropertyTaintMap::$sealed.
         $properties = $seedParameterIndex === null ? $properties : $properties->sealed();
+        $receivers = new ReceiverResolver($this->functions->declaredTypes());
 
         return (new FunctionAnalysis(
             $context,
@@ -76,12 +77,12 @@ final class IntraproceduralAnalyzer
             $this->resolver,
             // Built per run: it consults the property map, which the caller
             // owns and which grows as the interprocedural rounds proceed.
-            new LiteralAnalyzer($this->registry, $properties),
+            new LiteralAnalyzer($this->registry, $properties, $receivers),
             $summaries,
             $properties,
             $scopes,
             $this->includes,
-            new ReceiverResolver($this->functions->declaredTypes()),
+            $receivers,
             $this->options,
             $seedParameterIndex,
             $collectFindings,

@@ -196,6 +196,10 @@ final class OriginClassifier
      * `$this->table_name` holding a table name is the shape this exists for: it
      * is not a literal, but if the scan saw where it was set and nothing
      * tainted reached it, its origin *is* accounted for.
+     *
+     * The table names count on the database handle only, as the receiver
+     * resolver finds it: declared types first, then the `$wpdb` and `$db`
+     * names. A plugin's own `$this->options` is not `$wpdb->options`.
      */
     private function checkPropertyFetch(
         Op\Expr\PropertyFetch $fetch,
@@ -208,11 +212,14 @@ final class OriginClassifier
             return false;
         }
 
-        if (in_array($property, $this->registry->safeDatabaseIdentifiers(), true)) {
+        $owner = $this->propertyOwner($fetch, $context, $types);
+
+        if (
+            $owner !== null && strtolower($owner) === 'wpdb'
+            && in_array($property, $this->registry->safeDatabaseIdentifiers(), true)
+        ) {
             return true;
         }
-
-        $owner = $this->propertyOwner($fetch, $context, $types);
 
         // The nearest class in the hierarchy that tracked the property answers.
         // A `protected $table` written in the base class's constructor and read

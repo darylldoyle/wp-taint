@@ -17,10 +17,17 @@ description = "WordPress VIP platform restrictions and helpers"
 function = "wpcom_vip_get_term_link"
 clears = ["html", "html_attr", "url"]
 
-[[sanitizers]]
+# vip_safe_wp_remote_get() applies the VIP timeout and retry policy. It does not
+# check the host, so a URL the request chooses is as much a server-side request
+# forgery as it is through wp_remote_get(). VIP requires the wrapper, and that
+# requirement is wp.vip.remote-request below; the host is still the caller's to
+# validate.
+[[sinks]]
 function = "vip_safe_wp_remote_get"
-clears = ["url"]
-note = "Applies the VIP timeout and retry policy but does not validate the host; kept here because VIP requires it in place of wp_remote_get."
+args = [0]
+kind = "url"
+severity = "medium"
+rule_id = "wp.ssrf.remote-request"
 
 # =============================================================================
 # DISCOURAGED ON VIP
