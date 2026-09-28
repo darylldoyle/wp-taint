@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Taint;
 
+use PHPCfg\Operand;
+
 /**
  * What a value can carry, given the characters it can contain.
  *
@@ -77,7 +79,29 @@ final class CharacterProof
         public readonly bool $sqlQuotedOnly,
         /** A fixed list of literals: settles `identifier` too. */
         public readonly bool $complete = false,
+        /**
+         * Lists the proof holds only while they carry no taint at all. See
+         * {@see requiringClean()}.
+         *
+         * @var list<Operand>
+         */
+        public readonly array $cleanLists = [],
     ) {
+    }
+
+    /**
+     * This proof, held only while `$list` carries no taint in any part.
+     *
+     * `in_array( $key, $allowed, true )` makes `$key` one of `$allowed`'s
+     * values. When the code built `$allowed` itself, from its own definitions,
+     * that is as good as a literal list. Whether the list is clean is a fact
+     * about taint, which the guard's structure cannot see and which may change
+     * as the analysis learns more, so the proof names the list and whoever
+     * applies it checks.
+     */
+    public function requiringClean(Operand $list): self
+    {
+        return new self($this->clears, $this->sqlQuotedOnly, $this->complete, [...$this->cleanLists, $list]);
     }
 
     /**
@@ -159,15 +183,19 @@ final class CharacterProof
      */
     public function and(self $other): self
     {
+        $lists = [...$this->cleanLists, ...$other->cleanLists];
+
         if ($this->complete || $other->complete) {
-            return $this->complete ? $this : $other;
+            $complete = $this->complete ? $this : $other;
+
+            return new self($complete->clears, $complete->sqlQuotedOnly, true, $lists);
         }
 
         $clears = $this->clears->union($other->clears);
         $fullSql = ($this->clears->has(TaintKind::Sql) && ! $this->sqlQuotedOnly)
             || ($other->clears->has(TaintKind::Sql) && ! $other->sqlQuotedOnly);
 
-        return new self($clears, $clears->has(TaintKind::Sql) && ! $fullSql);
+        return new self($clears, $clears->has(TaintKind::Sql) && ! $fullSql, false, $lists);
     }
 
     /**
@@ -175,8 +203,10 @@ final class CharacterProof
      */
     public function or(self $other): self
     {
+        $lists = [...$this->cleanLists, ...$other->cleanLists];
+
         if ($this->complete && $other->complete) {
-            return $this;
+            return new self($this->clears, $this->sqlQuotedOnly, true, $lists);
         }
 
         $clears = $this->clears->intersect($other->clears);
@@ -184,6 +214,8 @@ final class CharacterProof
         return new self(
             $clears,
             $clears->has(TaintKind::Sql) && ($this->sqlQuotedOnly || $other->sqlQuotedOnly),
+            false,
+            $lists,
         );
     }
 

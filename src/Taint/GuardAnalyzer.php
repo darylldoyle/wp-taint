@@ -693,10 +693,17 @@ final class GuardAnalyzer
             // Loose comparison is not a constraint: `in_array( '0abc', [ 0 ] )`
             // is true in PHP before 8, and the third-party suite marks the
             // loose form as a case an analyser should still flag.
-            return isset($arguments[1], $arguments[2])
-                && $checksValue(0)
-                && $this->isTrue($arguments[2])
-                && $this->isLiteralArray($arguments[1]) ? [true, CharacterProof::complete()] : null;
+            if (! isset($arguments[1], $arguments[2]) || ! $checksValue(0) || ! $this->isTrue($arguments[2])) {
+                return null;
+            }
+
+            // A list the code built itself, from its own definitions, settles
+            // the value as a literal one does, while it stays clean: WooCommerce
+            // checks each setting a REST request names against
+            // `array_keys( $settings_by_id )` before saving it.
+            return $this->isLiteralArray($arguments[1])
+                ? [true, CharacterProof::complete()]
+                : [true, CharacterProof::complete()->requiringClean($arguments[1])];
         }
 
         if ($function === 'array_key_exists') {
