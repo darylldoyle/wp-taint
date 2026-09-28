@@ -53,6 +53,7 @@ final class SummaryExtractor
         $paramToScope = [];
         $paramToReturnContainer = [];
         $paramToReturnKeyed = [];
+        $paramToReturnKeys = [];
         $revertedResiduals = [];
         $imprecise = $parameterCount > $analysed;
 
@@ -75,6 +76,10 @@ final class SummaryExtractor
                 $keyed = $result->returnKeyed;
                 ksort($keyed);
                 $paramToReturnKeyed[$index] = $keyed;
+            }
+
+            if ($result->returnKeys !== null && ! $result->returnKeys->isEmpty()) {
+                $paramToReturnKeys[$index] = $result->returnKeys;
             }
             $clears[$index] = TaintSet::allDataflowKinds()->without($result->returnTaint);
             $paramToSink[$index] = self::deduplicate($result->sinksReached);
@@ -138,6 +143,8 @@ final class SummaryExtractor
             self::sorted($baseline->returnKeyed),
             $this->parameterKeys[$context->key] ??= $this->keyReads->of($context->func),
             $revertedResiduals,
+            $paramToReturnKeys,
+            $baseline->returnKeys,
         );
     }
 

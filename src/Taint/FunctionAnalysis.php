@@ -104,6 +104,9 @@ final class FunctionAnalysis
      */
     private array $returnKeyed = [];
 
+    /** What the returned array's keys carry. */
+    private TaintSet $returnKeys;
+
     /** Null until the first return is seen; then AND-ed across every return. */
     private ?bool $returnAnchored = null;
 
@@ -271,6 +274,7 @@ final class FunctionAnalysis
         $this->capabilityGuards = new CapabilityGuard($registry, $callGraph);
         $this->returnTaint = TaintSet::empty();
         $this->returnContainer = TaintSet::empty();
+        $this->returnKeys = TaintSet::empty();
         $this->returnAnchored = null;
         $this->blocks = BlockOrder::of($this->context->func->cfg);
         $this->guards->forFunction($this->blocks);
@@ -350,6 +354,7 @@ final class FunctionAnalysis
             $this->returnContainer,
             $this->returnKeyed,
             $this->revertedResiduals,
+            $this->returnKeys,
         );
     }
 
@@ -1123,7 +1128,7 @@ final class FunctionAnalysis
     }
 
     /**
-     * `$a = &$b`: one slot under two names, both halves.
+     * `$a = &$b`: one slot under two names, all of it.
      */
     private function mergeOperandAlias(Operand $left, Operand $right): bool
     {
@@ -1136,20 +1141,13 @@ final class FunctionAnalysis
             $changed = $this->state->add($right, $own, $provenance) || $changed;
         }
 
-        $elements = $this->state->shapeOf($left)->restPart()->flatten()
-            ->union($this->state->shapeOf($right)->restPart()->flatten());
+        // Every element travels with the slot, each with the write behind it.
+        // Sharing only those under a computed key lost
+        // `$d = &$c; $d['j'] = $_GET['y']; echo $c['j'];`.
+        $shape = $this->state->shapeOf($left)->join($this->state->shapeOf($right));
+        $changed = $this->state->addShape($left, $shape) || $changed;
 
-        if (! $elements->isEmpty()) {
-            $provenance = $this->state->partProvenanceOf($left, null)
-                ?? $this->state->partProvenanceOf($right, null);
-
-            if ($provenance !== null) {
-                $changed = $this->state->addShape($left, Shape::rest(Shape::of($elements)), $provenance) || $changed;
-                $changed = $this->state->addShape($right, Shape::rest(Shape::of($elements)), $provenance) || $changed;
-            }
-        }
-
-        return $changed;
+        return $this->state->addShape($right, $shape) || $changed;
     }
 
     /**
@@ -1442,7 +1440,18 @@ final class FunctionAnalysis
             $changed = $this->state->copyElements($value, $op->result) || $changed;
         }
 
-        return $this->propagateIndirectWrite($op, $taint->union($container)) || $changed;
+        // So do the keys, each with the write that made it. A guard vouches
+        // for a scalar, which has none.
+        $shape = $this->state->shapeOf($value);
+        $keys = $proof === null ? $shape->keysTaint() : TaintSet::empty();
+
+        if (! $keys->isEmpty()) {
+            $kept = Shape::keys($keys, $shape->keysProvenance());
+            $changed = $this->state->addShape($op->var, $kept, $provenance) || $changed;
+            $changed = $this->state->addShape($op->result, $kept, $provenance) || $changed;
+        }
+
+        return $this->propagateIndirectWrite($op, $taint->union($container)->union($keys)) || $changed;
     }
 
     /**
@@ -1479,6 +1488,34 @@ final class FunctionAnalysis
     private static function guarded(TaintSet $taint, ?CharacterProof $proof): TaintSet
     {
         return $proof === null ? $taint : $proof->apply($taint);
+    }
+
+    /**
+     * The taint of a computed key an element write used, recorded on the
+     * array's keys. `foreach` keys and array_keys() read it.
+     */
+    private function recordKeyTaint(Op\Expr\Assign|Op\Expr\AssignRef $op, Op\Expr\ArrayDimFetch $target): bool
+    {
+        $dim = $target->dim;
+
+        if ($dim === null) {
+            return false;
+        }
+
+        // A key checked against a list the code knows carries only what the
+        // check leaves possible, as a value would.
+        $taint = self::guarded($this->state->effectiveTaintOf($dim), $this->proofFor($dim, $this->currentBlock));
+
+        return $this->state->addShape(
+            $target->var,
+            Shape::keys($taint),
+            new Provenance(
+                TraceVerb::Propagate,
+                $op,
+                sprintf('Used as a key of %s.', OperandHelper::describe($target->var)),
+                [$dim],
+            ),
+        );
     }
 
     /**
@@ -1523,8 +1560,16 @@ final class FunctionAnalysis
             }
         }
 
+        // A computed key carries its own taint, and that is the key's, not an
+        // element's: `$seen[ $_POST['name'] ] = true` makes a key of request
+        // data and a value of `true`. Recorded whatever the value holds.
+        $keyed = $target instanceof Op\Expr\ArrayDimFetch
+            && $target->dim !== null
+            && OperandHelper::literalKey($target->dim) === null
+            && $this->recordKeyTaint($op, $target);
+
         if ($taint->isEmpty()) {
-            return false;
+            return $keyed;
         }
 
         if ($target instanceof Op\Expr\ArrayDimFetch) {
@@ -1566,7 +1611,7 @@ final class FunctionAnalysis
                     ),
                     [$op->expr],
                 ),
-            );
+            ) || $keyed;
         }
 
         if ($target instanceof Op\Expr\PropertyFetch || $target instanceof Op\Expr\StaticPropertyFetch) {
@@ -2374,6 +2419,7 @@ final class FunctionAnalysis
     ): bool {
         $taint = TaintSet::empty();
         $container = TaintSet::empty();
+        $keys = TaintSet::empty();
 
         /** @var list<array{0: Operand, 1: string, 2: TaintSet}> $kept */
         $kept = [];
@@ -2389,6 +2435,11 @@ final class FunctionAnalysis
             $proof = $this->proofFor($input, $this->currentBlock);
             $taint = $taint->union(self::guarded($this->state->taintOf($input), $proof));
             $container = $container->union(self::guarded($this->state->shapeOf($input)->restPart()->flatten(), $proof));
+
+            // A result that keeps its input's keys keeps what they carry.
+            if ($keepsKeys) {
+                $keys = $keys->union(self::guarded($this->state->shapeOf($input)->keysTaint(), $proof));
+            }
 
             foreach ($this->state->shapeOf($input)->elements() as $key => $element) {
                 $keyed = $element->flatten();
@@ -2427,7 +2478,7 @@ final class FunctionAnalysis
 
         $hasKept = array_filter($kept, static fn (array $entry): bool => ! $entry[2]->isEmpty()) !== [];
 
-        $provenance = $taint->isEmpty() && $container->isEmpty() && ! $hasKept
+        $provenance = $taint->isEmpty() && $container->isEmpty() && $keys->isEmpty() && ! $hasKept
             ? null
             : new Provenance(TraceVerb::Propagate, $op, $description, $inputs, imprecise: $imprecise);
 
@@ -2439,6 +2490,10 @@ final class FunctionAnalysis
 
         if (! $container->isEmpty()) {
             $changed = $this->state->addShape($op->result, Shape::rest(Shape::of($container)), $provenance) || $changed;
+        }
+
+        if (! $keys->isEmpty()) {
+            $changed = $this->state->addShape($op->result, Shape::keys($keys), $provenance) || $changed;
         }
 
         foreach ($kept as [$input, $key, $keyed]) {
@@ -2632,12 +2687,12 @@ final class FunctionAnalysis
      * Keys, not values: `foreach ( $_GET as $k => $v )` has an
      * attacker-controlled key, but `foreach ( $rows as $k => $v )` after
      * `$rows[$i] = $tainted` does not. So the key takes the collection's own
-     * taint and none of its elements'.
+     * taint and its keys', and none of its elements'.
      */
     private function transferIteratorKey(Op\Iterator\Key $op): bool
     {
         $taint = self::guarded(
-            $this->state->taintOf($op->var),
+            $this->keysOf($op->var),
             $this->proofFor($op->var, $this->currentBlock),
         );
 
@@ -2651,6 +2706,15 @@ final class FunctionAnalysis
                 [$op->var],
             ),
         );
+    }
+
+    /**
+     * What an array's keys carry: its own taint, which every key inherits,
+     * and what the computed keys written into it carried.
+     */
+    private function keysOf(Operand $array): TaintSet
+    {
+        return $this->state->taintOf($array)->union($this->state->shapeOf($array)->keysTaint());
     }
 
     private function transferPassThrough(Op\Expr $op, Operand $input, string $description): bool
@@ -2680,6 +2744,7 @@ final class FunctionAnalysis
         // and every plugin vendoring a copy of it handed us a false positive,
         // because the early return carried the argument's taint out untouched.
         $proof = $this->proofFor($op->expr, $this->currentBlock);
+
         $taint = self::guarded($this->state->taintOf($op->expr), $proof);
 
         // The elements travel as elements. Returning only the value's own
@@ -2687,6 +2752,10 @@ final class FunctionAnalysis
         // return $a;` handed every caller a clean array.
         $container = self::guarded($this->state->shapeOf($op->expr)->restPart()->flatten(), $proof);
         $keyed = $proof === null ? $this->state->shapeOf($op->expr)->elementsFlattenedByKey() : [];
+
+        // And the keys as keys, so a caller's `foreach` keys read them and its
+        // values do not.
+        $keys = $proof === null ? $this->state->shapeOf($op->expr)->keysTaint() : TaintSet::empty();
 
         $this->reportShortcodeReturn(
             $op,
@@ -2708,6 +2777,10 @@ final class FunctionAnalysis
             $changed = ! $merged->equals($existing) || $changed;
             $this->returnKeyed[$key] = $merged;
         }
+
+        $merged = $this->returnKeys->union($keys);
+        $changed = ! $merged->equals($this->returnKeys) || $changed;
+        $this->returnKeys = $merged;
 
         return $changed;
     }
@@ -4354,12 +4427,12 @@ final class FunctionAnalysis
         $description = $propagator->note
             ?? sprintf('%s passes its argument through unchanged.', $matcher->describe());
 
-        // array_keys() returns keys, so it reads the array's own taint and not
-        // what element writes put into it. See transferArrayLiteral().
+        // array_keys() returns keys, so it reads what the array's keys carry
+        // and not what element writes put into its values. See keysOf().
         if ($matcher->key() === 'function:array_keys' && $inputs !== []) {
             return $this->writeResult(
                 $op->result,
-                $this->state->taintOf($inputs[0]),
+                $this->keysOf($inputs[0]),
                 new Provenance(TraceVerb::Propagate, $op, $description, $inputs),
             );
         }
@@ -4808,6 +4881,7 @@ final class FunctionAnalysis
         $result = $summary->introduces();
         $elements = $summary->introducesContainer();
         $keyed = $summary->introducesKeyed;
+        $returnedKeys = $summary->introducesKeys();
         $contributors = [];
         $contributorKeys = [];
         $viaParameters = [];
@@ -4848,7 +4922,11 @@ final class FunctionAnalysis
                 $intoElements = $intoElements->union($into);
             }
 
-            if (! $returned->isEmpty() || ! $intoElements->isEmpty()) {
+            // And what it made the returned array's keys carry.
+            $intoKeys = self::throughBody($argumentTaint, $summary->returnKeysFor($index), $reverts);
+            $returnedKeys = $returnedKeys->union($intoKeys);
+
+            if (! $returned->isEmpty() || ! $intoElements->isEmpty() || ! $intoKeys->isEmpty()) {
                 $result = $result->union($returned);
                 $keys = $call->positional ? $summary->keysReadFrom($index) : null;
 
@@ -4871,10 +4949,11 @@ final class FunctionAnalysis
 
         $result = self::withoutUnearnedEscapeMarkers($result, $anyArgumentTainted);
         $elements = self::withoutUnearnedEscapeMarkers($elements, $anyArgumentTainted);
+        $returnedKeys = self::withoutUnearnedEscapeMarkers($returnedKeys, $anyArgumentTainted);
 
         $changed = $this->applySummaryByRefEffects($op, $call, $summary) || $changed;
 
-        $everything = $result->union($elements);
+        $everything = $result->union($elements)->union($returnedKeys);
 
         foreach ($keyed as $element => $kinds) {
             $keyed[$element] = self::withoutUnearnedEscapeMarkers($kinds, $anyArgumentTainted);
@@ -4897,7 +4976,7 @@ final class FunctionAnalysis
 
         $changed = $this->writeResult($op->result, $result, $provenance) || $changed;
 
-        return $this->writeReturnedElements($op->result, $elements, $keyed, $provenance) || $changed;
+        return $this->writeReturnedElements($op->result, $elements, $keyed, $returnedKeys, $provenance) || $changed;
     }
 
     /**
@@ -4948,21 +5027,26 @@ final class FunctionAnalysis
         Operand $result,
         TaintSet $elements,
         array $keyed,
+        TaintSet $keys,
         Provenance $provenance,
     ): bool {
         if ($this->resultMode === CallResultMode::Discard) {
             return false;
         }
 
+        // The keys are the returned array's keys whichever way its elements
+        // land.
+        $changed = $this->state->addShape($result, Shape::keys($keys), $provenance);
+
         if ($this->resultMode === CallResultMode::Container) {
             foreach ($keyed as $kinds) {
                 $elements = $elements->union($kinds);
             }
 
-            return $this->state->addShape($result, Shape::rest(Shape::of($elements)), $provenance);
+            return $this->state->addShape($result, Shape::rest(Shape::of($elements)), $provenance) || $changed;
         }
 
-        $changed = $this->state->addShape($result, Shape::rest(Shape::of($elements)), $provenance);
+        $changed = $this->state->addShape($result, Shape::rest(Shape::of($elements)), $provenance) || $changed;
 
         foreach ($keyed as $key => $kinds) {
             $changed = $this->state->addShape($result, Shape::element($key, Shape::of($kinds)), $provenance)

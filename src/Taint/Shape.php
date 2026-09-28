@@ -57,6 +57,7 @@ final class Shape
         private readonly array $elements,
         private readonly ?self $rest,
         private readonly ?Provenance $provenance = null,
+        private readonly ?Provenance $keysProvenance = null,
     ) {
     }
 
@@ -72,6 +73,17 @@ final class Shape
     public static function of(TaintSet $own, ?Provenance $provenance = null): self
     {
         return $own->isEmpty() ? self::empty() : new self($own, TaintSet::empty(), [], null, $provenance);
+    }
+
+    /**
+     * An array whose keys carry `$keys`: what a write under a computed key
+     * used as the key.
+     */
+    public static function keys(TaintSet $keys, ?Provenance $provenance = null): self
+    {
+        return $keys->isEmpty()
+            ? self::empty()
+            : new self(TaintSet::empty(), $keys, [], null, null, $provenance);
     }
 
     /**
@@ -101,9 +113,17 @@ final class Shape
         return $this->own;
     }
 
-    public function keys(): TaintSet
+    public function keysTaint(): TaintSet
     {
         return $this->keys;
+    }
+
+    /**
+     * The write that made a key carry its taint.
+     */
+    public function keysProvenance(): ?Provenance
+    {
+        return $this->keysProvenance;
     }
 
     /**
@@ -136,6 +156,7 @@ final class Shape
             $elements,
             $this->rest?->withProvenance($provenance),
             $this->provenance ?? ($this->own->isEmpty() ? null : $provenance),
+            $this->keysProvenance ?? ($this->keys->isEmpty() ? null : $provenance),
         );
     }
 
@@ -250,12 +271,17 @@ final class Shape
             ? $this->provenance ?? $other->provenance
             : $other->provenance ?? $this->provenance;
 
+        $keysProvenance = $other->keys->isSubsetOf($this->keys)
+            ? $this->keysProvenance ?? $other->keysProvenance
+            : $other->keysProvenance ?? $this->keysProvenance;
+
         return new self(
             $this->own->union($other->own),
             $this->keys->union($other->keys),
             $elements,
             $rest,
             $provenance,
+            $keysProvenance,
         );
     }
 
@@ -322,7 +348,14 @@ final class Shape
             $elements[$key] = $element->cut($levels - 1);
         }
 
-        return new self($this->own, $this->keys, $elements, $this->rest?->cut($levels - 1), $this->provenance);
+        return new self(
+            $this->own,
+            $this->keys,
+            $elements,
+            $this->rest?->cut($levels - 1),
+            $this->provenance,
+            $this->keysProvenance,
+        );
     }
 
     /**

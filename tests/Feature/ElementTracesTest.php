@@ -77,8 +77,13 @@ it('gives a loop key the collection\'s own taint and none of its elements\'', fu
                 echo '<label for="' . $k . '">';
             }
         }
-        PHP))->toHaveCount(1)
-        ->sequence(fn ($finding) => $finding->toMatchArray(['rule' => 'wp.xss.unescaped-output', 'line' => 11]));
+        PHP))->toBe([
+            // The first key is $i, a parameter nothing in the scan calls, so
+            // it is of unknown origin. The request data in the element does
+            // not reach it.
+            ['rule' => 'wp.output.unescaped-unknown', 'line' => 6, 'first' => 'source@2'],
+            ['rule' => 'wp.xss.unescaped-output', 'line' => 11, 'first' => 'source@0'],
+        ]);
 });
 
 it('starts a trace where a summary introduced the kind, not at the argument', function (): void {

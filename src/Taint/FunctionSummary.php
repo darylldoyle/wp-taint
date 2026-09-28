@@ -148,7 +148,32 @@ final class FunctionSummary
          * @var array<int, TaintSet>
          */
         public readonly array $revertedResiduals = [],
+        /**
+         * Kinds each parameter puts into the returned array's keys, written
+         * under a computed key: `$a[ $x ] = 1; return $a;`. Kept apart from
+         * the elements, so a caller's `foreach` keys read them and its values
+         * do not.
+         *
+         * @var array<int, TaintSet>
+         */
+        public readonly array $paramToReturnKeys = [],
+        /**
+         * What the returned array's keys carry regardless of any argument:
+         * `$counts[ $row->status ] = $row->total; return $counts;` keys the
+         * counts by stored data.
+         */
+        public readonly ?TaintSet $introducesKeysOrNull = null,
     ) {
+    }
+
+    public function returnKeysFor(int $parameterIndex): TaintSet
+    {
+        return $this->paramToReturnKeys[$parameterIndex] ?? TaintSet::empty();
+    }
+
+    public function introducesKeys(): TaintSet
+    {
+        return $this->introducesKeysOrNull ?? TaintSet::empty();
     }
 
     /**
@@ -350,6 +375,8 @@ final class FunctionSummary
             self::mergeKeyed([$this->introducesKeyed], [$other->introducesKeyed])[0] ?? [],
             self::mergeParameterKeys($this->parameterKeys, $other->parameterKeys),
             self::mergeSets($this->revertedResiduals, $other->revertedResiduals),
+            self::mergeSets($this->paramToReturnKeys, $other->paramToReturnKeys),
+            $this->introducesKeys()->union($other->introducesKeys()),
         );
     }
 
@@ -681,7 +708,9 @@ final class FunctionSummary
         // does.
         if (
             ! $this->introducesContainer()->equals($other->introducesContainer())
+            || ! $this->introducesKeys()->equals($other->introducesKeys())
             || ! self::setsEqual($this->paramToReturnContainer, $other->paramToReturnContainer)
+            || ! self::setsEqual($this->paramToReturnKeys, $other->paramToReturnKeys)
             || ! self::setsEqual($this->introducesKeyed, $other->introducesKeyed)
             || array_keys($this->paramToReturnKeyed) !== array_keys($other->paramToReturnKeyed)
         ) {

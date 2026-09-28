@@ -169,6 +169,15 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   voided. The escaping ledger now stays out of the store on both routes, as it
   did for a direct write.
 
+- A computed key's taint went nowhere. `$seen[ $_POST['name'] ] = true` made a
+  key of request data, and a `foreach` over `$seen` or `array_keys( $seen )`
+  read clean keys. The key's taint now lands on the array's keys. It travels
+  with the array through a copy, an element or property write, a pass-through
+  that keeps keys and a function's return.
+- A reference shared only an array's elements under computed keys. After
+  `$d = &$c`, a write to `$d['j']` never reached `$c['j']`. A reference now
+  shares the whole array.
+
 - A promoted constructor parameter, `__construct( private string $name )`,
   never wrote its property, so a value handed to the constructor did not reach
   the methods that read `$this->name`. The parameter is now lowered to a
