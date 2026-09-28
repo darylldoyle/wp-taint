@@ -56,10 +56,12 @@ final class IntraproceduralAnalyzer
     }
 
     /**
-     * @param int|null $seedParameterIndex when set, that parameter is seeded
-     *                                     with every taint kind and no real
-     *                                     sources are used — this is how
-     *                                     summaries are extracted
+     * @param int|null               $seedParameterIndex when set, that parameter is seeded
+     *                                                    with every taint kind and no real
+     *                                                    sources are used — this is how
+     *                                                    summaries are extracted
+     * @param list<list<int|string>> $seedParts          the parts of the seeded parameter to seed
+     *                                                    apart: see {@see ParameterParts}
      */
     public function analyze(
         FunctionContext $context,
@@ -68,6 +70,7 @@ final class IntraproceduralAnalyzer
         ScopeTable $scopes,
         ?int $seedParameterIndex = null,
         bool $collectFindings = true,
+        array $seedParts = [],
     ): AnalysisResult {
         // A probe run asks what one parameter reaches; it does not observe the
         // body as written, so nothing it writes belongs in the shared property
@@ -96,6 +99,7 @@ final class IntraproceduralAnalyzer
             $this->printedReturns,
             $this->restRoutes,
             $this->administrators,
+            $seedParts,
         ))->run();
     }
 }

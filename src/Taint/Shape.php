@@ -392,11 +392,12 @@ final class Shape
 
     /**
      * Whether every part of this shape, and all its taint, is already in
-     * `$other`.
+     * `$other`, each kind from at least the parameter parts it names here:
+     * see {@see TaintSet::isCoveredBy()}.
      */
     private function isWithin(self $other): bool
     {
-        if (! $this->own->isSubsetOf($other->own) || ! $this->keys->isSubsetOf($other->keys)) {
+        if (! $this->own->isCoveredBy($other->own) || ! $this->keys->isCoveredBy($other->keys)) {
             return false;
         }
 

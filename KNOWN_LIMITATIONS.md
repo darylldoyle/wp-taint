@@ -61,7 +61,7 @@ badge:
 | Limitation | Direction |
 | --- | --- |
 | [An array read or write with a computed key sees the whole array](#array-element-taint-is-per-key-when-both-ends-name-a-constant-key) | Over-reports |
-| [A callee's reads of a parameter's keys take the caller's values too](#array-element-taint-is-per-key-when-both-ends-name-a-constant-key) | Over-reports |
+| [A parameter read through more than 61 parts is read whole past them](#array-element-taint-is-per-key-when-both-ends-name-a-constant-key) | Over-reports |
 | [Object properties are per class, not per instance](#object-properties-are-per-class-not-per-instance) | Over-reports |
 | [A guard on a container is not followed](#a-guard-clause-is-followed-a-guard-on-a-container-is-not) | Over-reports |
 | [A value of unknown origin, with `--no-unknown-provenance`](#unknown-provenance-is-reported-by-default) | Misses |
@@ -192,10 +192,10 @@ A `foreach` key over `$_GET` is request data. After `$rows[ $_GET['k'] ] = 1`,
 the `$k` in `foreach ( $rows as $k => $v )` is request data too, and `$v` is
 not. `array_keys()` reads the keys the same way.
 
-**A summary does not tell a parameter's keys from its values.** A function is
-summarised with each parameter tainted as a whole, keys included. So when a
-callee prints the keys of an array its caller passes, the caller's values reach
-those keys:
+**A summary keeps apart the parts a function reads a parameter through.** A
+literal key, any element, and the keys are each a part, to four levels, and a
+probe seeds each under its own number. A caller then hands each part of its
+argument only what that part reached:
 
 ```php
 function acme_attributes( $atts ) {
@@ -206,12 +206,15 @@ function acme_attributes( $atts ) {
     return $out;
 }
 
-echo acme_attributes( array( 'title' => $_GET['t'] ) );   // reported
+echo acme_attributes( array( 'title' => $_GET['t'] ) );   // not reported
+echo acme_attributes( array( $_GET['k'] => 'v' ) );       // reported
 ```
 
-The key is the literal `'title'`, and the value is escaped. A key the callee
-checks against an allowlist or a character pattern before it prints it comes
-back clean. **Direction:** over-reports.
+A parameter keeps up to 61 parts. Past that, and for a part the function reads
+in a way this does not follow, the parameter's own taint stands for it, which is
+what every part inherits. So does a callback `array_map()` and its relatives
+run, and a function declared twice, whose two bodies number their parts apart.
+**Direction:** over-reports.
 
 ### Object properties are per class, not per instance
 

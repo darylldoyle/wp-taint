@@ -154,6 +154,15 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A function's summary treated each parameter as one value. So a helper that
+  escapes each field's `value` and prints its `desc` as it is reported a
+  caller's stored value as printed raw, and one that prints an array's keys
+  and escapes its values reported a value as a raw key. A summary now keeps
+  apart the parts a function reads a parameter through: literal keys, any
+  element and the keys, to four levels. A probe seeds each part under its own
+  number, and a caller hands each part of its argument only what that part
+  reached.
+
 - A sanitiser that clears SQL outright kept what a quote-escaper had left of
   it. `sanitize_title( esc_sql( $v ) )` still carried `sql_unquoted`, though
   `sanitize_title( $v )` carries no SQL at all, so the escaped value came out

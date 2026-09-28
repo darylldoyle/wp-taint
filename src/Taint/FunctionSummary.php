@@ -18,6 +18,17 @@ namespace Enshrined\WpTaint\Taint;
 final class FunctionSummary
 {
     /**
+     * {@see forPart()}'s results, by parameter and part, and
+     * {@see withoutParts()}'s. A summary is applied at every call of its
+     * function, so each is built once.
+     *
+     * @var array<string, self>
+     */
+    private array $projections = [];
+
+    private ?self $plain = null;
+
+    /**
      * @param array<int, TaintSet>            $paramToReturn kinds that reach the return value from each parameter
      * @param array<int, list<SinkReference>> $paramToSink   sinks each parameter reaches
      * @param array<int, TaintSet>            $clears        kinds each parameter loses on the way to the return
@@ -163,7 +174,168 @@ final class FunctionSummary
          * counts by stored data.
          */
         public readonly ?TaintSet $introducesKeysOrNull = null,
+        /**
+         * The parts each parameter is read through, when the probe seeded
+         * them apart: part `n + 1` is the path at position `n`, and part 0 is
+         * the parameter's own taint. See {@see ParameterParts}. The records
+         * above then say, kind by kind, which parts brought each kind.
+         *
+         * @var array<int, list<list<int|string>>>
+         */
+        public readonly array $parameterParts = [],
     ) {
+    }
+
+    /**
+     * The parts a parameter is read through: see {@see $parameterParts}.
+     *
+     * @return list<list<int|string>>
+     */
+    public function partsFor(int $parameterIndex): array
+    {
+        return $this->parameterParts[$parameterIndex] ?? [];
+    }
+
+    /**
+     * This summary as part `$part` of parameter `$index` sees it: each record
+     * of that parameter keeps only the kinds the part brought, and the sinks
+     * only those the part reaches.
+     *
+     * No record of the result names parts. A callee numbers its own
+     * parameter's parts, and those numbers would name some other part of a
+     * caller's parameter if they reached the caller's taint.
+     */
+    public function forPart(int $index, int $part): self
+    {
+        return $this->projections[$index . ':' . $part] ??= $this->mapRecords(
+            static fn (int $at, TaintSet $set): TaintSet => $at === $index
+                ? $set->forPart($part)
+                : $set->withoutParts(),
+            static fn (int $at, array $sinks): array => array_values(array_map(
+                static fn (SinkReference $sink): SinkReference => $sink->withParts(TaintSet::EVERY_PART),
+                $at === $index
+                    ? array_filter($sinks, static fn (SinkReference $sink): bool => $sink->reachedBy($part))
+                    : $sinks,
+            )),
+        );
+    }
+
+    /**
+     * This summary with every parameter read whole, and no record naming the
+     * parts it came from: what a call applies when it does not split its
+     * argument. See {@see forPart()}.
+     */
+    public function withoutParts(): self
+    {
+        if ($this->parameterParts === []) {
+            return $this;
+        }
+
+        return $this->plain ??= $this->mapRecords(
+            static fn (int $at, TaintSet $set): TaintSet => $set->withoutParts(),
+            static fn (int $at, array $sinks): array => array_map(
+                static fn (SinkReference $sink): SinkReference => $sink->withParts(TaintSet::EVERY_PART),
+                $sinks,
+            ),
+        );
+    }
+
+    /**
+     * This summary with every parameter's records passed through `$set` and
+     * its sinks through `$sinks`, each told the parameter's index. The result
+     * names no parts: see {@see forPart()}.
+     *
+     * @param \Closure(int, TaintSet): TaintSet                       $set
+     * @param \Closure(int, list<SinkReference>): list<SinkReference> $sinks
+     */
+    private function mapRecords(\Closure $set, \Closure $sinks): self
+    {
+        $sets = static function (array $byIndex) use ($set): array {
+            /** @var array<int, TaintSet> $byIndex */
+            foreach ($byIndex as $index => $value) {
+                $byIndex[$index] = $set($index, $value);
+            }
+
+            return $byIndex;
+        };
+
+        $paramToSink = [];
+
+        foreach ($this->paramToSink as $index => $references) {
+            $paramToSink[$index] = $sinks($index, $references);
+        }
+
+        $paramToParam = [];
+
+        foreach ($this->paramToParam as $index => $targets) {
+            $paramToParam[$index] = array_map(static fn (TaintSet $kinds): TaintSet => $set($index, $kinds), $targets);
+        }
+
+        $paramToProperty = [];
+
+        foreach ($this->paramToProperty as $index => $references) {
+            $paramToProperty[$index] = array_map(
+                static fn (array $reference): array => [$reference[0], $reference[1], $set($index, $reference[2])],
+                $references,
+            );
+        }
+
+        $paramToCapture = [];
+
+        foreach ($this->paramToCapture as $index => $references) {
+            $paramToCapture[$index] = array_map(
+                static fn (array $reference): array => [$reference[0], $reference[1], $set($index, $reference[2])],
+                $references,
+            );
+        }
+
+        $paramToScope = [];
+
+        foreach ($this->paramToScope as $index => $references) {
+            $paramToScope[$index] = array_map(
+                static fn (array $reference): array => [
+                    $reference[0],
+                    $reference[1],
+                    $reference[2],
+                    $reference[3],
+                    $set($index, $reference[4]),
+                ],
+                $references,
+            );
+        }
+
+        $paramToReturnKeyed = [];
+
+        foreach ($this->paramToReturnKeyed as $index => $keyed) {
+            $paramToReturnKeyed[$index] = array_map(
+                static fn (TaintSet $kinds): TaintSet => $set($index, $kinds),
+                $keyed,
+            );
+        }
+
+        return new self(
+            $this->key,
+            $this->displayName,
+            $sets($this->paramToReturn),
+            $paramToSink,
+            $this->clears,
+            $this->introducesOrNull,
+            $this->imprecise,
+            $paramToParam,
+            $this->sourcesToParam,
+            $this->returnAnchored,
+            $paramToProperty,
+            $paramToCapture,
+            $paramToScope,
+            $sets($this->paramToReturnContainer),
+            $paramToReturnKeyed,
+            $this->introducesContainerOrNull,
+            $this->introducesKeyed,
+            $this->parameterKeys,
+            $sets($this->revertedResiduals),
+            $sets($this->paramToReturnKeys),
+            $this->introducesKeysOrNull,
+        );
     }
 
     public function returnKeysFor(int $parameterIndex): TaintSet
@@ -311,6 +483,12 @@ final class FunctionSummary
      */
     public function union(self $other): self
     {
+        // Two bodies number their parts apart, so a merge of both reads each
+        // parameter whole, as it did before parts were seeded apart.
+        if ($this->parameterParts !== $other->parameterParts) {
+            return $this->withoutParts()->union($other->withoutParts());
+        }
+
         $indexes = array_unique([...array_keys($this->paramToReturn), ...array_keys($other->paramToReturn)]);
         $paramToReturn = [];
         $clears = [];
@@ -326,7 +504,10 @@ final class FunctionSummary
             $merged = [];
 
             foreach ([...$this->sinksFor($index), ...$other->sinksFor($index)] as $sink) {
-                $merged[$sink->identityKey()] ??= $sink;
+                $key = $sink->identityKey();
+                $merged[$key] = isset($merged[$key])
+                    ? $merged[$key]->withParts($merged[$key]->parts | $sink->parts)
+                    : $sink;
             }
 
             ksort($merged);
@@ -377,6 +558,7 @@ final class FunctionSummary
             self::mergeSets($this->revertedResiduals, $other->revertedResiduals),
             self::mergeSets($this->paramToReturnKeys, $other->paramToReturnKeys),
             $this->introducesKeys()->union($other->introducesKeys()),
+            $this->parameterParts,
         );
     }
 
@@ -644,9 +826,9 @@ final class FunctionSummary
         }
 
         foreach ($this->paramToSink as $index => $sinks) {
-            $mine = array_map(static fn (SinkReference $s): string => $s->identityKey(), $sinks);
+            $mine = array_map(static fn (SinkReference $s): string => $s->stateKey(), $sinks);
             $theirs = array_map(
-                static fn (SinkReference $s): string => $s->identityKey(),
+                static fn (SinkReference $s): string => $s->stateKey(),
                 $other->paramToSink[$index] ?? [],
             );
 
