@@ -744,6 +744,12 @@ residual it made, so `function q( $v ) { return esc_sql( $v ); }` used unquoted
 is reported. A callee that puts its argument into a query records where: bare,
 or inside quotes. A caller passing an escaped value to the bare position, or a
 self-quoted one to the quoted position, gets the finding at the callee's query.
+A helper that returns an escaped argument as it came hands it back escaped. One
+that may undo the escaping on the way, such as `stripslashes()`, hands it back
+as `sql`. That record follows the parameter's own data, so a helper that
+unslashes other request data has not undone the escaping of what it was
+handed. It is per parameter, not per path: a helper that unslashes one copy of
+its argument hands every copy back raw, even one it returned untouched.
 
 **What is missed.** A caller that escapes a value and a callee that adds the
 quotes: the callee's summary is built from `sql` and cannot see the quotes it

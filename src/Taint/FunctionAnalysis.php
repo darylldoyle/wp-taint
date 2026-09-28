@@ -143,6 +143,12 @@ final class FunctionAnalysis
     private bool $collecting = false;
 
     /**
+     * The residuals this probe run may have undone on the way. See
+     * {@see FunctionSummary::$revertedResiduals}.
+     */
+    private ?TaintSet $revertedResiduals = null;
+
+    /**
      * Set while a call op with several possible callees is being transferred,
      * so their results accumulate on the shared operand instead of the last one
      * visited overwriting the rest. See {@see transferCalls()}.
@@ -336,6 +342,7 @@ final class FunctionAnalysis
             array_values($this->scopesReached),
             $this->returnContainer,
             $this->returnKeyed,
+            $this->revertedResiduals,
         );
     }
 
@@ -828,7 +835,7 @@ final class FunctionAnalysis
 
         $this->state->set(
             $param->result,
-            TaintSet::allDataflowKinds(),
+            TaintSet::allDataflowKinds()->with(TaintKind::Seed),
             new Provenance(
                 TraceVerb::Source,
                 $param,
@@ -2172,11 +2179,52 @@ final class FunctionAnalysis
     }
 
     /**
+     * What a function that can undo escaping leaves of a value: its escaped
+     * SQL residuals as raw `sql` again.
+     *
+     * A probe run notes that it happened to SQL-carrying data, so the summary
+     * can say a caller's escaped argument may come back unescaped. See
+     * {@see FunctionSummary::$revertsResiduals}.
+     */
+    private function undoneEscaping(TaintSet $taint): TaintSet
+    {
+        $this->noteReverted(self::sqlResiduals(), $taint);
+
+        return self::unescapedSql($taint);
+    }
+
+    /**
+     * Record, in a probe run, that residuals may have been undone on the
+     * seeded parameter's own data, when it carries the kind they qualify.
+     * Other request data in the body says nothing about the parameter: see
+     * {@see TaintKind::Seed}.
+     */
+    private function noteReverted(TaintSet $residuals, TaintSet $taint): void
+    {
+        if (! $this->collecting || $this->seedParameterIndex === null || $residuals->isEmpty()) {
+            return;
+        }
+
+        $sql = $residuals->intersect(self::sqlResiduals());
+
+        if ($sql->isEmpty() || ! $taint->has(TaintKind::Sql) || ! $taint->has(TaintKind::Seed)) {
+            return;
+        }
+
+        $this->revertedResiduals = ($this->revertedResiduals ?? TaintSet::empty())->union($sql);
+    }
+
+    private static function sqlResiduals(): TaintSet
+    {
+        return TaintSet::of(TaintKind::SqlUnquoted, TaintKind::SqlSelfQuoted, TaintKind::SqlUnticked);
+    }
+
+    /**
      * An escaped SQL value's residuals turned back into `sql`.
      */
     private static function unescapedSql(TaintSet $taint): TaintSet
     {
-        $residuals = TaintSet::of(TaintKind::SqlUnquoted, TaintKind::SqlSelfQuoted, TaintKind::SqlUnticked);
+        $residuals = self::sqlResiduals();
 
         if ($taint->intersect($residuals)->isEmpty()) {
             return $taint;
@@ -2324,10 +2372,10 @@ final class FunctionAnalysis
         // A function that can undo an escaper's work leaves an escaped SQL
         // value as raw as it was: `stripslashes( esc_sql( $v ) )`.
         if ($revertResiduals) {
-            $taint = self::unescapedSql($taint);
-            $container = self::unescapedSql($container);
+            $taint = $this->undoneEscaping($taint);
+            $container = $this->undoneEscaping($container);
             $kept = array_map(
-                static fn (array $entry): array => [$entry[0], $entry[1], self::unescapedSql($entry[2])],
+                fn (array $entry): array => [$entry[0], $entry[1], $this->undoneEscaping($entry[2])],
                 $kept,
             );
         }
@@ -3127,7 +3175,7 @@ final class FunctionAnalysis
         $receiver = $op instanceof Op\Expr\MethodCall ? $op->var : null;
 
         if ($internal->stores && $receiver !== null) {
-            $kept = self::unescapedSql($this->state->unionOf($inputs));
+            $kept = $this->undoneEscaping($this->state->unionOf($inputs));
 
             if (! $kept->isEmpty()) {
                 $changed = $this->state->addContainerTaint($receiver, $kept, new Provenance(
@@ -3534,7 +3582,7 @@ final class FunctionAnalysis
             // Only what survives the body. The kinds were recorded by the
             // probe run, whose seed carried every kind: what reached the
             // property is what the body let through.
-            $taint = self::throughBody($argumentTaint, $kinds);
+            $taint = self::throughBody($argumentTaint, $kinds, $summary->revertedResidualsFor($index));
 
             if ($taint->isEmpty()) {
                 continue;
@@ -3584,7 +3632,7 @@ final class FunctionAnalysis
 
         foreach ($summary->capturesFor($index) as [$closureKey, $name, $kinds]) {
             // Only what survives the body, as for properties.
-            $taint = self::throughBody($argumentTaint, $kinds);
+            $taint = self::throughBody($argumentTaint, $kinds, $summary->revertedResidualsFor($index));
 
             if ($taint->isEmpty()) {
                 continue;
@@ -3636,7 +3684,7 @@ final class FunctionAnalysis
             // the callee passes through absint() on its way to an included
             // file's `$settings` hands that file an object id, not the whole
             // request it came from.
-            $taint = self::throughBody($argumentTaint, $kinds);
+            $taint = self::throughBody($argumentTaint, $kinds, $summary->revertedResidualsFor($index));
 
             if ($taint->isEmpty()) {
                 continue;
@@ -3678,7 +3726,7 @@ final class FunctionAnalysis
      * The callee's own escaping and voiding are in the record already, as
      * markers it made itself.
      */
-    private static function throughBody(TaintSet $argument, TaintSet $reached): TaintSet
+    private static function throughBody(TaintSet $argument, TaintSet $reached, ?TaintSet $reverts = null): TaintSet
     {
         $carried = TaintSet::empty();
 
@@ -3686,15 +3734,35 @@ final class FunctionAnalysis
             $carried = $carried->with(TaintKind::Escaped, TaintKind::EscapeVoided);
         }
 
-        if ($reached->has(TaintKind::Sql)) {
-            $carried = $carried->with(TaintKind::SqlUnquoted, TaintKind::SqlSelfQuoted, TaintKind::SqlUnticked);
-        }
-
         if (TaintSet::allDataflowKinds()->isSubsetOf($reached)) {
             $carried = $carried->with(TaintKind::Unknown);
         }
 
-        return $argument->intersect($reached->union($carried))->union(self::madeFrom($argument, $reached));
+        return $argument->intersect($reached->union($carried))
+            ->union(self::madeFrom($argument, $reached))
+            ->union(self::residualsThrough($argument, $reached, $reverts));
+    }
+
+    /**
+     * The escaped SQL residuals an argument brings back through a body that
+     * lets its `sql` through.
+     *
+     * The probe seeds `sql` alone, so the record says nothing about a residual
+     * directly. One rides with `sql`: `function id( $v ) { return $v; }`
+     * hands `esc_sql( $v )` back escaped. A body that may have undone the
+     * escaping hands it back as `sql`.
+     */
+    private static function residualsThrough(TaintSet $argument, TaintSet $reached, ?TaintSet $reverts): TaintSet
+    {
+        $residuals = $argument->intersect(self::sqlResiduals());
+
+        if ($residuals->isEmpty() || ! $reached->has(TaintKind::Sql)) {
+            return TaintSet::empty();
+        }
+
+        return $reverts !== null && ! $reverts->intersect(self::sqlResiduals())->isEmpty()
+            ? TaintSet::of(TaintKind::Sql)
+            : $residuals;
     }
 
     /**
@@ -4660,17 +4728,24 @@ final class FunctionAnalysis
             }
 
             $anyArgumentTainted = true;
+            $reverts = $summary->revertedResidualsFor($index);
 
-            $returned = $argumentTaint->intersect($summary->returnTaintFor($index))
-                ->union(self::madeFrom($argumentTaint, $summary->returnTaintFor($index)));
+            // A callee that may undo escaping, called on SQL-carrying data
+            // here, may undo it for this run's caller too.
+            $this->noteReverted($reverts, $argumentTaint);
+
+            $reached = $summary->returnTaintFor($index);
+            $returned = $argumentTaint->intersect($reached)
+                ->union(self::madeFrom($argumentTaint, $reached))
+                ->union(self::residualsThrough($argumentTaint, $reached, $reverts));
 
             // What the argument put into the returned array's elements, as
             // for a property: the kinds that got through the body.
-            $intoElements = self::throughBody($argumentTaint, $summary->returnContainerFor($index));
+            $intoElements = self::throughBody($argumentTaint, $summary->returnContainerFor($index), $reverts);
             $elements = $elements->union($intoElements);
 
             foreach ($summary->returnKeyedFor($index) as $element => $kinds) {
-                $into = self::throughBody($argumentTaint, $kinds);
+                $into = self::throughBody($argumentTaint, $kinds, $reverts);
                 $keyed[$element] = ($keyed[$element] ?? TaintSet::empty())->union($into);
                 $intoElements = $intoElements->union($into);
             }
@@ -5509,8 +5584,14 @@ final class FunctionAnalysis
             return;
         }
 
-        $carriesSql = fn (Operand $component): bool => $this->guardedEffectiveTaintOf($component)
-            ->has(TaintKind::Sql);
+        // The parameter's own flow, not other request data beside it: a query
+        // that puts `$_GET['o']` bare says nothing about where the parameter
+        // lands. See TaintKind::Seed.
+        $carriesSql = function (Operand $component): bool {
+            $taint = $this->guardedEffectiveTaintOf($component);
+
+            return $taint->has(TaintKind::Sql) && $taint->has(TaintKind::Seed);
+        };
 
         $contexts = [
             [TaintKind::SqlUnquoted, $this->queryShapes->unquotedComponent($query, $carriesSql)],

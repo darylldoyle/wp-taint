@@ -238,6 +238,23 @@ enum TaintKind: string
     case Authz = 'authz';
 
     /**
+     * The parameter a probe run is summarising, and every value made from it.
+     *
+     * A probe seeds one parameter with every kind at once, and a body holds
+     * other request data too. What the probe records about the parameter has
+     * to be about the parameter: a helper that unslashes `$_GET['orderby']`
+     * has not undone the escaping of the clause it was handed, and Yoast's
+     * bulk editor read as SQL injection when it counted. So the seed carries
+     * this marker as well, and a record that needs the parameter's own flow
+     * asks for it.
+     *
+     * Only a probe run's seed has it, and a caller's argument never does, so
+     * it cannot reach a finding. Like {@see self::Authz}, no catalogue may
+     * name it.
+     */
+    case Seed = 'seed';
+
+    /**
      * Stable bit position, used by the bitmask inside {@see TaintSet}.
      *
      * Declared explicitly rather than derived from declaration order, so that
@@ -269,15 +286,18 @@ enum TaintKind: string
             self::Unknown => 1 << 18,
             self::Storage => 1 << 19,
             self::Authz => 1 << 11,
+            self::Seed => 1 << 23,
         };
     }
 
     /**
-     * True for everything the dataflow engine may propagate.
+     * True for every kind a catalogue may name: what sources bring, sanitisers
+     * clear and sinks report. Not the authorization category, and not the
+     * probe's marker for its own parameter.
      */
     public function isDataflowKind(): bool
     {
-        return $this !== self::Authz;
+        return $this !== self::Authz && $this !== self::Seed;
     }
 
     /**
@@ -355,6 +375,7 @@ enum TaintKind: string
             self::Unknown => 'unknown provenance',
             self::Storage => 'unsanitised for storage',
             self::Authz => 'authorization',
+            self::Seed => 'the parameter being summarised',
         };
     }
 }

@@ -88,6 +88,11 @@ final class AnalysisResult
          * @var array<array-key, TaintSet>
          */
         public readonly array $returnKeyed = [],
+        /**
+         * The residuals a function the seeded parameter went through may have
+         * undone. See {@see FunctionSummary::$revertedResiduals}.
+         */
+        public readonly ?TaintSet $revertedResiduals = null,
     ) {
     }
 }

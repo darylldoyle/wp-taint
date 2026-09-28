@@ -132,7 +132,32 @@ final class FunctionSummary
          * @var array<int, list<array-key>>
          */
         public readonly array $parameterKeys = [],
+        /**
+         * The residuals each parameter's probe run may have undone: its body
+         * called a function that can undo SQL escaping, such as
+         * `stripslashes()`, on the parameter's own data. See
+         * {@see TaintKind::Seed}.
+         *
+         * The probe seeds `sql`, so the record shows `sql` reaching the return
+         * whether or not the body undid anything. A caller's escaped value
+         * comes back escaped through a body that returns it as it came, and as
+         * `sql` through one that may have undone the escaping. Per parameter,
+         * not per path: a call on any copy of the parameter counts, which can
+         * only turn an escaped value back into `sql`.
+         *
+         * @var array<int, TaintSet>
+         */
+        public readonly array $revertedResiduals = [],
     ) {
+    }
+
+    /**
+     * The residuals a caller's argument may lose on the way through this
+     * parameter, back to the kind they qualify.
+     */
+    public function revertedResidualsFor(int $parameterIndex): TaintSet
+    {
+        return $this->revertedResiduals[$parameterIndex] ?? TaintSet::empty();
     }
 
     /**
@@ -324,6 +349,7 @@ final class FunctionSummary
             $this->introducesContainer()->union($other->introducesContainer()),
             self::mergeKeyed([$this->introducesKeyed], [$other->introducesKeyed])[0] ?? [],
             self::mergeParameterKeys($this->parameterKeys, $other->parameterKeys),
+            self::mergeSets($this->revertedResiduals, $other->revertedResiduals),
         );
     }
 
@@ -573,6 +599,10 @@ final class FunctionSummary
         }
 
         if ($this->returnAnchored !== $other->returnAnchored) {
+            return false;
+        }
+
+        if (! self::setsEqual($this->revertedResiduals, $other->revertedResiduals)) {
             return false;
         }
 
