@@ -237,6 +237,36 @@ final class HookGraph
     }
 
     /**
+     * Every function registered as a callback: on a hook, as a shortcode, or
+     * as a block's renderer.
+     *
+     * Each one is an entry point, whatever else calls it. WordPress or another
+     * plugin can fire its hook, and a dispatch in the scan does not show that
+     * nothing else does. WooCommerce's setup wizard fires
+     * `admin_enqueue_scripts` itself, and WordPress fires it on every admin
+     * page. See {@see \Enshrined\WpTaint\Taint\AdministratorReach}.
+     *
+     * @return array<string, true> function keys
+     */
+    public function callbackKeys(): array
+    {
+        $keys = [];
+        $lists = [$this->unplaced, ...array_values($this->byHook), ...array_values($this->byPrefix)];
+
+        foreach ($lists as $registrations) {
+            foreach ($registrations as $registration) {
+                $key = $registration->callback->userFunctionKey;
+
+                if ($key !== null) {
+                    $keys[$key] = true;
+                }
+            }
+        }
+
+        return $keys;
+    }
+
+    /**
      * Registrations in sort-key order, as `usort` on {@see HookRegistration::sortKey()}
      * orders them, with each key built once rather than twice per comparison.
      * Both sorts are stable and compare the same keys, so the order is the

@@ -120,6 +120,12 @@ final class FunctionAnalysis
 
     private readonly CapabilityGuard $capabilityGuards;
 
+    /**
+     * The same question asked of site-wide grants only, for an option write.
+     * Built on the first write, because most bodies never make one.
+     */
+    private ?CapabilityGuard $siteWideGuards = null;
+
     /** The block being walked, so a sink can ask what guarded the path to it. */
     private ?Block $currentBlock = null;
 
@@ -242,6 +248,7 @@ final class FunctionAnalysis
         /** @var array<string, string> */
         private readonly array $printedReturns = [],
         private readonly ?RestRouteTable $restRoutes = null,
+        private readonly ?AdministratorReach $administrators = null,
     ) {
         $this->state = new TaintState();
         $this->restParameters = new RestParameterSanitizer($registry, $summaries);
@@ -3584,7 +3591,22 @@ final class FunctionAnalysis
             // property is what the body let through.
             $taint = self::throughBody($argumentTaint, $kinds, $summary->revertedResidualsFor($index));
 
+            // The escaping ledger stays out of an option, as it does for a
+            // write in this body: see recordOptionWrite(). throughBody()
+            // hands `escaped` back alongside `html`.
+            if ($class === self::OPTION_STORE) {
+                $taint = $taint->without(TaintSet::of(TaintKind::Escaped, TaintKind::EscapeVoided));
+            }
+
             if ($taint->isEmpty()) {
+                continue;
+            }
+
+            // An option the callee writes is saved by this call, so this
+            // frame decides whether only an administrator can make it. The
+            // callee saw only its own body, and a handler usually checks the
+            // capability and then calls a helper that saves.
+            if ($class === self::OPTION_STORE && $this->onlyAdministratorsHere()) {
                 continue;
             }
 
@@ -3857,30 +3879,53 @@ final class FunctionAnalysis
      */
     private const OPTION_STORE = '#options';
 
-    /** Option writers: matcher key => [key argument, value argument]. */
-    private const OPTION_WRITERS = [
-        'function:update_option' => [0, 1],
-        'function:add_option' => [0, 1],
-        'function:update_site_option' => [0, 1],
+    /**
+     * Option writers: function => [key argument, value argument].
+     *
+     * Public for {@see \Enshrined\WpTaint\Scan\Scanner}, which works out who
+     * can reach a call to one of these before the analysis starts.
+     */
+    public const OPTION_WRITERS = [
+        'update_option' => [0, 1],
+        'add_option' => [0, 1],
+        'update_site_option' => [0, 1],
     ];
 
-    /** Option readers: matcher key => key argument. */
+    /** Option readers: function => key argument. */
     private const OPTION_READERS = [
-        'function:get_option' => 0,
-        'function:get_site_option' => 0,
+        'get_option' => 0,
+        'get_site_option' => 0,
     ];
 
     /**
      * Record what an option write put under its key, when the key folds.
      *
+     * The whole value goes in, its elements and keys with it. A plugin saves
+     * its settings as one array far more often than as a single value, and
+     * reading only the array's own taint stored nothing for it:
+     *
+     *     update_option( 'acme', array( 'target' => $_POST['url'] ) );
+     *
+     *     $settings = get_option( 'acme' );
+     *     wp_redirect( $settings['target'] );   // was missed
+     *
+     * A write only an administrator can make stores nothing. Administrators
+     * are trusted in WordPress, so a read of what they saved carries what
+     * get_option() carries anyway: stored data, with no `url` or `path` in
+     * it. WP File Manager's preferences screen saves a path the request
+     * chose, on a page only `manage_options` reaches, and that path reaching
+     * `include` is the administrator's own choice. Anyone else's write keeps
+     * everything it carried. See {@see AdministratorReach}.
+     *
      * The probe run records the reach instead of performing the write — the
      * same split every property write uses — so a helper wrapping
      * update_option() carries its caller's taint into the store through
-     * paramToProperty, with no machinery of its own.
+     * paramToProperty, with no machinery of its own. The caller judges its
+     * own call site the same way: see {@see applySummaryProperties()}.
      */
     private function recordOptionWrite(Op\Expr $op, CallTarget $call, Matcher $matcher): bool
     {
-        $spec = self::OPTION_WRITERS[$matcher->key()] ?? null;
+        $spec = $matcher->kind === MatcherKind::Func ? (self::OPTION_WRITERS[$matcher->name] ?? null) : null;
 
         if ($spec === null) {
             return false;
@@ -3905,8 +3950,13 @@ final class FunctionAnalysis
         // output whatever was done at input — and carrying `escaped` through
         // made every read through the filterable get_option() re-report the
         // write's escaping as voided, on a line the output rule already owns.
-        $taint = $this->state->taintOf($value)
+        $taint = $this->state->effectiveTaintOf($value)
             ->without(TaintSet::of(TaintKind::Escaped, TaintKind::EscapeVoided));
+
+        if (! $taint->isEmpty() && $this->onlyAdministratorsHere()) {
+            $taint = TaintSet::empty();
+        }
+
         $changed = false;
 
         foreach ($names as $name) {
@@ -3926,6 +3976,28 @@ final class FunctionAnalysis
     }
 
     /**
+     * Whether only an administrator can be at the op being transferred.
+     *
+     * Either a check of a site-wide grant dominates its block, or every way
+     * the scan can see into this function passes one. A nonce proves neither,
+     * because a subscriber holds a valid nonce for every form they can see.
+     * Nor does a role such as `edit_posts`, which every author has.
+     */
+    private function onlyAdministratorsHere(): bool
+    {
+        if ($this->administrators?->onlyAdministratorsReach($this->context->key) ?? false) {
+            return true;
+        }
+
+        if ($this->siteWideGuards === null) {
+            $this->siteWideGuards = CapabilityGuard::siteWide($this->registry, $this->callGraph);
+            $this->siteWideGuards->forFunction($this->blocks);
+        }
+
+        return $this->siteWideGuards->isEntitled($this->currentBlock);
+    }
+
+    /**
      * What the store holds under the keys a read can name, and the trace of
      * the write that put it there.
      *
@@ -3936,7 +4008,7 @@ final class FunctionAnalysis
      */
     private function optionStoreTaint(Matcher $matcher, CallTarget $call): array
     {
-        $index = self::OPTION_READERS[$matcher->key()] ?? null;
+        $index = $matcher->kind === MatcherKind::Func ? (self::OPTION_READERS[$matcher->name] ?? null) : null;
         $key = $index === null ? null : $call->argument($index);
 
         if ($key === null) {

@@ -20,6 +20,16 @@ final class RestRouteTable
     /** @var array<string, true> callback keys every one of whose routes has an entitling permission callback */
     private array $entitled = [];
 
+    /**
+     * Callback keys every one of whose routes has a permission callback that
+     * requires a site-wide grant, such as `manage_options`. A narrower set
+     * than {@see $entitled}: an author passes `current_user_can( 'edit_post',
+     * $id )` for their own post.
+     *
+     * @var array<string, true>
+     */
+    private array $administratorOnly = [];
+
     /** @var list<array{file: string, line: int, reason: string}> */
     private array $unresolved = [];
 
@@ -78,6 +88,22 @@ final class RestRouteTable
     public function isEntitled(string $callbackKey): bool
     {
         return isset($this->entitled[strtolower($callbackKey)]);
+    }
+
+    public function markAdministratorOnly(string $callbackKey): void
+    {
+        $this->administratorOnly[strtolower($callbackKey)] = true;
+    }
+
+    /**
+     * The callbacks WordPress runs only for a caller who holds a site-wide
+     * grant, because every route's permission callback requires one.
+     *
+     * @return array<string, true>
+     */
+    public function administratorOnly(): array
+    {
+        return $this->administratorOnly;
     }
 
     /**

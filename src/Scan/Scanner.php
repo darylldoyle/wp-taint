@@ -12,6 +12,7 @@ use Enshrined\WpTaint\Cfg\ParseError;
 use Enshrined\WpTaint\Cfg\ThemeRoots;
 use Enshrined\WpTaint\Finding\Finding;
 use Enshrined\WpTaint\Finding\FindingCollection;
+use Enshrined\WpTaint\Hooks\AdminPageCollector;
 use Enshrined\WpTaint\Hooks\HookGraphBuilder;
 use Enshrined\WpTaint\Hooks\RestRoute;
 use Enshrined\WpTaint\Hooks\RestRouteCollector;
@@ -30,6 +31,7 @@ use Enshrined\WpTaint\Rules\Wordpress\SettingWithoutSanitizeCallback;
 use Enshrined\WpTaint\Rules\Wordpress\WrongContextEscape;
 use Enshrined\WpTaint\Support\CycleCollector;
 use Enshrined\WpTaint\Support\PathHelper;
+use Enshrined\WpTaint\Taint\AdministratorReachBuilder;
 use Enshrined\WpTaint\Taint\AnalysisOptions;
 use Enshrined\WpTaint\Taint\AnalysisWarning;
 use Enshrined\WpTaint\Taint\BodySweep;
@@ -38,6 +40,7 @@ use Enshrined\WpTaint\Taint\CallGraph;
 use Enshrined\WpTaint\Taint\CallGraphBuilder;
 use Enshrined\WpTaint\Taint\CallResolver;
 use Enshrined\WpTaint\Taint\CapabilityGuard;
+use Enshrined\WpTaint\Taint\FunctionAnalysis;
 use Enshrined\WpTaint\Taint\FunctionBodies;
 use Enshrined\WpTaint\Taint\FunctionMeta;
 use Enshrined\WpTaint\Taint\InterproceduralResolver;
@@ -318,17 +321,20 @@ final class Scanner
             )
             : null;
         $routeCollector = new RestRouteCollector($callables, $receivers);
+        $pageCollector = new AdminPageCollector($callables, $receivers, $values);
 
         foreach ($contexts as $context) {
             $hookBuilder->accept($context);
             $includeBuilder?->accept($context);
             $routeCollector->accept($context);
+            $pageCollector->accept($context);
         }
 
         unset($context);
         $hooks = $hookBuilder->finish();
         $includes = $includeBuilder?->finish();
         $routeTable = $routeCollector->finish();
+        $pages = $pageCollector->finish();
 
         $callGraph = (new CallGraphBuilder($this->registry, $functions, $values, $receivers, $callables, $hooks))
             ->build($contexts);
@@ -384,6 +390,13 @@ final class Scanner
         );
         $restRoutes = $this->restRoutes($routeTable, $functions, $bodies, $callGraph);
 
+        // Which option writes only an administrator can make. Decided before
+        // the fixed point, because who reaches a write is a property of the
+        // call graph and no dataflow changes it.
+        $entries = [...$restRoutes->administratorOnly(), ...$pages->administratorOnly($this->registry)];
+        $administrators = (new AdministratorReachBuilder($this->registry, $callGraph, $resolver, $bodies, $includes))
+            ->build($metas, array_keys(FunctionAnalysis::OPTION_WRITERS), $entries, $hooks->callbackKeys());
+
         $analyzer = new IntraproceduralAnalyzer(
             $this->registry,
             $functions,
@@ -394,6 +407,7 @@ final class Scanner
             $hooks->shortcodeCallbackKeys(),
             $hooks->printedReturnCallbacks(),
             $restRoutes,
+            $administrators,
         );
         $extractor = new SummaryExtractor($analyzer, $this->options, new ParameterKeyReads($functions));
         $analysed = $bodies;
@@ -626,6 +640,8 @@ final class Scanner
      * see into. `__return_true`, a callback that will not resolve, and a route
      * with no permission callback all leave it unentitled.
      *
+     * It is administrator-only when every one of those checks is of a
+     * site-wide grant. See {@see \Enshrined\WpTaint\Taint\AdministratorReach}.
      */
     private function restRoutes(
         RestRouteTable $table,
@@ -634,6 +650,7 @@ final class Scanner
         CallGraph $callGraph,
     ): RestRouteTable {
         $guard = new CapabilityGuard($this->registry, $callGraph);
+        $siteWide = CapabilityGuard::siteWide($this->registry, $callGraph);
         $allowlist = new PermissionAllowlist($functions, $bodies);
 
         /** @var array<int, true> $seen routes already asked, by object id */
@@ -653,6 +670,7 @@ final class Scanner
 
         foreach ($table->callbackKeys() as $key) {
             $entitled = true;
+            $administrators = true;
 
             foreach ($table->routesFor($key) as $route) {
                 if ($route->permission === null || $route->permission === []) {
@@ -667,17 +685,26 @@ final class Scanner
                         : $functions->get($permission->userFunctionKey);
 
                     $bodies->reclaim();
+                    $context = $meta === null ? null : $bodies->context($meta);
 
-                    if ($meta === null || ! $guard->permitsOnlyWhenEntitled($bodies->context($meta))) {
+                    if ($context === null || ! $guard->permitsOnlyWhenEntitled($context)) {
                         $entitled = false;
 
                         break 2;
                     }
+
+                    // A site-wide grant entitles too, so only an entitling
+                    // callback is worth asking.
+                    $administrators = $administrators && $siteWide->permitsOnlyWhenEntitled($context);
                 }
             }
 
             if ($entitled) {
                 $table->markEntitled($key);
+            }
+
+            if ($entitled && $administrators) {
+                $table->markAdministratorOnly($key);
             }
         }
 

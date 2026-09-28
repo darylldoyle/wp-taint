@@ -47,6 +47,11 @@ final class IntraproceduralAnalyzer
          * entitles, and what each route's schema does to its parameters.
          */
         private readonly ?RestRouteTable $restRoutes = null,
+        /**
+         * The functions only an administrator can reach, whose option writes
+         * store nothing a request chose.
+         */
+        private readonly ?AdministratorReach $administrators = null,
     ) {
     }
 
@@ -90,6 +95,7 @@ final class IntraproceduralAnalyzer
             $this->shortcodeCallbacks,
             $this->printedReturns,
             $this->restRoutes,
+            $this->administrators,
         ))->run();
     }
 }
