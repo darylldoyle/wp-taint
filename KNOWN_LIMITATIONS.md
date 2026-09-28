@@ -178,14 +178,23 @@ read, a join, an assignment and a copy keep each element apart. In
 `$a['a']['id']` is clean. A part deeper than four levels folds into its node,
 which loses precision and never taint.
 
-**Through a function, an element keeps its key only one level down.** A
-function's summary and an include's scope still hold one level. So a function
-that returns the array above hands back `'a'` as one set, and the `'id'` read
-from it takes the stored `'value'`'s taint. A function whose result keeps its
-input's keys, such as `array_filter()` or `apply_filters()` on an array, keeps
-each element under its string key. An integer key can be renumbered, so its
-element joins the whole-array slot, as does every element of a function that
-builds something else, `implode( ',', $row )`.
+**A function's return keeps four levels too.** A function that returns the
+array above hands back `'a'` with `'id'` and `'value'` apart, so the caller's
+`'id'` is clean. So does a callback `array_map()` runs, under a computed key of
+the result. An include's scope does not keep them yet. It holds each variable
+as one set, apart from the keys of the `$args` a template is handed. A function
+whose result keeps its input's keys, such as `array_filter()` or
+`apply_filters()` on an array, keeps each element under its string key. An
+integer key can be renumbered, so its element joins the whole-array slot, as
+does every element of a function that builds something else,
+`implode( ',', $row )`.
+
+**A parameter handed back as it came loses its keys.** A summary knows the
+parts a function reads its parameter through, and nothing stands for an element
+the body never names. So `function acme_id( $a ) { return $a; }` hands back
+`array( 't' => $_GET['t'], 'm' => 'x' )` with `'m'` tainted, and so does a
+function that adds an element and returns the rest. **Direction:**
+over-reports.
 
 **A key carries its collection's own taint and what the code used as a key.**
 A `foreach` key over `$_GET` is request data. After `$rows[ $_GET['k'] ] = 1`,

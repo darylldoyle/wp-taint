@@ -154,6 +154,12 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A function's return kept its array one level deep.
+  `return array( 'general' => array( 'title' => $_GET['t'], 'mode' => 'grid' ) )`
+  made a caller's `$settings['general']['mode']` read the title. A returned
+  array now keeps its structure to four levels at the caller, and so does what
+  a callback returns into `array_map()`.
+
 - A loop that rebuilds an array key by key merged its elements.
   `foreach ( $raw as $k => $v ) { $out[ $k ] = trim( $v ); }` made a request
   value under `name` taint `$out['mode']`, and so did a function that rebuilds

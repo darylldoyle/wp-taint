@@ -58,9 +58,7 @@ final class SummaryExtractor
         $paramToProperty = [];
         $paramToCapture = [];
         $paramToScope = [];
-        $paramToReturnContainer = [];
-        $paramToReturnKeyed = [];
-        $paramToReturnKeys = [];
+        $paramToReturnShape = [];
         $revertedResiduals = [];
         $paramToReturnEach = [];
         $imprecise = $parameterCount > $analysed;
@@ -84,27 +82,19 @@ final class SummaryExtractor
                 $revertedResiduals[$index] = $result->revertedResiduals;
             }
 
-            // And what it puts into the returned array's elements, which a
-            // caller reads the way it reads a local array's.
-            if ($result->returnContainer !== null && ! $result->returnContainer->isEmpty()) {
-                $paramToReturnContainer[$index] = $result->returnContainer;
-            }
-
-            $keyed = $result->returnKeyed;
+            // And what it puts into the returned array, which a caller reads
+            // the way it reads a local array.
+            $returned = $result->returnShape ?? Shape::empty();
+            $each = $returned->elements()[Shape::EACH] ?? null;
 
             // What comes back under the key it had: see Shape::EACH.
-            if (isset($keyed[Shape::EACH])) {
-                $paramToReturnEach[$index] = $keyed[Shape::EACH];
-                unset($keyed[Shape::EACH]);
+            if ($each !== null) {
+                $paramToReturnEach[$index] = $each->flatten();
+                $returned = $returned->withoutElement(Shape::EACH);
             }
 
-            if ($keyed !== []) {
-                ksort($keyed);
-                $paramToReturnKeyed[$index] = $keyed;
-            }
-
-            if ($result->returnKeys !== null && ! $result->returnKeys->isEmpty()) {
-                $paramToReturnKeys[$index] = $result->returnKeys;
+            if (! $returned->isEmpty()) {
+                $paramToReturnShape[$index] = $returned;
             }
             $clears[$index] = TaintSet::allDataflowKinds()->without($result->returnTaint);
             $paramToSink[$index] = self::deduplicate($result->sinksReached);
@@ -162,14 +152,10 @@ final class SummaryExtractor
             $paramToProperty,
             $paramToCapture,
             $paramToScope,
-            $paramToReturnContainer,
-            $paramToReturnKeyed,
-            $baseline->returnContainer,
-            self::sorted($baseline->returnKeyed),
+            $paramToReturnShape,
+            self::withoutEach($baseline->returnShape ?? Shape::empty()),
             $this->parameterKeys[$context->key] ??= $this->keyReads->of($context->func),
             $revertedResiduals,
-            $paramToReturnKeys,
-            $baseline->returnKeys,
             array_filter(
                 $parts,
                 static fn (int $index): bool => $index < $analysed,
@@ -180,15 +166,15 @@ final class SummaryExtractor
     }
 
     /**
-     * @param array<array-key, TaintSet> $keyed
-     *
-     * @return array<array-key, TaintSet>
+     * A run that seeded no parameter has no element standing for each of the
+     * parameter's, so one there goes under a computed key, which a read under
+     * any key sees as well.
      */
-    private static function sorted(array $keyed): array
+    private static function withoutEach(Shape $shape): Shape
     {
-        ksort($keyed);
+        $each = $shape->elements()[Shape::EACH] ?? null;
 
-        return $keyed;
+        return $each === null ? $shape : $shape->withoutElement(Shape::EACH)->join(Shape::rest($each));
     }
 
     /**

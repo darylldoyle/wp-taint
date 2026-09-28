@@ -301,6 +301,68 @@ final class Shape
     }
 
     /**
+     * This shape with each part's own taint and keys passed through `$map`,
+     * and no write behind any part. A part left with no taint goes.
+     *
+     * For a shape that outlives its run, as a summary's does: a provenance
+     * points into the graph the run analysed.
+     *
+     * @param \Closure(TaintSet): TaintSet $map
+     */
+    public function mapSets(\Closure $map): self
+    {
+        if ($this->isEmpty()) {
+            return $this;
+        }
+
+        $elements = [];
+
+        foreach ($this->elements as $key => $element) {
+            $mapped = $element->mapSets($map);
+
+            if (! $mapped->isEmpty()) {
+                $elements[$key] = $mapped;
+            }
+        }
+
+        $rest = $this->rest?->mapSets($map);
+        $own = $map($this->own);
+        $keys = $map($this->keys);
+
+        if ($own->isEmpty() && $keys->isEmpty() && $elements === [] && ($rest === null || $rest->isEmpty())) {
+            return self::empty();
+        }
+
+        return new self($own, $keys, $elements, $rest === null || $rest->isEmpty() ? null : $rest);
+    }
+
+    /**
+     * This shape without the element under `$key`.
+     */
+    public function withoutElement(int|string $key): self
+    {
+        if (! isset($this->elements[$key])) {
+            return $this;
+        }
+
+        $elements = $this->elements;
+        unset($elements[$key]);
+
+        if ($this->own->isEmpty() && $this->keys->isEmpty() && $elements === [] && $this->rest === null) {
+            return self::empty();
+        }
+
+        return new self(
+            $this->own,
+            $this->keys,
+            $elements,
+            $this->rest,
+            $this->provenance,
+            $this->keysProvenance,
+        );
+    }
+
+    /**
      * This shape with `$kinds` taken out of every part. A part left with no
      * taint goes.
      */

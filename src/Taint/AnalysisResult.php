@@ -78,26 +78,16 @@ final class AnalysisResult
          */
         public readonly array $scopesReached = [],
         /**
-         * What the returned array's elements carry under a computed key. See
-         * {@see FunctionSummary::$paramToReturnContainer}.
+         * What the returned array holds below its own taint: its elements,
+         * each under its key, and its keys. See
+         * {@see FunctionSummary::$paramToReturnShape}.
          */
-        public readonly ?TaintSet $returnContainer = null,
-        /**
-         * What the returned array's elements carry under each literal key.
-         *
-         * @var array<array-key, TaintSet>
-         */
-        public readonly array $returnKeyed = [],
+        public readonly ?Shape $returnShape = null,
         /**
          * The residuals a function the seeded parameter went through may have
          * undone. See {@see FunctionSummary::$revertedResiduals}.
          */
         public readonly ?TaintSet $revertedResiduals = null,
-        /**
-         * What the returned array's keys carry. See
-         * {@see FunctionSummary::$paramToReturnKeys}.
-         */
-        public readonly ?TaintSet $returnKeys = null,
     ) {
     }
 }
