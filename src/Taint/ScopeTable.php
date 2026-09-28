@@ -130,9 +130,24 @@ final class ScopeTable
     public function addInto(string $key, array $scope, array $origins = [], array $keyed = []): bool
     {
         $this->recordOrigins($key, $origins);
-        $this->recordKeyed($key, $keyed);
+        $this->recordKeyed($key, array_map(
+            static fn (array $keys): array => array_map(static fn (TaintSet $taint): TaintSet => $taint->withoutElements(), $keys),
+            $keyed,
+        ));
 
-        return self::merge($this->in, $key, $scope);
+        return self::merge($this->in, $key, self::withoutElements($scope));
+    }
+
+    /**
+     * A scope as another run reads it: see TaintSet::withoutElements().
+     *
+     * @param array<string, TaintSet> $scope
+     *
+     * @return array<string, TaintSet>
+     */
+    private static function withoutElements(array $scope): array
+    {
+        return array_map(static fn (TaintSet $taint): TaintSet => $taint->withoutElements(), $scope);
     }
 
     /**
@@ -172,7 +187,7 @@ final class ScopeTable
     {
         $this->recordOrigins($key, $origins);
 
-        return self::merge($this->out, $key, $scope);
+        return self::merge($this->out, $key, self::withoutElements($scope));
     }
 
     /**

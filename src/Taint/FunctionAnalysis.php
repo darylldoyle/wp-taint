@@ -129,6 +129,25 @@ final class FunctionAnalysis
      */
     private ?CapabilityGuard $siteWideGuards = null;
 
+    /**
+     * The collections of loops that rebuild an array under their own key:
+     * see {@see rebuildLoops()}. Null until first asked.
+     *
+     * @var array<int, true>|null
+     */
+    private ?array $rebuildLoops = null;
+
+    /**
+     * Per such loop's collection, the number each literal key's element is
+     * labelled with. Handed out once and never reused, so a number names one
+     * element of one loop for the whole run.
+     *
+     * @var array<int, array<int|string, int>>
+     */
+    private array $loopElementNumbers = [];
+
+    private int $nextElementNumber = 0;
+
     /** The block being walked, so a sink can ask what guarded the path to it. */
     private ?Block $currentBlock = null;
 
@@ -346,22 +365,35 @@ final class FunctionAnalysis
         $this->collecting = true;
         $this->pass();
 
+        // A loop's element numbers mean something only in this run, and
+        // everything below outlives it in a summary: see
+        // TaintSet::withoutElements().
+        $plain = static fn (?TaintSet $taint): ?TaintSet => $taint?->withoutElements();
+        $tuples = static fn (array $references, int $at): array => array_map(
+            static function (array $reference) use ($at): array {
+                $reference[$at] = $reference[$at]->withoutElements();
+
+                return $reference;
+            },
+            $references,
+        );
+
         return new AnalysisResult(
             $this->findings,
-            $this->returnTaint,
+            $this->returnTaint->withoutElements(),
             $this->sinksReached,
             $this->imprecise,
-            $this->byRefTaint(),
+            array_map(static fn (TaintSet $taint): TaintSet => $taint->withoutElements(), $this->byRefTaint()),
             $this->warnings,
             $this->state,
             $this->returnAnchored ?? false,
-            array_values($this->propertiesReached),
-            array_values($this->capturesReached),
-            array_values($this->scopesReached),
-            $this->returnContainer,
-            $this->returnKeyed,
-            $this->revertedResiduals,
-            $this->returnKeys,
+            $tuples(array_values($this->propertiesReached), 2),
+            $tuples(array_values($this->capturesReached), 2),
+            $tuples(array_values($this->scopesReached), 4),
+            $plain($this->returnContainer),
+            array_map(static fn (TaintSet $taint): TaintSet => $taint->withoutElements(), $this->returnKeyed),
+            $plain($this->revertedResiduals),
+            $plain($this->returnKeys),
         );
     }
 
@@ -1656,6 +1688,15 @@ final class FunctionAnalysis
                 );
             }
 
+            // A write under the key of a loop over an array with literal keys
+            // puts each element's kinds back under that element's key: see
+            // rebuildLoopNumbers().
+            $numbers = $target->dim === null ? null : $this->loopKeyNumbers($target->dim);
+
+            if ($numbers !== null && $taint->namesElements()) {
+                return $this->writeUnderLoopKeys($op, $target, $taint, $numbers) || $keyed;
+            }
+
             // A computed key can land anywhere, so it goes to the whole-array
             // slot — which is what every element write did before.
             //
@@ -2015,17 +2056,29 @@ final class FunctionAnalysis
             $op,
             $op->var,
             'Iterating a tainted collection yields tainted values.',
+            $this->rebuildLoopNumbers($op->var),
         );
     }
 
-    private function transferContainerRead(Op\Expr $op, Operand $container, string $description): bool
-    {
+    /**
+     * @param array<int|string, int>|null $numbers for a loop that rebuilds an array under its own key, the
+     *                                             number each literal key's element is labelled with: see
+     *                                             {@see TaintSet::fromElement()}
+     */
+    private function transferContainerRead(
+        Op\Expr $op,
+        Operand $container,
+        string $description,
+        ?array $numbers = null,
+    ): bool {
         // A read out of a container sees every element: a computed key could
         // be any of them, and a `foreach` visits all of them. What they hold
         // below themselves stays apart, so `$row['title']` in a loop over
         // rows reads each row's title and not the whole row.
         $any = $this->state->shapeOf($container)->anyElement();
-        $taint = $this->state->taintOf($container)->union($any->own());
+        $taint = $numbers === null
+            ? $this->state->taintOf($container)->union($any->own())
+            : $this->labelledLoopValue($container, $numbers);
         $read = new Provenance(TraceVerb::Propagate, $op, $description, [$container]);
         $changed = $this->state->addShape($op->result, $any->structure(), $read);
 
@@ -2038,6 +2091,199 @@ final class FunctionAnalysis
             : null;
 
         return $this->state->set($op->result, $taint, $provenance ?? $read) || $changed;
+    }
+
+    /**
+     * A loop value's own taint with each literal key's element labelled by
+     * its number, and what the collection carries as a whole or under a
+     * computed key from anywhere. The same kinds as an unlabelled read.
+     *
+     * @param array<int|string, int> $numbers
+     */
+    private function labelledLoopValue(Operand $collection, array $numbers): TaintSet
+    {
+        $shape = $this->state->shapeOf($collection);
+        $taint = $this->state->taintOf($collection)->union($shape->restPart()->own());
+
+        foreach ($shape->elements() as $key => $element) {
+            $own = $element->own();
+            $taint = $taint->union(isset($numbers[$key]) ? $own->fromElement($numbers[$key]) : $own);
+        }
+
+        return $taint;
+    }
+
+    /**
+     * Each literal key of the array a loop that rebuilds it is over, and the
+     * number its element is labelled with. Null for any other loop.
+     *
+     * ```php
+     * foreach ( $raw as $k => $v ) {
+     *     $out[ $k ] = trim( $v );
+     * }
+     * ```
+     *
+     * rebuilds `$raw` key by key. The loop value carries a number for each
+     * element of `$raw`, and the write under the loop's key puts each
+     * element's kinds back under that element's key in `$out`. So a request
+     * value under `name` stays under `name`. A loop gets numbers only when a
+     * write under its key is in the function, and numbers are handed out
+     * once per key and never reused, so a value from one loop written under
+     * another loop's key goes to the computed-key slot, as it always did.
+     *
+     * @return array<int|string, int>|null
+     */
+    private function rebuildLoopNumbers(Operand $collection): ?array
+    {
+        $id = spl_object_id($collection);
+
+        if (! isset($this->rebuildLoops()[$id])) {
+            return null;
+        }
+
+        $elements = $this->state->shapeOf($collection)->elements();
+
+        if ($elements === []) {
+            return null;
+        }
+
+        foreach (array_keys($elements) as $key) {
+            if (! isset($this->loopElementNumbers[$id][$key]) && $this->nextElementNumber < TaintSet::MAX_PARTS) {
+                $this->loopElementNumbers[$id][$key] = $this->nextElementNumber++;
+            }
+        }
+
+        return $this->loopElementNumbers[$id] ?? null;
+    }
+
+    /**
+     * The numbers of the loop whose key `$dim` is, when that loop rebuilds an
+     * array: see {@see rebuildLoopNumbers()}.
+     *
+     * @return array<int|string, int>|null
+     */
+    private function loopKeyNumbers(Operand $dim): ?array
+    {
+        $collection = self::loopKeyCollection($dim);
+
+        return $collection === null ? null : ($this->loopElementNumbers[spl_object_id($collection)] ?? null);
+    }
+
+    /**
+     * The collection a loop is over, when `$dim` is that loop's key, through
+     * any copies.
+     */
+    private static function loopKeyCollection(Operand $dim): ?Operand
+    {
+        $operand = $dim;
+
+        for ($hops = 0; $hops < self::MAX_ASSIGNMENT_HOPS; $hops++) {
+            $op = OperandHelper::definingOp($operand);
+
+            if ($op instanceof Op\Iterator\Key) {
+                return $op->var;
+            }
+
+            if (! $op instanceof Op\Expr\Assign) {
+                return null;
+            }
+
+            $operand = $op->expr;
+        }
+
+        return null;
+    }
+
+    /**
+     * The collections of this function's loops that a write under the loop's
+     * own key rebuilds, by object id. Found once, from the graph.
+     *
+     * @return array<int, true>
+     */
+    private function rebuildLoops(): array
+    {
+        if ($this->rebuildLoops !== null) {
+            return $this->rebuildLoops;
+        }
+
+        $this->rebuildLoops = [];
+
+        foreach ($this->blocks as $block) {
+            foreach ($block->children as $op) {
+                if (
+                    ! $op instanceof Op\Expr\ArrayDimFetch
+                    || $op->dim === null
+                    || ! OperandHelper::isWrittenElsewhere($op->result, $op)
+                ) {
+                    continue;
+                }
+
+                $collection = self::loopKeyCollection($op->dim);
+
+                if ($collection !== null) {
+                    $this->rebuildLoops[spl_object_id($collection)] = true;
+                }
+            }
+        }
+
+        return $this->rebuildLoops;
+    }
+
+    /**
+     * Write `$taint` under a loop's key: each element's kinds under that
+     * element's key, and whatever came from elsewhere under a computed key.
+     *
+     * @param array<int|string, int> $numbers
+     */
+    private function writeUnderLoopKeys(
+        Op\Expr\Assign|Op\Expr\AssignRef $op,
+        Op\Expr\ArrayDimFetch $target,
+        TaintSet $taint,
+        array $numbers,
+    ): bool {
+        $changed = false;
+        $all = 0;
+
+        foreach ($numbers as $key => $number) {
+            $all |= 1 << $number;
+            $piece = $taint->forElement($number);
+
+            if ($piece->isEmpty()) {
+                continue;
+            }
+
+            $changed = $this->state->addShape(
+                $target->var,
+                Shape::element($key, Shape::of($piece)),
+                new Provenance(
+                    TraceVerb::Propagate,
+                    $op,
+                    sprintf("Written into %s['%s'], the key it came from.", OperandHelper::describe($target->var), $key),
+                    [$op->expr],
+                ),
+            ) || $changed;
+        }
+
+        $elsewhere = $taint->beyondElements($all);
+
+        if ($elsewhere->isEmpty()) {
+            return $changed;
+        }
+
+        return $this->state->addShape(
+            $target->var,
+            Shape::rest(Shape::of($elsewhere)),
+            new Provenance(
+                TraceVerb::Propagate,
+                $op,
+                sprintf(
+                    'Written into %s under a computed key. The key could be any of them, so the whole array '
+                        . 'is treated as tainted from here.',
+                    OperandHelper::describe($target->var),
+                ),
+                [$op->expr],
+            ),
+        ) || $changed;
     }
 
     private function transferSuperglobalFetch(Op\Expr\ArrayDimFetch $op, Source $source, string $name): bool
