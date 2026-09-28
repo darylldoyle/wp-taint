@@ -684,6 +684,16 @@ a literal still counts when it folds to exactly one string. One that folds to
 several, or to none, is taken to hold no quote: `$c ? "'" : $x` could hold
 anything.
 
+**Identifiers and hand-written escapers.** A column or table name cannot go
+through `prepare()`, so code escapes it for the backticks it will sit in.
+`str_replace( '`', '``', $v )` doubles every backtick and removing them works
+as well: the value is `sql_unticked`, safe inside backticks only. Inside
+backticks the concatenation opens and closes, it is quoted there. Bare, or
+inside quotes where a quote it holds gets out, it is reported. A
+`str_replace()` that escapes the backslash first and then both quote
+characters is credited like `esc_sql()`. One that escapes the quotes first, or
+only one of them, gets no credit.
+
 **Only some functions keep the escaping.** A value keeps `sql_unquoted` or
 `sql_self_quoted` through a propagator the catalogue marks `keeps_residuals`:
 the case functions, `trim()` without a mask, `strval()`, the array functions

@@ -51,6 +51,12 @@ final class Propagator
          * into `sql`.
          */
         public readonly ?int $glueArgument = null,
+        /**
+         * `str_replace()` read by its literal search and replacement: doubling
+         * or removing backticks escapes for an identifier, and escaping the
+         * backslash and then both quotes escapes for a quoted literal.
+         */
+        public readonly bool $readsEscapes = false,
     ) {
     }
 }

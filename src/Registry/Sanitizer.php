@@ -98,7 +98,7 @@ final class Sanitizer
         // Clearing SQL clears a value that brings its own quotes too: a
         // quote-escaper escapes those quotes, and anything stricter removes them.
         $cleared = $this->clears->has(TaintKind::Sql)
-            ? $this->clears->union(TaintSet::of(TaintKind::SqlSelfQuoted))
+            ? $this->clears->union(TaintSet::of(TaintKind::SqlSelfQuoted, TaintKind::SqlUnticked))
             : $this->clears;
 
         return $incoming->without($cleared);
@@ -144,7 +144,11 @@ final class Sanitizer
         // out of it entirely.
         if (
             ($this->quotedOnly || $strategyQuotedOnly)
-            && ($incoming->has(TaintKind::Sql) || $incoming->has(TaintKind::SqlSelfQuoted))
+            && (
+                $incoming->has(TaintKind::Sql)
+                || $incoming->has(TaintKind::SqlSelfQuoted)
+                || $incoming->has(TaintKind::SqlUnticked)
+            )
         ) {
             $cleared = $cleared->union(TaintSet::of(TaintKind::SqlUnquoted));
         }

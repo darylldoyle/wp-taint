@@ -176,6 +176,7 @@ function = "mb_substr"
 
 [[propagators]]
 function = "str_replace"
+reads_escapes = true
 note = "Taint flows from both the subject and the replacement."
 
 [[propagators]]

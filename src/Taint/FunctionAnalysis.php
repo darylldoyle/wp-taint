@@ -2156,7 +2156,7 @@ final class FunctionAnalysis
      */
     private static function unescapedSql(TaintSet $taint): TaintSet
     {
-        $residuals = TaintSet::of(TaintKind::SqlUnquoted, TaintKind::SqlSelfQuoted);
+        $residuals = TaintSet::of(TaintKind::SqlUnquoted, TaintKind::SqlSelfQuoted, TaintKind::SqlUnticked);
 
         if ($taint->intersect($residuals)->isEmpty()) {
             return $taint;
@@ -2270,6 +2270,7 @@ final class FunctionAnalysis
         bool $imprecise = false,
         bool $keepsKeys = false,
         bool $revertResiduals = false,
+        ?TaintKind $sqlBecomes = null,
     ): bool {
         $taint = TaintSet::empty();
         $container = TaintSet::empty();
@@ -2309,6 +2310,17 @@ final class FunctionAnalysis
                 static fn (array $entry): array => [$entry[0], $entry[1], self::unescapedSql($entry[2])],
                 $kept,
             );
+        }
+
+        // An escaper written as a replacement: `sql` becomes the residual it
+        // leaves. See escapeReading().
+        if ($sqlBecomes !== null) {
+            $escaped = static fn (TaintSet $set): TaintSet => $set->has(TaintKind::Sql)
+                ? $set->without(TaintSet::of(TaintKind::Sql))->with($sqlBecomes)
+                : $set;
+            $taint = $escaped($taint);
+            $container = $escaped($container);
+            $kept = array_map(static fn (array $entry): array => [$entry[0], $entry[1], $escaped($entry[2])], $kept);
         }
 
         $hasKept = array_filter($kept, static fn (array $entry): bool => ! $entry[2]->isEmpty()) !== [];
@@ -3655,7 +3667,7 @@ final class FunctionAnalysis
         }
 
         if ($reached->has(TaintKind::Sql)) {
-            $carried = $carried->with(TaintKind::SqlUnquoted, TaintKind::SqlSelfQuoted);
+            $carried = $carried->with(TaintKind::SqlUnquoted, TaintKind::SqlSelfQuoted, TaintKind::SqlUnticked);
         }
 
         if (TaintSet::allDataflowKinds()->isSubsetOf($reached)) {
@@ -3680,7 +3692,9 @@ final class FunctionAnalysis
             return TaintSet::empty();
         }
 
-        return $reached->intersect(TaintSet::of(TaintKind::SqlUnquoted, TaintKind::SqlSelfQuoted));
+        return $reached->intersect(
+            TaintSet::of(TaintKind::SqlUnquoted, TaintKind::SqlSelfQuoted, TaintKind::SqlUnticked),
+        );
     }
 
     /**
@@ -4172,13 +4186,104 @@ final class FunctionAnalysis
             }
         }
 
+        $escape = $propagator->readsEscapes ? $this->escapeReading($call) : null;
+
         return $this->transferUnion(
             $op,
             $inputs,
-            $description,
+            $escape === null ? $description : sprintf(
+                '%s %s, so the value is safe only %s.',
+                $matcher->describe(),
+                $escape === TaintKind::SqlUnticked
+                    ? 'doubles or removes every backtick'
+                    : 'escapes the backslash and then both quotes',
+                $escape === TaintKind::SqlUnticked ? 'inside backticks' : 'inside quotes',
+            ),
             keepsKeys: $propagator->keepsKeys,
             revertResiduals: ! $this->keepsResiduals($call, $propagator),
+            sqlBecomes: $escape,
         );
+    }
+
+    /**
+     * What a `str_replace()` with literal arguments escapes SQL for, or null.
+     *
+     * Two readings, and only two, because the order is what makes each one
+     * work. Every backtick doubled, `str_replace( '`', '``', $v )`, or removed:
+     * the value cannot leave a backtick-quoted identifier. The backslash
+     * escaped first and then both quotes: the value cannot leave a quoted
+     * literal. Escaping the quotes first and the backslash after would turn the
+     * `\'` just written into `\\'`, which ends the literal.
+     */
+    private function escapeReading(CallTarget $call): ?TaintKind
+    {
+        $search = $this->literalStrings($call->argument(0));
+        $replace = $this->literalStrings($call->argument(1));
+
+        if ($search === null || $replace === null) {
+            return null;
+        }
+
+        if ($search === ['`'] && ($replace === ['``'] || $replace === [''])) {
+            return TaintKind::SqlUnticked;
+        }
+
+        $escapes = ['\\' => '\\\\', "'" => "\\'", '"' => '\\"'];
+
+        if (count($search) !== 3 || count($replace) !== 3 || $search[0] !== '\\') {
+            return null;
+        }
+
+        foreach ($search as $position => $character) {
+            if (($escapes[$character] ?? null) !== $replace[$position]) {
+                return null;
+            }
+        }
+
+        return count(array_unique($search)) === 3 ? TaintKind::SqlUnquoted : null;
+    }
+
+    /**
+     * The strings an argument holds when it is a literal string or an array
+     * literal of them, in order. Null for anything else.
+     *
+     * @return list<string>|null
+     */
+    private function literalStrings(?Operand $operand): ?array
+    {
+        if ($operand === null) {
+            return null;
+        }
+
+        $single = OperandHelper::literalString($operand);
+
+        if ($single !== null) {
+            return [$single];
+        }
+
+        $definition = OperandHelper::definingOp($operand);
+
+        if ($definition instanceof Op\Expr\Assign) {
+            return $this->literalStrings($definition->expr);
+        }
+
+        if (! $definition instanceof Op\Expr\Array_) {
+            return null;
+        }
+
+        $strings = [];
+
+        foreach ($definition->values as $value) {
+            $string = $value instanceof Operand ? OperandHelper::literalString($value) : null;
+
+            if ($string === null) {
+                return null;
+            }
+
+            $strings[] = $string;
+        }
+
+        return $strings;
     }
 
     /**
@@ -4866,6 +4971,12 @@ final class FunctionAnalysis
                         $reference->sinkIdentity,
                         $reference->functionDisplayName,
                     ),
+                    TaintKind::SqlUnticked => sprintf(
+                        'Reaches %s inside %s outside backticks. The value was made safe inside backticks only, so '
+                            . 'a quote or a space in it gets through.',
+                        $reference->sinkIdentity,
+                        $reference->functionDisplayName,
+                    ),
                     default => sprintf(
                         'Reaches %s inside %s with %s taint intact.',
                         $reference->sinkIdentity,
@@ -5285,6 +5396,30 @@ final class FunctionAnalysis
             return;
         }
 
+        $unticked = $this->queryShapes->unbacktickedComponent(
+            $operand,
+            fn (Operand $component): bool => $this->guardedEffectiveTaintOf($component)->has(TaintKind::SqlUnticked),
+        );
+
+        if ($unticked !== null) {
+            $this->emit(
+                self::UNPREPARED_QUERY_RULE,
+                TaintKind::Sql,
+                Severity::Critical,
+                $op,
+                $identity,
+                $unticked,
+                sprintf(
+                    '%s was made safe inside backticks only, by doubling or removing its backticks, and then '
+                        . 'interpolated into the query passed to %s() outside them. It can still hold a quote or '
+                        . 'a space. Quote it with backticks, or check it against a list of known names.',
+                    OperandHelper::describe($unticked),
+                    $identity,
+                ),
+                TaintKind::SqlUnticked,
+            );
+        }
+
         if ($unquoted === null) {
             return;
         }
@@ -5331,6 +5466,7 @@ final class FunctionAnalysis
         $contexts = [
             [TaintKind::SqlUnquoted, $this->queryShapes->unquotedComponent($query, $carriesSql)],
             [TaintKind::SqlSelfQuoted, $this->queryShapes->quotedComponent($query, $carriesSql)],
+            [TaintKind::SqlUnticked, $this->queryShapes->unbacktickedComponent($query, $carriesSql)],
         ];
 
         foreach ($contexts as [$kind, $component]) {

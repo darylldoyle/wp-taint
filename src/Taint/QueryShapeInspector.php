@@ -152,6 +152,24 @@ final class QueryShapeInspector
     }
 
     /**
+     * The first component outside backticks that the caller says is at risk
+     * there: a value escaped for an identifier, {@see TaintKind::SqlUnticked},
+     * placed bare or inside quotes.
+     *
+     * @param callable(Operand): bool $atRisk
+     */
+    public function unbacktickedComponent(Operand $query, callable $atRisk): ?Operand
+    {
+        foreach ($this->placed($query) as [$component, $state]) {
+            if ($state !== SqlQuote::Backtick && $atRisk($component)) {
+                return $component;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * The parts of a built string, each with the text it is known to hold:
      * a literal's value, or the one string a part folds to. Null for an
      * operand that is not a built string.

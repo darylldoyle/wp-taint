@@ -22,6 +22,10 @@ namespace Enshrined\WpTaint\Taint;
  * carrying `sql_self_quoted` inside quotes or backticks has its own quotes
  * closing the outer ones, and is `sql` again.
  *
+ * Backticks work the same way for {@see TaintKind::SqlUnticked}, a value
+ * escaped for an identifier: inside backticks the concatenation opens and
+ * closes it brings its own, and inside quotes it is `sql` again.
+ *
  * Only text the concatenation writes counts: literal fragments, and a part
  * that folds to exactly one string. A part whose text is unknown is taken to
  * hold no quote, the same reading the query-shape check makes. An escaped
@@ -47,7 +51,7 @@ final class SqlQuoteFold
             if ($text === null) {
                 $context[$index] = $state;
 
-                if ($state->isLiteral()) {
+                if ($state->isLiteral() || $state === SqlQuote::Backtick) {
                     $inside[] = $index;
                 }
 
@@ -55,14 +59,15 @@ final class SqlQuoteFold
             }
 
             [$next, $closed] = $state->after($text);
+            $open = $state->isLiteral() || $state === SqlQuote::Backtick;
 
-            if ($state->isLiteral() && $closed) {
+            if ($open && $closed) {
                 foreach ($inside as $closedOver) {
-                    $enclosed[$closedOver] = true;
+                    $enclosed[$closedOver] = $state;
                 }
             }
 
-            if (! $state->isLiteral() || $closed || ! $next->isLiteral()) {
+            if (! $open || $closed || $next !== $state) {
                 $inside = [];
             }
 
@@ -73,7 +78,7 @@ final class SqlQuoteFold
 
         foreach ($parts as $index => [$text, $taint]) {
             if ($text === null) {
-                $taint = self::placed($taint, $context[$index] ?? SqlQuote::Unknown, isset($enclosed[$index]));
+                $taint = self::placed($taint, $context[$index] ?? SqlQuote::Unknown, $enclosed[$index] ?? null);
             }
 
             $result = $result->union($taint);
@@ -90,7 +95,11 @@ final class SqlQuoteFold
     public static function applies(array $taints): bool
     {
         foreach ($taints as $taint) {
-            if ($taint->has(TaintKind::SqlUnquoted) || $taint->has(TaintKind::SqlSelfQuoted)) {
+            if (
+                $taint->has(TaintKind::SqlUnquoted)
+                || $taint->has(TaintKind::SqlSelfQuoted)
+                || $taint->has(TaintKind::SqlUnticked)
+            ) {
                 return true;
             }
         }
@@ -98,7 +107,7 @@ final class SqlQuoteFold
         return false;
     }
 
-    private static function placed(TaintSet $taint, SqlQuote $context, bool $enclosed): TaintSet
+    private static function placed(TaintSet $taint, SqlQuote $context, ?SqlQuote $enclosedIn): TaintSet
     {
         if ($context === SqlQuote::Unknown) {
             return $taint;
@@ -108,8 +117,19 @@ final class SqlQuoteFold
             $taint = $taint->without(TaintSet::of(TaintKind::SqlSelfQuoted))->with(TaintKind::Sql);
         }
 
-        if ($taint->has(TaintKind::SqlUnquoted) && $enclosed) {
+        if ($taint->has(TaintKind::SqlUnquoted) && $enclosedIn !== null && $enclosedIn->isLiteral()) {
             $taint = $taint->without(TaintSet::of(TaintKind::SqlUnquoted))->with(TaintKind::SqlSelfQuoted);
+        }
+
+        // Escaped for backticks: quoted by backticks this writes, or as raw as
+        // ever inside quotes, where a quote it holds gets out. Bare, the sink
+        // decides, since a string this is part of may still open backticks.
+        if ($taint->has(TaintKind::SqlUnticked)) {
+            if ($enclosedIn === SqlQuote::Backtick) {
+                $taint = $taint->without(TaintSet::of(TaintKind::SqlUnticked))->with(TaintKind::SqlSelfQuoted);
+            } elseif ($context->isLiteral()) {
+                $taint = $taint->without(TaintSet::of(TaintKind::SqlUnticked))->with(TaintKind::Sql);
+            }
         }
 
         return $taint;
