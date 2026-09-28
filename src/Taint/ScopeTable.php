@@ -45,16 +45,18 @@ use Enshrined\WpTaint\Finding\TraceStep;
 final class ScopeTable
 {
     /**
-     * What each file may find in scope on entry.
+     * What each file may find in scope on entry: each variable as a shape,
+     * its own taint on top and its elements below, so a template reading
+     * `$args['id']` sees only what `'id'` held.
      *
-     * @var array<string, array<string, TaintSet>> file key => variable name => taint
+     * @var array<string, array<string, Shape>> file key => variable name => value
      */
     private array $in = [];
 
     /**
      * What each file leaves behind, for names it assigns itself.
      *
-     * @var array<string, array<string, TaintSet>> file key => variable name => taint
+     * @var array<string, array<string, Shape>> file key => variable name => value
      */
     private array $out = [];
 
@@ -70,18 +72,6 @@ final class ScopeTable
      * @var array<string, array<string, list<TraceStep>>>
      */
     private array $origins = [];
-
-    /**
-     * Per-key taint for a variable that crosses the boundary as an array.
-     *
-     * `get_template_part( 'card', null, [ 'title' => $_GET['t'], 'id' => 7 ] )`
-     * hands the template an array whose keys are separately tainted, and the
-     * template reading `$args['id']` should be no more a finding than reading
-     * `$context['id']` in the file that built it.
-     *
-     * @var array<string, array<string, array<array-key, TaintSet>>> file => name => key => taint
-     */
-    private array $keyed = [];
 
     /**
      * How many names to track per file.
@@ -103,7 +93,7 @@ final class ScopeTable
     }
 
     /**
-     * @return array<string, TaintSet>
+     * @return array<string, Shape>
      */
     public function scopeInto(string $key): array
     {
@@ -113,7 +103,7 @@ final class ScopeTable
     }
 
     /**
-     * @return array<string, TaintSet>
+     * @return array<string, Shape>
      */
     public function scopeOutOf(string $key): array
     {
@@ -123,74 +113,44 @@ final class ScopeTable
     }
 
     /**
-     * @param array<string, TaintSet>                     $scope
-     * @param array<string, list<TraceStep>>               $origins
-     * @param array<string, array<array-key, TaintSet>>   $keyed
+     * @param array<string, Shape>           $scope
+     * @param array<string, list<TraceStep>> $origins
      */
-    public function addInto(string $key, array $scope, array $origins = [], array $keyed = []): bool
+    public function addInto(string $key, array $scope, array $origins = []): bool
     {
         $this->recordOrigins($key, $origins);
-        $this->recordKeyed($key, array_map(
-            static fn (array $keys): array => array_map(
+
+        return self::merge($this->in, $key, self::forOtherRuns($scope));
+    }
+
+    /**
+     * A scope as another run reads it: no element numbers, see
+     * TaintSet::withoutElements(), and no write, which belongs to the graph
+     * the run that published it analysed.
+     *
+     * @param array<string, Shape> $scope
+     *
+     * @return array<string, Shape>
+     */
+    private static function forOtherRuns(array $scope): array
+    {
+        return array_map(
+            static fn (Shape $value): Shape => $value->mapSets(
                 static fn (TaintSet $taint): TaintSet => $taint->withoutElements(),
-                $keys,
             ),
-            $keyed,
-        ));
-
-        return self::merge($this->in, $key, self::withoutElements($scope));
+            $scope,
+        );
     }
 
     /**
-     * A scope as another run reads it: see TaintSet::withoutElements().
-     *
-     * @param array<string, TaintSet> $scope
-     *
-     * @return array<string, TaintSet>
-     */
-    private static function withoutElements(array $scope): array
-    {
-        return array_map(static fn (TaintSet $taint): TaintSet => $taint->withoutElements(), $scope);
-    }
-
-    /**
-     * @return array<string, array<array-key, TaintSet>>
-     */
-    public function keyedInto(string $key): array
-    {
-        $this->log?->record('sk:' . $key);
-
-        return $this->keyed[$key] ?? [];
-    }
-
-    /**
-     * @param array<string, array<array-key, TaintSet>> $keyed
-     */
-    private function recordKeyed(string $key, array $keyed): bool
-    {
-        $changed = false;
-
-        foreach ($keyed as $name => $keys) {
-            foreach ($keys as $index => $taint) {
-                $existing = $this->keyed[$key][$name][$index] ?? TaintSet::empty();
-                $merged = $existing->union($taint);
-                $changed = $changed || ! isset($this->keyed[$key][$name][$index]) || ! $merged->equals($existing);
-                $this->keyed[$key][$name][$index] = $merged;
-            }
-        }
-
-        return $changed;
-    }
-
-    /**
-     * @param array<string, TaintSet>        $scope
+     * @param array<string, Shape>           $scope
      * @param array<string, list<TraceStep>> $origins
      */
     public function addOutOf(string $key, array $scope, array $origins = []): bool
     {
         $this->recordOrigins($key, $origins);
 
-        return self::merge($this->out, $key, self::withoutElements($scope));
+        return self::merge($this->out, $key, self::forOtherRuns($scope));
     }
 
     /**
@@ -259,10 +219,10 @@ final class ScopeTable
      * Merge, and say which entries moved.
      *
      * `changed` is what it always was: whether a scope's variables grew, which
-     * is what keeps the fixed point going. Origins and keyed entries never
-     * counted towards that, and still do not, so the loop ends exactly where
-     * it did. They are in `entries` all the same, as {@see ReadLog} keys,
-     * because a function that read one reads something different now.
+     * is what keeps the fixed point going. Origins never counted towards
+     * that, and still do not. They are in `entries` all the same, as
+     * {@see ReadLog} keys, because a function that read one reads something
+     * different now.
      *
      * @return array{changed: bool, entries: list<string>}
      */
@@ -291,12 +251,6 @@ final class ScopeTable
             }
         }
 
-        foreach ($other->keyed as $key => $keyed) {
-            if ($this->recordKeyed($key, $keyed)) {
-                $entries['sk:' . $key] = true;
-            }
-        }
-
         return ['changed' => $changed, 'entries' => array_keys($entries)];
     }
 
@@ -306,15 +260,15 @@ final class ScopeTable
     }
 
     /**
-     * @param array<string, array<string, TaintSet>> $target
-     * @param array<string, TaintSet>                $scope
+     * @param array<string, array<string, Shape>> $target
+     * @param array<string, Shape>                $scope
      */
     private static function merge(array &$target, string $key, array $scope): bool
     {
         $changed = false;
 
-        foreach ($scope as $name => $taint) {
-            if ($taint->isEmpty()) {
+        foreach ($scope as $name => $value) {
+            if ($value->isEmpty()) {
                 continue;
             }
 
@@ -322,10 +276,11 @@ final class ScopeTable
                 continue;
             }
 
-            $existing = $target[$key][$name] ?? TaintSet::empty();
-            $merged = $existing->union($taint);
+            $existing = $target[$key][$name] ?? Shape::empty();
+            $merged = $existing->join($value);
 
-            if ($merged->equals($existing)) {
+            // A join that adds nothing hands back the shape it joined into.
+            if ($merged === $existing) {
                 continue;
             }
 

@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Enshrined\WpTaint\Taint\FunctionSummary;
+use Enshrined\WpTaint\Taint\Shape;
 use Enshrined\WpTaint\Taint\TaintKind;
 use Enshrined\WpTaint\Taint\TaintSet;
 
@@ -17,7 +18,7 @@ function summaryReaching(TaintSet $kinds): FunctionSummary
         'acme_fn()',
         paramToProperty: [0 => [['Acme_Box', 'v', $kinds]]],
         paramToCapture: [0 => [['closure#1', 'label', $kinds]]],
-        paramToScope: [0 => [['in', 'tpl.php::{main}', 'label', null, $kinds]]],
+        paramToScope: [0 => [['in', 'tpl.php::{main}', 'label', Shape::of($kinds)]]],
     );
 }
 
@@ -32,7 +33,7 @@ it('keeps one reference per place when two bodies merge, with the kinds of both'
         ->and($merged->capturesFor(0))->toHaveCount(1)
         ->and($merged->capturesFor(0)[0][2]->equals($both))->toBeTrue()
         ->and($merged->scopesFor(0))->toHaveCount(1)
-        ->and($merged->scopesFor(0)[0][4]->equals($both))->toBeTrue();
+        ->and($merged->scopesFor(0)[0][3]->flatten()->equals($both))->toBeTrue();
 });
 
 it('is not settled while the kinds reaching a place are still growing', function (): void {

@@ -178,11 +178,11 @@ read, a join, an assignment and a copy keep each element apart. In
 `$a['a']['id']` is clean. A part deeper than four levels folds into its node,
 which loses precision and never taint.
 
-**A function's return keeps four levels too.** A function that returns the
-array above hands back `'a'` with `'id'` and `'value'` apart, so the caller's
-`'id'` is clean. So does a callback `array_map()` runs, under a computed key of
-the result. An include's scope does not keep them yet. It holds each variable
-as one set, apart from the keys of the `$args` a template is handed. A function
+**A function's return and an include's scope keep four levels too.** A
+function that returns the array above hands back `'a'` with `'id'` and
+`'value'` apart, so the caller's `'id'` is clean. So does a callback
+`array_map()` runs, under a computed key of the result, and so does a variable
+an included file, a template's `$args` or a closure's capture reads. A function
 whose result keeps its input's keys, such as `array_filter()` or
 `apply_filters()` on an array, keeps each element under its string key. An
 integer key can be renumbered, so its element joins the whole-array slot, as
@@ -193,7 +193,8 @@ does every element of a function that builds something else,
 parts a function reads its parameter through, and nothing stands for an element
 the body never names. So `function acme_id( $a ) { return $a; }` hands back
 `array( 't' => $_GET['t'], 'm' => 'x' )` with `'m'` tainted, and so does a
-function that adds an element and returns the rest. **Direction:**
+function that adds an element and returns the rest, or includes a file that
+reads the parameter. **Direction:**
 over-reports.
 
 **A key carries its collection's own taint and what the code used as a key.**
@@ -1368,8 +1369,8 @@ add_action( 'wp_footer', function () use ( $raw ) {
 The body is a separate function with its own context, and the captured variable
 arrives inside it as a free operand. What the closure captured is published at
 the site that created it and read by the body, using the same table an
-`include`'s scope uses, because it is the same shape: a map of names to taint
-crossing a boundary.
+`include`'s scope uses, because it is the same shape: a map of names to values
+crossing a boundary, each value with its elements under their keys.
 
 By name rather than by operand, because php-cfg gives the `use` clause its own
 fresh `Variable` nodes rather than the SSA temporaries holding the values.
@@ -1416,8 +1417,8 @@ for the ones that pass literals.
 
 Each caller publishes only the kinds that get through the callee. The summary
 records, for every place a parameter reaches, the kinds that arrived there
-when the parameter carried every kind, and the caller's argument is
-intersected with them. `$label = esc_html( $x ); include 'tpl.php';` hands the
+when the parameter carried every kind, element by element, and the caller's
+argument is intersected with them. `$label = esc_html( $x ); include 'tpl.php';` hands the
 template no HTML taint, whatever the caller passed as `$x`. The escaping
 markers ride with the kind they describe: a value escaped and then filtered
 keeps that history through a setter that stores it as it came. The recorded kinds
