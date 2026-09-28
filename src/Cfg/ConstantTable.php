@@ -78,6 +78,31 @@ final class ConstantTable
     }
 
     /**
+     * A class constant, `Acme_Notices::DISMISS`, under its class.
+     *
+     * A class name is not case-sensitive and a constant name is, so the key
+     * lowers the one and keeps the other. `::` cannot be part of a global
+     * constant's name, so the two never collide.
+     */
+    public function defineClassConstant(string $class, string $name, ?string $value): void
+    {
+        $this->define(self::classKey($class, $name), $value);
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function classConstantValuesOf(string $class, string $name): array
+    {
+        return $this->valuesOf(self::classKey($class, $name));
+    }
+
+    private static function classKey(string $class, string $name): string
+    {
+        return strtolower(ltrim($class, '\\')) . '::' . $name;
+    }
+
+    /**
      * @return list<string>
      */
     public function valuesOf(string $name): array

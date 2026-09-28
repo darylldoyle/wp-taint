@@ -260,7 +260,7 @@ final class FunctionAnalysis
             $this->types,
             $registry,
         );
-        $this->guards = new GuardAnalyzer();
+        $this->guards = new GuardAnalyzer($resolver->values());
         $this->capabilityGuards = new CapabilityGuard($registry, $callGraph);
         $this->returnTaint = TaintSet::empty();
         $this->returnContainer = TaintSet::empty();

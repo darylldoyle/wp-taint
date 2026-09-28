@@ -273,7 +273,10 @@ that literal. A loose `==`, `!=` or `switch` case holds it only to a string that
 is not numeric: `'1' == ' 1'`, and on PHP 7 `1 == '1<script>'`. So a case on a
 number or a numeric string, or `== true`, proves nothing. `empty( $x )` holds
 it to an empty value: `''`, `'0'`, `0`, `null`, `false` or an empty array. A
-`match` is read as the `===` chain it is.
+`match` is read as the `===` chain it is. A loose comparison against a constant
+counts when the constant holds exactly one string that is not numeric:
+`case self::DISMISS:` with `const DISMISS = 'acme_notice';`. A constant of
+unknown value could be `true`, which every non-empty string loosely equals.
 
 **What a guard proves, kind by kind.** A check against a fixed list of
 literals, or a number check, leaves nothing but an object id. A character check
@@ -932,10 +935,14 @@ require ACME_DIR . 'config.php';         // and what config.php assigns comes ba
 ```
 
 Paths are folded from literals, `__DIR__`/`__FILE__`, constants declared anywhere
-in the scan, and the pure path helpers WordPress builds them with, `dirname()`,
+in the scan, class constants under their class, and the pure path helpers
+WordPress builds them with, `dirname()`,
 `untrailingslashit()`, `plugin_dir_path()` and friends. A resolved path is looked
 up in the set of files being scanned rather than on disk, so two machines with
-the same checkout resolve the same set.
+the same checkout resolve the same set. `self::` in a class resolves to that
+class. `static::` can name a subclass, a trait's `self` is the class that uses
+it, and `parent::` and a constant a class inherits are not looked up, so none
+of those resolve.
 
 Scopes join both ways, and converge in the interprocedural loop alongside the
 property map. Cycles terminate because the return direction reads the table
