@@ -22,28 +22,6 @@ final class TaintState
     /** @var SplObjectStorage<Operand, Provenance> */
     private SplObjectStorage $provenance;
 
-    /** @var SplObjectStorage<Operand, TaintSet> */
-    private SplObjectStorage $containerTaint;
-
-    /** @var SplObjectStorage<Operand, Provenance> */
-    private SplObjectStorage $containerProvenance;
-
-    private bool $countsChanges = false;
-
-    /** @var SplObjectStorage<Operand, int> */
-    private SplObjectStorage $changeCounts;
-
-    public function __construct()
-    {
-        $this->keyedTaint = new SplObjectStorage();
-        $this->keyedProvenance = new SplObjectStorage();
-        $this->taint = new SplObjectStorage();
-        $this->provenance = new SplObjectStorage();
-        $this->containerTaint = new SplObjectStorage();
-        $this->containerProvenance = new SplObjectStorage();
-        $this->changeCounts = new SplObjectStorage();
-    }
-
     /**
      * Taint written into an array *through an element*, tracked separately from
      * the operand's own taint.
@@ -57,9 +35,9 @@ final class TaintState
      *
      * Keeping the two apart makes both transfer functions monotone, which is
      * what the fixed point needs to terminate.
-     */
-    /**
-     * Taint written into one constant key of an array.
+     *
+     * A write under a literal key lands in that key's element, and anything
+     * else in the rest: see {@see Shape}.
      *
      * ```php
      * $context['title'] = $_GET['title'];
@@ -67,170 +45,129 @@ final class TaintState
      * echo $context['id'];              // was reported, and should not be
      * ```
      *
-     * Kept beside the whole-array slot rather than replacing it, because both
-     * answers are needed: a write with a literal key is precise, a write with a
-     * computed key can land anywhere, and a read with a computed key has to see
-     * everything.
-     *
-     * It only helps when *both* the write and the read name a constant key. The
-     * moment either is dynamic the whole-array slot takes over, which is what
-     * the analysis did for every array until now.
+     * Both answers are needed: a write with a literal key is precise, a write
+     * with a computed key can land anywhere, and a read with a computed key has
+     * to see everything. A key-by-key answer helps only when *both* the write
+     * and the read name a constant key. The moment either is dynamic the rest
+     * takes over, which is what the analysis did for every array until the
+     * per-key answer came in.
      *
      * Keys are `array-key`, not `string`: PHP silently converts a numeric
-     * string key to an int on storage, so `$a['0']` and `$a[0]` are one slot
+     * string key to an int on storage, so `$a['0']` and `$a[0]` are one element
      * and a read hands back an int. Typing these as `string` crashed on the
      * first plugin that used a numeric key.
      *
-     * @var SplObjectStorage<Operand, array<array-key, TaintSet>>
+     * @var SplObjectStorage<Operand, Shape>
      */
-    private SplObjectStorage $keyedTaint;
+    private SplObjectStorage $shapes;
 
-    /** @var SplObjectStorage<Operand, array<array-key, Provenance>> */
-    private SplObjectStorage $keyedProvenance;
+    private bool $countsChanges = false;
 
-    public function keyedTaintOf(Operand $operand, string|int $key): TaintSet
+    /** @var SplObjectStorage<Operand, int> */
+    private SplObjectStorage $changeCounts;
+
+    public function __construct()
     {
-        $keys = $this->keyedTaint[$operand] ?? [];
-
-        return $keys[$key] ?? TaintSet::empty();
+        $this->taint = new SplObjectStorage();
+        $this->provenance = new SplObjectStorage();
+        $this->shapes = new SplObjectStorage();
+        $this->changeCounts = new SplObjectStorage();
     }
 
     /**
-     * Everything written into any constant key, for a read that names none.
+     * What was written into an operand through its elements. Its own taint is
+     * not part of it: see {@see taintOf()}.
      */
-    public function allKeyedTaintOf(Operand $operand): TaintSet
+    public function shapeOf(Operand $operand): Shape
     {
-        $set = TaintSet::empty();
-
-        foreach ($this->keyedTaint[$operand] ?? [] as $taint) {
-            $set = $set->union($taint);
+        if (! $this->shapes->contains($operand)) {
+            return Shape::empty();
         }
 
-        return $set;
+        return $this->shapes[$operand];
     }
 
     /**
-     * Every keyed slot of an operand, for handing an array across a boundary.
+     * Join `$shape` into what was written into an operand's elements.
      *
-     * @return array<array-key, TaintSet>
+     * Grow-only, like every element write: see {@see $shapes}. `$provenance`
+     * is the write behind any part of `$shape` that names none of its own.
+     *
+     * @return bool whether anything changed
      */
-    public function keyedTaintMapOf(Operand $operand): array
+    public function addShape(Operand $operand, Shape $shape, ?Provenance $provenance = null): bool
     {
-        return $this->keyedTaint[$operand] ?? [];
-    }
-
-    public function keyedProvenanceOf(Operand $operand, string|int $key): ?Provenance
-    {
-        $keys = $this->keyedProvenance[$operand] ?? [];
-
-        return $keys[$key] ?? null;
-    }
-
-    public function addKeyedTaint(Operand $operand, string|int $key, TaintSet $taint, Provenance $provenance): bool
-    {
-        if ($taint->isEmpty()) {
+        if ($shape->isEmpty()) {
             return false;
         }
 
-        $keys = $this->keyedTaint[$operand] ?? [];
-        $existing = $keys[$key] ?? TaintSet::empty();
-        $merged = $existing->union($taint);
+        if ($provenance !== null) {
+            $shape = $shape->withProvenance($provenance);
+        }
 
-        if ($merged->equals($existing)) {
+        $existing = $this->shapeOf($operand);
+        $merged = $existing->join($shape);
+
+        // A join that adds nothing hands back the shape it was given, and one
+        // that adds anything makes a larger one.
+        if ($merged === $existing) {
             return false;
         }
 
-        $keys[$key] = $merged;
-        $this->keyedTaint[$operand] = $keys;
-
-        $provenances = $this->keyedProvenance[$operand] ?? [];
-        $provenances[$key] = $provenance;
-        $this->keyedProvenance[$operand] = $provenances;
+        $this->shapes[$operand] = $merged;
 
         return true;
     }
 
     /**
-     * Copy every keyed slot from one operand to another, for `$b = $a`.
+     * Copy every element under a literal key from one operand to another, each
+     * with the write behind it, for `$b = $a`.
      *
      * @return bool whether anything changed
      */
-    public function copyKeyedTaint(Operand $from, Operand $to): bool
+    public function copyElements(Operand $from, Operand $to): bool
     {
         $changed = false;
 
-        foreach ($this->keyedTaint[$from] ?? [] as $key => $taint) {
-            $provenance = $this->keyedProvenanceOf($from, $key);
-
-            if ($provenance !== null) {
-                $changed = $this->addKeyedTaint($to, $key, $taint, $provenance) || $changed;
+        foreach ($this->shapeOf($from)->elements() as $key => $element) {
+            if ($element->provenance() !== null) {
+                $changed = $this->addShape($to, Shape::element($key, $element)) || $changed;
             }
         }
 
         return $changed;
     }
 
-    public function containerTaintOf(Operand $operand): TaintSet
-    {
-        if (! $this->containerTaint->contains($operand)) {
-            return TaintSet::empty();
-        }
-
-        return $this->containerTaint[$operand];
-    }
-
-    public function addContainerTaint(Operand $operand, TaintSet $taint, Provenance $provenance): bool
-    {
-        if ($taint->isEmpty()) {
-            return false;
-        }
-
-        $merged = $this->containerTaintOf($operand)->union($taint);
-
-        if ($merged->equals($this->containerTaintOf($operand))) {
-            return false;
-        }
-
-        $this->containerTaint[$operand] = $merged;
-        $this->containerProvenance[$operand] = $provenance;
-
-        return true;
-    }
-
     /**
-     * An operand's own taint plus anything written into it as a container.
+     * The write behind the element under `$key`, or behind the rest when
+     * `$key` is null.
      */
+    public function partProvenanceOf(Operand $operand, int|string|null $key): ?Provenance
+    {
+        $shape = $this->shapeOf($operand);
+
+        return ($key === null ? $shape->restPart() : $shape->elementAt($key))->provenance();
+    }
+
     /**
      * Everything this value carries, by any route.
      *
-     * All three slots, including the per-key ones. Anywhere a value crosses a
-     * boundary that cannot carry keys — passed to a function, reached by a
-     * sink, handed to an include — the precise answer is unavailable and the
-     * whole of it has to travel.
+     * Its own taint and its whole shape, including the elements under literal
+     * keys. Anywhere a value crosses a boundary that cannot carry keys — passed
+     * to a function, reached by a sink, handed to an include — the precise
+     * answer is unavailable and the whole of it has to travel.
      *
-     * Leaving the keyed slots out of this was a false negative and a bad one:
-     * `wpforms_panel_field( …, [ 'default' => $this->form->post_title ] )` put
-     * the taint under one key, `effectiveTaintOf()` reported the array clean,
-     * and the flow disappeared at the call. Findings went *down* on the corpus,
-     * which is not the same as going right.
+     * Leaving the per-key elements out of this was a false negative and a bad
+     * one: `wpforms_panel_field( …, [ 'default' => $this->form->post_title ] )`
+     * put the taint under one key, `effectiveTaintOf()` reported the array
+     * clean, and the flow disappeared at the call. Findings went *down* on the
+     * corpus, which is not the same as going right.
      *
-     * Only {@see keyedTaintOf()} answers narrowly, and only a read that names a
-     * constant key may ask it.
+     * Only a read that names a constant key may ask for less.
      */
     public function effectiveTaintOf(Operand $operand): TaintSet
     {
-        return $this->taintOf($operand)
-            ->union($this->containerTaintOf($operand))
-            ->union($this->allKeyedTaintOf($operand));
-    }
-
-    public function containerProvenanceOf(Operand $operand): ?Provenance
-    {
-        if (! $this->containerProvenance->contains($operand)) {
-            return null;
-        }
-
-        return $this->containerProvenance[$operand];
+        return $this->taintOf($operand)->union($this->shapeOf($operand)->flatten());
     }
 
     public function taintOf(Operand $operand): TaintSet
@@ -257,30 +194,6 @@ final class TaintState
             }
 
             $set = $set->union($this->effectiveTaintOf($operand));
-        }
-
-        return $set;
-    }
-
-    /**
-     * Union of the taint written into several operands *as containers*.
-     *
-     * Kept separate from {@see unionOf()} so that a value flowing through a
-     * pass-through does not have its element taint promoted into its own slot.
-     * Promoting it put two ops into disagreement over the same operand — one
-     * computing the own slot, the other the union — and the fixed point
-     * oscillated.
-     *
-     * @param list<Operand|null> $operands
-     */
-    public function unionOfContainers(array $operands): TaintSet
-    {
-        $set = TaintSet::empty();
-
-        foreach ($operands as $operand) {
-            if ($operand !== null) {
-                $set = $set->union($this->containerTaintOf($operand));
-            }
         }
 
         return $set;
