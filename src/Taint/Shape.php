@@ -44,6 +44,16 @@ final class Shape
      */
     public const DEPTH = 4;
 
+    /**
+     * An element standing for whichever element is read.
+     *
+     * A probe writes here when a function rebuilds its parameter key by key,
+     * `foreach ( $in as $k => $v ) { $out[ $k ] = f( $v ); }`, so its summary
+     * can say each element comes back under its own key. A read under any
+     * literal key sees it, as it would see that key's element.
+     */
+    public const EACH = "\0\0each";
+
     private static ?self $empty = null;
 
     private ?TaintSet $flat = null;
@@ -191,7 +201,13 @@ final class Shape
 
     public function elementAt(int|string $key): self
     {
-        return $this->elements[$key] ?? self::empty();
+        $element = $this->elements[$key] ?? self::empty();
+
+        if ($key === self::EACH || ! isset($this->elements[self::EACH])) {
+            return $element;
+        }
+
+        return $element->join($this->elements[self::EACH]);
     }
 
     public function restPart(): self

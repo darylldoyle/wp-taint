@@ -131,7 +131,10 @@ final class ScopeTable
     {
         $this->recordOrigins($key, $origins);
         $this->recordKeyed($key, array_map(
-            static fn (array $keys): array => array_map(static fn (TaintSet $taint): TaintSet => $taint->withoutElements(), $keys),
+            static fn (array $keys): array => array_map(
+                static fn (TaintSet $taint): TaintSet => $taint->withoutElements(),
+                $keys,
+            ),
             $keyed,
         ));
 

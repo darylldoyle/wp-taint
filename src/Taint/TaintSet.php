@@ -287,6 +287,60 @@ final class TaintSet
     }
 
     /**
+     * The kinds part `$part` brought, each named as from that part alone: a
+     * kind every part brought is left out, since no one part accounts for it.
+     */
+    public function onlyPart(int $part): self
+    {
+        if ($this->parts === null) {
+            return self::empty();
+        }
+
+        $bit = 1 << $part;
+        $mask = 0;
+        $parts = [];
+
+        foreach ($this->parts as $kind => $from) {
+            if (($from & $bit) !== 0) {
+                $mask |= $kind;
+                $parts[$kind] = $bit;
+            }
+        }
+
+        return $mask === 0 ? self::empty() : new self($mask, $parts, self::restricted($this->elements, $mask));
+    }
+
+    /**
+     * The kinds some part other than `$part` brought, each named as from those
+     * parts: what is left once part `$part`'s share is taken away. A kind every
+     * part brought stays.
+     */
+    public function exceptPart(int $part): self
+    {
+        if ($this->parts === null) {
+            return $this;
+        }
+
+        $bit = 1 << $part;
+        $mask = $this->mask;
+        $parts = [];
+
+        foreach ($this->parts as $kind => $from) {
+            $left = $from & ~$bit;
+
+            if ($left === 0) {
+                $mask &= ~$kind;
+
+                continue;
+            }
+
+            $parts[$kind] = $left;
+        }
+
+        return new self($mask, $parts === [] ? null : $parts, self::restricted($this->elements, $mask));
+    }
+
+    /**
      * Whether any kind names the parts it came from.
      */
     public function namesParts(): bool
