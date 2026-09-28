@@ -177,6 +177,10 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A reference shared only an array's elements under computed keys. After
   `$d = &$c`, a write to `$d['j']` never reached `$c['j']`. A reference now
   shares the whole array.
+- A callback that `array_map()`, `usort()`, `uasort()` or
+  `call_user_func_array()` runs was handed an array's keys along with its
+  values. PHP hands it the values only, so a key's taint no longer reaches it.
+  The catalogue's new `values_only` key marks a dispatcher that does this.
 
 - A promoted constructor parameter, `__construct( private string $name )`,
   never wrote its property, so a value handed to the constructor did not reach

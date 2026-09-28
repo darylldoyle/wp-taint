@@ -5000,7 +5000,11 @@ final class FunctionAnalysis
         }
 
         if ($keys === null) {
-            return $taint->union($this->state->effectiveTaintOf($argument));
+            // A dispatcher that hands its callee each item of an array hands
+            // it no key: `array_map( $cb, $items )` calls `$cb( $item )`.
+            return $taint->union($call->itemsOnly
+                ? $this->state->itemsTaintOf($argument)
+                : $this->state->effectiveTaintOf($argument));
         }
 
         $taint = $taint->union($this->state->taintOf($argument))

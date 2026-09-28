@@ -1088,9 +1088,13 @@ rule_id = "wp.ldap.injection"
 # `callable` is which argument holds the callee. `mode` says how the remaining
 # arguments map onto the callee's parameters, and `returns` says what the
 # dispatcher hands back. `parameters`, where the mode alone does not say, lists
-# for each of the callee's parameters the arguments whose taint it receives. An entry that also appears under [[propagators]] falls
-# back to that entry whenever the callee cannot be resolved, so a dispatcher
-# never makes the analysis worse than not having one.
+# for each of the callee's parameters the arguments whose taint it receives.
+# `values_only` says the callee gets each value of the arrays it iterates and
+# never a key, so what an array's keys carry does not reach it.
+#
+# An entry that also appears under [[propagators]] falls back to that entry
+# whenever the callee cannot be resolved, so a dispatcher never makes the
+# analysis worse than not having one.
 # ---------------------------------------------------------------------------
 
 [[dispatchers]]
@@ -1112,6 +1116,7 @@ callable = 0
 argument_start = 1
 mode = "elements"
 returns = "callee_array"
+values_only = true
 
 [[dispatchers]]
 function = "array_filter"
@@ -1147,6 +1152,7 @@ argument_start = 0
 mode = "elements"
 returns = "own"
 parameters = [[0], [0]]
+values_only = true
 
 [[dispatchers]]
 function = "uasort"
@@ -1155,6 +1161,7 @@ argument_start = 0
 mode = "elements"
 returns = "own"
 parameters = [[0], [0]]
+values_only = true
 
 [[dispatchers]]
 function = "uksort"

@@ -170,6 +170,21 @@ final class TaintState
         return $this->taintOf($operand)->union($this->shapeOf($operand)->flatten());
     }
 
+    /**
+     * What one item of an array carries: its own taint, which every item
+     * inherits, and what any element holds. Not what the keys carry, which
+     * belongs to the keys alone: see {@see Shape::keysTaint()}.
+     */
+    public function itemsTaintOf(Operand $operand): TaintSet
+    {
+        $shape = $this->shapeOf($operand);
+
+        return $this->taintOf($operand)
+            ->union($shape->own())
+            ->union($shape->elementsFlattened())
+            ->union($shape->restPart()->flatten());
+    }
+
     public function taintOf(Operand $operand): TaintSet
     {
         if (! $this->taint->contains($operand)) {

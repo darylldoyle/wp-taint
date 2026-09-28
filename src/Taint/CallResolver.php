@@ -191,7 +191,10 @@ final class CallResolver
             $dispatched = array_map($spread, $dispatched);
             $prefixed = array_map($spread, $prefixed);
         } elseif ($dispatcher->mode === DispatchMode::Elements) {
-            $items = static fn (CallTarget $target): CallTarget => $target->notPositional();
+            // `array_map( $cb, $items )` hands `$cb` each value and no key.
+            $items = static fn (CallTarget $target): CallTarget => $dispatcher->valuesOnly
+                ? $target->notPositional()->itemsOnly()
+                : $target->notPositional();
             $dispatched = array_map($items, $dispatched);
             $prefixed = array_map($items, $prefixed);
         }

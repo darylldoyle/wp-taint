@@ -60,6 +60,13 @@ final class Dispatcher
          * @var list<list<int>>|null
          */
         public readonly ?array $parameters = null,
+        /**
+         * The callee receives only the values of the arrays it is handed, never
+         * a key. `array_map( $cb, $items )` calls `$cb( $item )`, and `usort()`
+         * compares two items. `array_filter()` can hand its callback a key and
+         * `array_walk()` always does, so neither says this.
+         */
+        public readonly bool $valuesOnly = false,
     ) {
     }
 }

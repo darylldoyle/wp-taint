@@ -112,3 +112,35 @@ it('records a key checked against a known list as clean', function (): void {
         }
         PHP))->toBe([]);
 });
+
+it('hands a callback the values it is given and not the keys', function (): void {
+    // array_map() and usort() pass each value, so a key's taint stays on the
+    // keys. array_filter() can pass the key, so its callback still sees it.
+    expect(wholeArrayFindings(<<<'PHP'
+        function acme_index() {
+            $index = array();
+            $index[ $_GET['slug'] ] = 'fixed';
+            return $index;
+        }
+        function acme_upper( $value ) {
+            return strtoupper( $value );
+        }
+        function acme_show() {
+            foreach ( array_map( 'acme_upper', acme_index() ) as $title ) {
+                echo $title;
+            }
+            $sorted = acme_index();
+            usort( $sorted, function ( $a, $b ) {
+                echo $a;
+                return strcmp( $a, $b );
+            } );
+            array_filter( acme_index(), function ( $key ) {
+                echo $key;
+                return true;
+            }, ARRAY_FILTER_USE_KEY );
+            $args = acme_index();
+            call_user_func_array( 'acme_upper', $args );
+            echo call_user_func_array( 'acme_upper', $args );
+        }
+        PHP))->toBe(['wp.xss.unescaped-output@20']);
+});
