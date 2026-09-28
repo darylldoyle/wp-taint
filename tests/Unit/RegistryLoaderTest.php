@@ -32,6 +32,7 @@ it('loads the bundled registries and resolves inheritance', function (): void {
         'php-core',
         'wordpress-generated',
         'wordpress-filterable',
+        'gravity-forms',
         'wordpress',
     ]);
     expect($registry->source(Matcher::superglobal('_GET')))->not->toBeNull();
@@ -100,6 +101,21 @@ it('refuses a value that brings its own quotes without clearing sql', function (
     'no sql' => ['clears = ["html"]'],
     'safe only inside quotes' => ["clears = [\"sql\"]\nquoted_only = true"],
 ]);
+
+it('takes the separator the modifiers of a hook are joined with, not a flag', function (): void {
+    expect(static fn (): Registry => loadRegistry(<<<'TOML'
+        [meta]
+        name = "custom"
+
+        [[dispatchers]]
+        function = "acme_do_action"
+        callable = 0
+        hook = true
+        hook_modifiers = true
+        mode = "rest"
+        returns = "own"
+        TOML))->toThrow(RegistryException::class, 'must be the separator the modifiers are joined with');
+});
 
 it('names the file and the entry in every error', function (): void {
     try {
@@ -269,6 +285,7 @@ it('layers a project-local config last', function (): void {
         'php-core',
         'wordpress-generated',
         'wordpress-filterable',
+        'gravity-forms',
         'wordpress',
         'project',
     ]);

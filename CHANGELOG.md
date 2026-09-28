@@ -138,6 +138,16 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A core table name counted as a safe database identifier on any receiver, so
+  a plugin's own `$this->options` in a query was accounted for as
+  `$wpdb->options`. It now counts on the database handle only, found the way
+  the rest of the engine finds it: declared types first, then the `$wpdb` and
+  `$db` names, and `$GLOBALS['wpdb']`. The `prepare()` format check kept its
+  own copy of the names, which ignored declared types, and now asks the
+  receiver resolver too.
+- `vip_safe_wp_remote_get()` cleared `url`, although it checks no host. It is
+  now a server-side request forgery sink, like `wp_remote_get()`.
+
 - An escaped SQL value lost its SQL kind through a helper's return.
   `$q = acme_id( esc_sql( $_GET['x'] ) )` used unquoted was not reported, and
   neither was a self-quoted value returned into quotes. A helper's summary is
@@ -549,6 +559,12 @@ Further precision changes from corpus adjudication of the new attribute rule:
   superglobal, clearing a false traversal report on `fopen()`.
 
 ### Changed
+
+- The Gravity Forms hook wrappers, `gf_do_action()` and `gf_apply_filters()`,
+  moved from the WordPress catalogue to `registries/gravity-forms.toml`. The
+  WordPress catalogue extends it, so a scan still models them. `hook_modifiers`
+  now takes the separator the modifiers are joined with, `"_"` for Gravity
+  Forms, in place of `true`, and the engine no longer assumes one.
 
 - A file the graph cache lets go of is taken apart, so it frees at once
   instead of waiting for the cycle collector. A php-cfg graph is a web of

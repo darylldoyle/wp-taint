@@ -157,7 +157,7 @@ final class CallResolver
         if ($dispatcher->hook) {
             $parts = null;
 
-            if ($dispatcher->hookModifiers) {
+            if ($dispatcher->modifierSeparator !== null) {
                 [$direct, $parts] = $this->inArrayForm($direct, $dispatcher);
             }
 
@@ -396,6 +396,7 @@ final class CallResolver
         }
 
         $arguments = $this->calleeArguments($call, $dispatcher);
+        $separator = (string) $dispatcher->modifierSeparator;
         $exact = [];
         $prefixed = [];
 
@@ -414,7 +415,7 @@ final class CallResolver
 
             if ($modifiers === []) {
                 foreach ($names as $hook) {
-                    foreach ($this->hooks->targetsMatchingPrefix($hook . '_') as $target) {
+                    foreach ($this->hooks->targetsMatchingPrefix($hook . $separator) as $target) {
                         $prefixed[] = $target->withArguments($arguments);
                     }
                 }
@@ -426,7 +427,7 @@ final class CallResolver
 
             foreach ($names as $hook) {
                 foreach ($modifiers as $modifier) {
-                    $longer[] = $modifier === '' ? $hook : $hook . '_' . $modifier;
+                    $longer[] = $modifier === '' ? $hook : $hook . $separator . $modifier;
                 }
             }
 

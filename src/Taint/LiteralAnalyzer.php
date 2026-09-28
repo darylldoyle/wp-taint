@@ -61,22 +61,32 @@ final class LiteralAnalyzer
     public function __construct(
         private readonly Registry $registry,
         private readonly PropertyTaintMap $properties,
+        private readonly ReceiverResolver $receivers,
     ) {
     }
 
-    public function isEffectivelyLiteral(Operand $operand): bool
+    public function isEffectivelyLiteral(Operand $operand, FunctionContext $context, ClassTypeMap $types): bool
     {
         /** @var SplObjectStorage<Operand, true> $seen */
         $seen = new SplObjectStorage();
 
-        return $this->check($operand, $seen, 0);
+        // The database handle as the rest of the engine finds it: declared
+        // types first, then the `$wpdb` and `$db` names. A second copy of the
+        // name check here ignored declared types, so `Acme_DB $db` read as
+        // `$wpdb` for this question and as itself for every other.
+        $isHandle = fn (Operand $receiver): bool => strtolower(
+            $this->receivers->classOf($receiver, $context, $types) ?? '',
+        ) === 'wpdb';
+
+        return $this->check($operand, $seen, 0, $isHandle);
     }
 
 
     /**
      * @param SplObjectStorage<Operand, true> $seen
+     * @param callable(Operand): bool         $isHandle
      */
-    private function check(Operand $operand, SplObjectStorage $seen, int $depth): bool
+    private function check(Operand $operand, SplObjectStorage $seen, int $depth, callable $isHandle): bool
     {
         if ($depth > self::MAX_DEPTH) {
             return false;
@@ -100,15 +110,16 @@ final class LiteralAnalyzer
             return false;
         }
 
-        return $this->checkOp($definition, $seen, $depth);
+        return $this->checkOp($definition, $seen, $depth, $isHandle);
     }
 
     /**
      * @param SplObjectStorage<Operand, true> $seen
+     * @param callable(Operand): bool         $isHandle
      */
-    private function checkOp(Op $definition, SplObjectStorage $seen, int $depth): bool
+    private function checkOp(Op $definition, SplObjectStorage $seen, int $depth, callable $isHandle): bool
     {
-        $recurse = fn (Operand $next): bool => $this->check($next, $seen, $depth + 1);
+        $recurse = fn (Operand $next): bool => $this->check($next, $seen, $depth + 1, $isHandle);
 
         return match (true) {
             $definition instanceof Op\Expr\ConstFetch,
@@ -127,14 +138,14 @@ final class LiteralAnalyzer
             $definition instanceof Op\Iterator\Value,
             $definition instanceof Op\Iterator\Key => $recurse($definition->var),
             $definition instanceof Op\Expr\ArrayDimFetch => $recurse($definition->var),
-            $definition instanceof Op\Expr\PropertyFetch => $this->isSafeDatabaseIdentifier($definition),
+            $definition instanceof Op\Expr\PropertyFetch => $this->isSafeDatabaseIdentifier($definition, $isHandle),
             $definition instanceof Op\Expr\FuncCall,
             $definition instanceof Op\Expr\NsFuncCall => $this->checkFunctionCall(
                 $definition->name,
                 $definition->args,
                 $recurse,
             ),
-            $definition instanceof Op\Expr\MethodCall => $this->checkMethodCall($definition),
+            $definition instanceof Op\Expr\MethodCall => $this->checkMethodCall($definition, $isHandle),
             default => false,
         };
     }
@@ -200,8 +211,10 @@ final class LiteralAnalyzer
     /**
      * The output of an inner `$wpdb->prepare()` is already escaped SQL, so
      * concatenating it into an outer format string is safe.
+     *
+     * @param callable(Operand): bool $isHandle
      */
-    private function checkMethodCall(Op\Expr\MethodCall $call): bool
+    private function checkMethodCall(Op\Expr\MethodCall $call, callable $isHandle): bool
     {
         $method = OperandHelper::literalString($call->name);
 
@@ -209,7 +222,7 @@ final class LiteralAnalyzer
             return false;
         }
 
-        return $this->isDatabaseHandle($call->var);
+        return $isHandle($call->var);
     }
 
     private function clearsSql(Matcher $matcher): bool
@@ -221,36 +234,16 @@ final class LiteralAnalyzer
     }
 
     /**
-     * `$wpdb`, `$this->wpdb`, `$this->db`, `aioseo()->core->db->db`.
-     */
-    private function isDatabaseHandle(Operand $receiver): bool
-    {
-        $name = OperandHelper::variableName($receiver);
-
-        if ($name !== null) {
-            return in_array(strtolower($name), ['wpdb', 'db'], true);
-        }
-
-        $definition = OperandHelper::definingOp($receiver);
-
-        if (! $definition instanceof Op\Expr\PropertyFetch) {
-            return false;
-        }
-
-        $property = OperandHelper::literalString($definition->name);
-
-        return $property !== null && in_array(strtolower($property), ['wpdb', 'db'], true);
-    }
-
-    /**
      * `{$wpdb->prefix}`, `{$wpdb->posts}` and the rest of the table-name
      * properties.
+     *
+     * @param callable(Operand): bool $isHandle
      */
-    private function isSafeDatabaseIdentifier(Op\Expr\PropertyFetch $fetch): bool
+    private function isSafeDatabaseIdentifier(Op\Expr\PropertyFetch $fetch, callable $isHandle): bool
     {
         $property = OperandHelper::literalString($fetch->name);
 
-        if ($property === null || ! $this->isDatabaseHandle($fetch->var)) {
+        if ($property === null || ! $isHandle($fetch->var)) {
             return false;
         }
 

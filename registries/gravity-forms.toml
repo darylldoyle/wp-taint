@@ -1,0 +1,45 @@
+# Gravity Forms.
+#
+# Gravity Forms fires its hooks through its own wrappers, gf_do_action() and
+# gf_apply_filters(), not do_action() and apply_filters(). Its source is rarely
+# part of a scan, so nothing can read the wrappers from a body. They are kept
+# here, apart from the WordPress catalogue, which extends this file so that a
+# scan models them by default.
+
+[meta]
+name = "gravity-forms"
+description = "Gravity Forms hook wrappers"
+
+[[propagators]]
+function = "gf_apply_filters"
+keeps_residuals = true
+keeps_keys = true
+args = [1]
+note = "Gravity Forms' apply_filters(). The filtered value passes through, even when a callback is registered, because the scan cannot know which callbacks are on the hook when it fires. Its callbacks are followed through the hook graph; see [[dispatchers]]."
+
+# The hook argument is an array: a name, then modifiers that each fire a longer
+# name as well, joined by an underscore. So
+# `gf_do_action( array( 'gform_after_submission', $form_id ), $entry, $form )`
+# fires `gform_after_submission` and `gform_after_submission_{$form_id}`.
+# Without these, no callback on a Gravity Forms hook received the entry, which
+# holds what the visitor submitted. `hook_modifiers` reads the array and names
+# the separator; a modifier that will not fold becomes a prefix join on the
+# name so far.
+
+[[dispatchers]]
+function = "gf_do_action"
+callable = 0
+hook = true
+hook_modifiers = "_"
+argument_start = 1
+mode = "rest"
+returns = "own"
+
+[[dispatchers]]
+function = "gf_apply_filters"
+callable = 0
+hook = true
+hook_modifiers = "_"
+argument_start = 1
+mode = "rest"
+returns = "callee"
