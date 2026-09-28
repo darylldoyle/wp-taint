@@ -14,6 +14,11 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   controllers check each setting a request names against the ids of their own
   definitions, and that check now settles the value. The list must carry no
   taint in any part, so a list read from the request settles nothing.
+- A `preg_match()` check whose pattern is a run of classes and plain
+  characters, anchored at both ends, is a guard. It counted only as a single
+  class before. Contact Form 7 checks each attribute name against
+  `/^[a-z_:][a-z_:.0-9-]*$/` before it prints the name, and that check now
+  clears HTML from it. A negated class still counts only on its own.
 - Class constants resolve. `Acme::KEY`, and `self::KEY` inside the class, fold
   to the value the class declares. A `switch` or loose comparison against one
   is a guard when it holds a string that is not numeric, and a quote kept in a
