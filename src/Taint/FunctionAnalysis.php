@@ -94,18 +94,11 @@ final class FunctionAnalysis
 
     private TaintSet $returnTaint;
 
-    /** What the returned array's elements carry under a computed key. */
-    private TaintSet $returnContainer;
-
     /**
-     * What the returned array's elements carry under each literal key.
-     *
-     * @var array<array-key, TaintSet>
+     * What the returned array holds below its own taint: its elements, each
+     * under its key, and its keys.
      */
-    private array $returnKeyed = [];
-
-    /** What the returned array's keys carry. */
-    private TaintSet $returnKeys;
+    private Shape $returnShape;
 
     /** Null until the first return is seen; then AND-ed across every return. */
     private ?bool $returnAnchored = null;
@@ -299,8 +292,7 @@ final class FunctionAnalysis
         $this->guards = new GuardAnalyzer($resolver->values());
         $this->capabilityGuards = new CapabilityGuard($registry, $callGraph);
         $this->returnTaint = TaintSet::empty();
-        $this->returnContainer = TaintSet::empty();
-        $this->returnKeys = TaintSet::empty();
+        $this->returnShape = Shape::empty();
         $this->returnAnchored = null;
         $this->blocks = BlockOrder::of($this->context->func->cfg);
         $this->guards->forFunction($this->blocks);
@@ -400,10 +392,8 @@ final class FunctionAnalysis
             $properties,
             $captures,
             $scopes,
-            $plain($this->returnContainer),
-            array_map(static fn (TaintSet $taint): TaintSet => $taint->withoutElements(), $this->returnKeyed),
+            $this->returnShape->mapSets(static fn (TaintSet $taint): TaintSet => $taint->withoutElements()),
             $plain($this->revertedResiduals),
-            $plain($this->returnKeys),
         );
     }
 
@@ -3194,15 +3184,16 @@ final class FunctionAnalysis
 
         $taint = self::guarded($this->state->taintOf($op->expr), $proof);
 
-        // The elements travel as elements. Returning only the value's own
-        // taint lost everything written into it: `$a['k'] = $_GET['x'];
-        // return $a;` handed every caller a clean array.
-        $container = self::guarded($this->state->shapeOf($op->expr)->restPart()->flatten(), $proof);
-        $keyed = $proof === null ? $this->state->shapeOf($op->expr)->elementsFlattenedByKey() : [];
-
-        // And the keys as keys, so a caller's `foreach` keys read them and its
-        // values do not.
-        $keys = $proof === null ? $this->state->shapeOf($op->expr)->keysTaint() : TaintSet::empty();
+        // The elements travel as elements, each under its key and to the
+        // depth a shape keeps, and the keys as keys. Returning only the
+        // value's own taint lost everything written into it: `$a['k'] =
+        // $_GET['x']; return $a;` handed every caller a clean array. A guard's
+        // proof is about the value as a whole, so a proven return keeps only
+        // what the proof admits, under a computed key.
+        $shape = $this->state->shapeOf($op->expr);
+        $structure = $proof === null
+            ? $shape->structure()
+            : Shape::rest(Shape::of(self::guarded($shape->restPart()->flatten(), $proof)));
 
         $this->reportShortcodeReturn(
             $op,
@@ -3214,20 +3205,10 @@ final class FunctionAnalysis
         $changed = ! $merged->equals($this->returnTaint);
         $this->returnTaint = $merged;
 
-        $merged = $this->returnContainer->union($container);
-        $changed = ! $merged->equals($this->returnContainer) || $changed;
-        $this->returnContainer = $merged;
-
-        foreach ($keyed as $key => $kinds) {
-            $existing = $this->returnKeyed[$key] ?? TaintSet::empty();
-            $merged = $existing->union($kinds);
-            $changed = ! $merged->equals($existing) || $changed;
-            $this->returnKeyed[$key] = $merged;
-        }
-
-        $merged = $this->returnKeys->union($keys);
-        $changed = ! $merged->equals($this->returnKeys) || $changed;
-        $this->returnKeys = $merged;
+        // A join that adds nothing hands back the shape it joined into.
+        $merged = $this->returnShape->join($structure);
+        $changed = $merged !== $this->returnShape || $changed;
+        $this->returnShape = $merged;
 
         return $changed;
     }
@@ -5324,9 +5305,7 @@ final class FunctionAnalysis
         }
 
         $result = $summary->introduces();
-        $elements = $summary->introducesContainer();
-        $keyed = $summary->introducesKeyed;
-        $returnedKeys = $summary->introducesKeys();
+        $structure = $summary->introducesShape();
         $contributors = [];
         $contributorKeys = [];
         $viaParameters = [];
@@ -5358,22 +5337,14 @@ final class FunctionAnalysis
                     ->union(self::madeFrom($argumentTaint, $reached))
                     ->union(self::residualsThrough($argumentTaint, $reached, $reverts));
 
-                // What the argument put into the returned array's elements, as
-                // for a property: the kinds that got through the body.
-                $intoElements = self::throughBody($argumentTaint, $record->returnContainerFor($index), $reverts);
-                $elements = $elements->union($intoElements);
+                // What the argument put into the returned array's elements and
+                // keys, as for a property: the kinds that got through the body.
+                $into = $record->returnShapeFor($index)->mapSets(
+                    static fn (TaintSet $kinds): TaintSet => self::throughBody($argumentTaint, $kinds, $reverts),
+                );
+                $structure = $structure->join($into);
 
-                foreach ($record->returnKeyedFor($index) as $element => $kinds) {
-                    $into = self::throughBody($argumentTaint, $kinds, $reverts);
-                    $keyed[$element] = ($keyed[$element] ?? TaintSet::empty())->union($into);
-                    $intoElements = $intoElements->union($into);
-                }
-
-                // And what it made the returned array's keys carry.
-                $intoKeys = self::throughBody($argumentTaint, $record->returnKeysFor($index), $reverts);
-                $returnedKeys = $returnedKeys->union($intoKeys);
-
-                if (! $returned->isEmpty() || ! $intoElements->isEmpty() || ! $intoKeys->isEmpty()) {
+                if (! $returned->isEmpty() || ! $into->isEmpty()) {
                     $result = $result->union($returned);
                     $keys = $call->positional ? $summary->keysReadFrom($index) : null;
 
@@ -5398,15 +5369,10 @@ final class FunctionAnalysis
 
             // A callee that rebuilds this parameter key by key hands each
             // element of the argument back under its own key.
-            [$eachKeyed, $eachRest] = $this->eachElementBack($summary, $index, $argument, $proof);
+            $each = $this->eachElementBack($summary, $index, $argument, $proof);
+            $structure = $structure->join($each);
 
-            foreach ($eachKeyed as $element => $kinds) {
-                $keyed[$element] = ($keyed[$element] ?? TaintSet::empty())->union($kinds);
-            }
-
-            $elements = $elements->union($eachRest);
-
-            if (($eachKeyed !== [] || ! $eachRest->isEmpty()) && ! in_array($index, $viaParameters, true)) {
+            if (! $each->isEmpty() && ! in_array($index, $viaParameters, true)) {
                 $anyArgumentTainted = true;
                 $contributors[] = $argument;
                 $viaParameters[] = $index;
@@ -5414,17 +5380,13 @@ final class FunctionAnalysis
         }
 
         $result = self::withoutUnearnedEscapeMarkers($result, $anyArgumentTainted);
-        $elements = self::withoutUnearnedEscapeMarkers($elements, $anyArgumentTainted);
-        $returnedKeys = self::withoutUnearnedEscapeMarkers($returnedKeys, $anyArgumentTainted);
+        $structure = $structure->mapSets(
+            static fn (TaintSet $kinds): TaintSet => self::withoutUnearnedEscapeMarkers($kinds, $anyArgumentTainted),
+        );
 
         $changed = $this->applySummaryByRefEffects($op, $call, $summary->withoutParts()) || $changed;
 
-        $everything = $result->union($elements)->union($returnedKeys);
-
-        foreach ($keyed as $element => $kinds) {
-            $keyed[$element] = self::withoutUnearnedEscapeMarkers($kinds, $anyArgumentTainted);
-            $everything = $everything->union($keyed[$element]);
-        }
+        $everything = $result->union($structure->flatten());
 
         if ($everything->isEmpty()) {
             return $this->writeResult($op->result, $result) || $changed;
@@ -5442,7 +5404,7 @@ final class FunctionAnalysis
 
         $changed = $this->writeResult($op->result, $result, $provenance) || $changed;
 
-        return $this->writeReturnedElements($op->result, $elements, $keyed, $returnedKeys, $provenance) || $changed;
+        return $this->writeReturnedElements($op->result, $structure, $provenance) || $changed;
     }
 
     /**
@@ -5463,35 +5425,30 @@ final class FunctionAnalysis
      *
      *     $clean = acme_clean( array( 'name' => $_GET['n'], 'mode' => 'grid' ) );
      *     echo $clean['mode'];   // clean: only `name` held request data
-     *
-     * @return array{array<int|string, TaintSet>, TaintSet}
      */
     private function eachElementBack(
         FunctionSummary $summary,
         int $index,
         Operand $argument,
         ?CharacterProof $proof,
-    ): array {
+    ): Shape {
         if ($summary->paramToReturnEach === [] || $this->resultMode === CallResultMode::Discard) {
-            return [[], TaintSet::empty()];
+            return Shape::empty();
         }
 
         $shape = $this->state->shapeOf($argument);
-        $keyed = [];
+        $back = Shape::empty();
 
         foreach ($shape->elements() as $key => $element) {
-            $back = self::eachBack($summary, $index, $element->flatten(), [ParameterParts::step($key)], $proof);
-
-            if (! $back->isEmpty()) {
-                $keyed[$key] = $back;
-            }
+            $taint = self::eachBack($summary, $index, $element->flatten(), [ParameterParts::step($key)], $proof);
+            $back = $back->join(Shape::element($key, Shape::of($taint)));
         }
 
         $own = $this->state->taintOf($argument)->union($shape->own());
         $rest = self::eachBack($summary, $index, $own, [], $proof)
             ->union(self::eachBack($summary, $index, $shape->restPart()->flatten(), [ParameterParts::ANY], $proof));
 
-        return [$keyed, $rest];
+        return $back->join(Shape::rest(Shape::of($rest)));
     }
 
     /**
@@ -5693,42 +5650,16 @@ final class FunctionAnalysis
      * read of them finds them as it would on a local array.
      *
      * A call whose result is discarded writes nothing, and one whose result a
-     * dispatcher collects into an array, `array_map()`, has no keys of its own
-     * to keep them under.
-     *
-     * @param array<array-key, TaintSet> $keyed
+     * dispatcher collects into an array, `array_map()`, puts it under a
+     * computed key of that array, as {@see writeResult()} puts the value.
      */
-    private function writeReturnedElements(
-        Operand $result,
-        TaintSet $elements,
-        array $keyed,
-        TaintSet $keys,
-        Provenance $provenance,
-    ): bool {
-        if ($this->resultMode === CallResultMode::Discard) {
-            return false;
-        }
-
-        // The keys are the returned array's keys whichever way its elements
-        // land.
-        $changed = $this->state->addShape($result, Shape::keys($keys), $provenance);
-
-        if ($this->resultMode === CallResultMode::Container) {
-            foreach ($keyed as $kinds) {
-                $elements = $elements->union($kinds);
-            }
-
-            return $this->state->addShape($result, Shape::rest(Shape::of($elements)), $provenance) || $changed;
-        }
-
-        $changed = $this->state->addShape($result, Shape::rest(Shape::of($elements)), $provenance) || $changed;
-
-        foreach ($keyed as $key => $kinds) {
-            $changed = $this->state->addShape($result, Shape::element($key, Shape::of($kinds)), $provenance)
-                || $changed;
-        }
-
-        return $changed;
+    private function writeReturnedElements(Operand $result, Shape $structure, Provenance $provenance): bool
+    {
+        return match ($this->resultMode) {
+            CallResultMode::Discard => false,
+            CallResultMode::Container => $this->state->addShape($result, Shape::rest($structure), $provenance),
+            CallResultMode::Value => $this->state->addShape($result, $structure, $provenance),
+        };
     }
 
     /**

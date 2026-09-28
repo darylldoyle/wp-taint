@@ -103,38 +103,25 @@ final class FunctionSummary
          */
         public readonly array $paramToScope = [],
         /**
-         * Kinds each parameter puts into the returned array's elements under a
-         * computed key, as opposed to the value itself.
+         * What each parameter puts into the returned array, as opposed to the
+         * value itself: its elements, each under its key, and its keys.
          *
          * `function build( $x ) { $a = array(); $a[] = $x; return $a; }`
          * returns an array whose own taint is nothing and whose elements are
          * $x. A caller reads the elements from its call result the way it
-         * reads them from a local array, and a `foreach` over it sees the keys
-         * it would see locally.
+         * reads them from a local array, to the depth a shape keeps, and a
+         * `foreach` over it sees the keys it would see locally. The shapes
+         * name no write, since a write belongs to the graph the probe
+         * analysed.
          *
-         * @var array<int, TaintSet>
+         * @var array<int, Shape>
          */
-        public readonly array $paramToReturnContainer = [],
+        public readonly array $paramToReturnShape = [],
         /**
-         * Kinds each parameter puts into the returned array's elements under
-         * a literal key, by key: `$a['title'] = $x; return $a;`.
-         *
-         * @var array<int, array<array-key, TaintSet>>
+         * What the returned array holds regardless of any argument, the
+         * structure's counterpart to {@see introduces()}.
          */
-        public readonly array $paramToReturnKeyed = [],
-        /**
-         * What the returned array's elements carry under a computed key
-         * regardless of any argument, the elements' counterpart to
-         * {@see introduces()}.
-         */
-        public readonly ?TaintSet $introducesContainerOrNull = null,
-        /**
-         * What the returned array's elements carry under each literal key
-         * regardless of any argument.
-         *
-         * @var array<array-key, TaintSet>
-         */
-        public readonly array $introducesKeyed = [],
+        public readonly ?Shape $introducesShapeOrNull = null,
         /**
          * The keys this function reads each parameter through, for a
          * parameter it reads only through literal keys. See
@@ -159,21 +146,6 @@ final class FunctionSummary
          * @var array<int, TaintSet>
          */
         public readonly array $revertedResiduals = [],
-        /**
-         * Kinds each parameter puts into the returned array's keys, written
-         * under a computed key: `$a[ $x ] = 1; return $a;`. Kept apart from
-         * the elements, so a caller's `foreach` keys read them and its values
-         * do not.
-         *
-         * @var array<int, TaintSet>
-         */
-        public readonly array $paramToReturnKeys = [],
-        /**
-         * What the returned array's keys carry regardless of any argument:
-         * `$counts[ $row->status ] = $row->total; return $counts;` keys the
-         * counts by stored data.
-         */
-        public readonly ?TaintSet $introducesKeysOrNull = null,
         /**
          * The parts each parameter is read through, when the probe seeded
          * them apart: part `n + 1` is the path at position `n`, and part 0 is
@@ -319,12 +291,11 @@ final class FunctionSummary
             );
         }
 
-        $paramToReturnKeyed = [];
+        $paramToReturnShape = [];
 
-        foreach ($this->paramToReturnKeyed as $index => $keyed) {
-            $paramToReturnKeyed[$index] = array_map(
+        foreach ($this->paramToReturnShape as $index => $shape) {
+            $paramToReturnShape[$index] = $shape->mapSets(
                 static fn (TaintSet $kinds): TaintSet => $set($index, $kinds),
-                $keyed,
             );
         }
 
@@ -342,27 +313,23 @@ final class FunctionSummary
             $paramToProperty,
             $paramToCapture,
             $paramToScope,
-            $sets($this->paramToReturnContainer),
-            $paramToReturnKeyed,
-            $this->introducesContainerOrNull,
-            $this->introducesKeyed,
+            $paramToReturnShape,
+            $this->introducesShapeOrNull,
             $this->parameterKeys,
             $sets($this->revertedResiduals),
-            $sets($this->paramToReturnKeys),
-            $this->introducesKeysOrNull,
             [],
             $sets($this->paramToReturnEach),
         );
     }
 
-    public function returnKeysFor(int $parameterIndex): TaintSet
+    public function returnShapeFor(int $parameterIndex): Shape
     {
-        return $this->paramToReturnKeys[$parameterIndex] ?? TaintSet::empty();
+        return $this->paramToReturnShape[$parameterIndex] ?? Shape::empty();
     }
 
-    public function introducesKeys(): TaintSet
+    public function introducesShape(): Shape
     {
-        return $this->introducesKeysOrNull ?? TaintSet::empty();
+        return $this->introducesShapeOrNull ?? Shape::empty();
     }
 
     /**
@@ -383,24 +350,6 @@ final class FunctionSummary
     public function keysReadFrom(int $parameterIndex): ?array
     {
         return $this->parameterKeys[$parameterIndex] ?? null;
-    }
-
-    public function returnContainerFor(int $parameterIndex): TaintSet
-    {
-        return $this->paramToReturnContainer[$parameterIndex] ?? TaintSet::empty();
-    }
-
-    /**
-     * @return array<array-key, TaintSet>
-     */
-    public function returnKeyedFor(int $parameterIndex): array
-    {
-        return $this->paramToReturnKeyed[$parameterIndex] ?? [];
-    }
-
-    public function introducesContainer(): TaintSet
-    {
-        return $this->introducesContainerOrNull ?? TaintSet::empty();
     }
 
     /**
@@ -567,14 +516,10 @@ final class FunctionSummary
             self::mergeProperties($this->paramToProperty, $other->paramToProperty),
             self::mergeCaptures($this->paramToCapture, $other->paramToCapture),
             self::mergeScopes($this->paramToScope, $other->paramToScope),
-            self::mergeSets($this->paramToReturnContainer, $other->paramToReturnContainer),
-            self::mergeKeyed($this->paramToReturnKeyed, $other->paramToReturnKeyed),
-            $this->introducesContainer()->union($other->introducesContainer()),
-            self::mergeKeyed([$this->introducesKeyed], [$other->introducesKeyed])[0] ?? [],
+            self::mergeShapes($this->paramToReturnShape, $other->paramToReturnShape),
+            $this->introducesShape()->join($other->introducesShape()),
             self::mergeParameterKeys($this->parameterKeys, $other->parameterKeys),
             self::mergeSets($this->revertedResiduals, $other->revertedResiduals),
-            self::mergeSets($this->paramToReturnKeys, $other->paramToReturnKeys),
-            $this->introducesKeys()->union($other->introducesKeys()),
             $this->parameterParts,
             self::mergeSets($this->paramToReturnEach, $other->paramToReturnEach),
         );
@@ -626,19 +571,17 @@ final class FunctionSummary
     }
 
     /**
-     * @param array<int, array<array-key, TaintSet>> $mine
-     * @param array<int, array<array-key, TaintSet>> $theirs
+     * @param array<int, Shape> $mine
+     * @param array<int, Shape> $theirs
      *
-     * @return array<int, array<array-key, TaintSet>>
+     * @return array<int, Shape>
      */
-    private static function mergeKeyed(array $mine, array $theirs): array
+    private static function mergeShapes(array $mine, array $theirs): array
     {
         $result = $mine;
 
-        foreach ($theirs as $index => $keys) {
-            foreach ($keys as $key => $set) {
-                $result[$index][$key] = ($result[$index][$key] ?? TaintSet::empty())->union($set);
-            }
+        foreach ($theirs as $index => $shape) {
+            $result[$index] = ($result[$index] ?? Shape::empty())->join($shape);
         }
 
         ksort($result);
@@ -910,18 +853,14 @@ final class FunctionSummary
         // The returned array's elements drive the fixed point as its value
         // does.
         if (
-            ! $this->introducesContainer()->equals($other->introducesContainer())
-            || ! $this->introducesKeys()->equals($other->introducesKeys())
-            || ! self::setsEqual($this->paramToReturnContainer, $other->paramToReturnContainer)
-            || ! self::setsEqual($this->paramToReturnKeys, $other->paramToReturnKeys)
-            || ! self::setsEqual($this->introducesKeyed, $other->introducesKeyed)
-            || array_keys($this->paramToReturnKeyed) !== array_keys($other->paramToReturnKeyed)
+            ! $this->introducesShape()->equals($other->introducesShape())
+            || array_keys($this->paramToReturnShape) !== array_keys($other->paramToReturnShape)
         ) {
             return false;
         }
 
-        foreach ($this->paramToReturnKeyed as $index => $keys) {
-            if (! self::setsEqual($keys, $other->paramToReturnKeyed[$index] ?? [])) {
+        foreach ($this->paramToReturnShape as $index => $shape) {
+            if (! $shape->equals($other->returnShapeFor($index))) {
                 return false;
             }
         }
