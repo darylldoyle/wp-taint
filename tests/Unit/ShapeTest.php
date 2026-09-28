@@ -50,16 +50,26 @@ it('joins element by element and compares by value', function (): void {
         ->and($a->join(Shape::empty()))->toBe($a);
 });
 
-it('folds a part deeper than the limit into its node', function (): void {
-    // One level is what the per-key slots kept: `$a['x']` holds a flat set,
-    // so what was under `'x'`'s own keys is merged into it.
+it('keeps nested elements apart down to the limit, and folds what is deeper', function (): void {
     $inner = Shape::element('y', Shape::of(TaintSet::of(TaintKind::Html)))
         ->join(Shape::element('z', Shape::of(TaintSet::of(TaintKind::Sql))));
     $outer = Shape::element('x', $inner);
 
-    expect(Shape::DEPTH)->toBe(1)
-        ->and($outer->elementAt('x')->elements())->toBe([])
-        ->and($outer->elementAt('x')->own()->toStrings())->toBe(['html', 'sql']);
+    expect(Shape::DEPTH)->toBe(4)
+        ->and($outer->elementAt('x')->elementAt('y')->flatten()->toStrings())->toBe(['html'])
+        ->and($outer->elementAt('x')->elementAt('z')->flatten()->toStrings())->toBe(['sql']);
+
+    // Five levels: the fourth keeps its taint and loses its parts.
+    $deep = Shape::element('e', $inner);
+
+    foreach (['d', 'c', 'b', 'a'] as $key) {
+        $deep = Shape::element($key, $deep);
+    }
+
+    $fourth = $deep->elementAt('a')->elementAt('b')->elementAt('c')->elementAt('d');
+
+    expect($fourth->elements())->toBe([])
+        ->and($fourth->own()->toStrings())->toBe(['html', 'sql']);
 });
 
 it('cuts a shape to a given depth without losing taint', function (): void {
@@ -88,7 +98,7 @@ it('keeps the write behind a part until a later write adds to its taint', functi
         ->and($more->elementAt('k')->flatten()->toStrings())->toBe(['html', 'sql']);
 });
 
-it('names a write only for the parts that name none', function (): void {
+it('names a write for the parts that carry taint and name none', function (): void {
     $first = new Provenance(TraceVerb::Propagate, null, 'first');
     $write = new Provenance(TraceVerb::Propagate, null, 'write');
 
@@ -96,7 +106,23 @@ it('names a write only for the parts that name none', function (): void {
         ->join(Shape::element('b', Shape::of(TaintSet::of(TaintKind::Sql))))
         ->withProvenance($write);
 
+    // The array itself holds no taint of its own, but its parts do, so it
+    // names the write that put them there.
     expect($shape->elementAt('a')->provenance())->toBe($first)
         ->and($shape->elementAt('b')->provenance())->toBe($write)
-        ->and($shape->provenance())->toBeNull();
+        ->and($shape->provenance())->toBe($write)
+        ->and(Shape::empty()->withProvenance($write)->provenance())->toBeNull();
+});
+
+it('takes kinds out of every part and drops a part left clean', function (): void {
+    $shape = Shape::element('a', Shape::of(TaintSet::of(TaintKind::Escaped)))
+        ->join(Shape::element('b', Shape::of(TaintSet::of(TaintKind::Escaped, TaintKind::Html))))
+        ->join(Shape::rest(Shape::of(TaintSet::of(TaintKind::Escaped))));
+
+    $without = $shape->without(TaintSet::of(TaintKind::Escaped));
+
+    expect(array_keys($without->elements()))->toBe(['b'])
+        ->and($without->elementAt('b')->flatten()->toStrings())->toBe(['html'])
+        ->and($without->restPart()->isEmpty())->toBeTrue()
+        ->and($shape->without(TaintSet::of(TaintKind::Sql)))->toBe($shape);
 });

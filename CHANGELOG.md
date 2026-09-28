@@ -181,6 +181,12 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `call_user_func_array()` runs was handed an array's keys along with its
   values. PHP hands it the values only, so a key's taint no longer reaches it.
   The catalogue's new `values_only` key marks a dispatcher that does this.
+- An array nested in an array lost its own elements. A literal flattened each
+  value it held, a read folded the element's parts into one set, and a join
+  flattened everything. So `$a['x']['z']` read what `'y'` beside it was given,
+  and an array built in an `if` lost its keys after it. Arrays now keep four
+  levels of elements through a literal, a read, a join, an assignment and a
+  copy.
 
 - A promoted constructor parameter, `__construct( private string $name )`,
   never wrote its property, so a value handed to the constructor did not reach

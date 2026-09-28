@@ -88,6 +88,17 @@ final class TaintState
     }
 
     /**
+     * An operand as one shape: its own taint on top, its parts below.
+     *
+     * What an array literal or a merge hands on, so a value placed into an
+     * element keeps its parts rather than folding them into one set.
+     */
+    public function valueShapeOf(Operand $operand): Shape
+    {
+        return Shape::node($this->taintOf($operand), $this->shapeOf($operand));
+    }
+
+    /**
      * Join `$shape` into what was written into an operand's elements.
      *
      * Grow-only, like every element write: see {@see $shapes}. `$provenance`
