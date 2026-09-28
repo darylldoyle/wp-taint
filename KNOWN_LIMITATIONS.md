@@ -61,6 +61,7 @@ badge:
 | Limitation | Direction |
 | --- | --- |
 | [An array read or write with a computed key sees the whole array](#array-element-taint-is-per-key-when-both-ends-name-a-constant-key) | Over-reports |
+| [A callee's reads of a parameter's keys take the caller's values too](#array-element-taint-is-per-key-when-both-ends-name-a-constant-key) | Over-reports |
 | [Object properties are per class, not per instance](#object-properties-are-per-class-not-per-instance) | Over-reports |
 | [A guard on a container is not followed](#a-guard-clause-is-followed-a-guard-on-a-container-is-not) | Over-reports |
 | [A value of unknown origin, with `--no-unknown-provenance`](#unknown-provenance-is-reported-by-default) | Misses |
@@ -164,22 +165,53 @@ written in the call, or by their relatives. None of those hands the parameter
 one argument whose keys are the ones written. Type checks, `count()`, `isset()`, `empty()` and
 comparisons read no content, so they do not count as a use.
 
+A callback that `array_map()`, `usort()`, `uasort()` or
+`call_user_func_array()` runs gets the values and not the keys, as PHP hands
+them. One that `array_filter()`, `array_walk()` or `uksort()` runs can be
+handed a key, so it gets both.
+
 **Direction:** over-approximating at the dynamic ends, exact in the middle.
 
-**Through a function, an element keeps its key only one level down.** A
-function whose result keeps its input's keys, such as `array_filter()` or
-`apply_filters()` on an array, keeps each element under its string key. An
-integer key can be renumbered, so its element joins the whole-array slot, as
-does every element of a function that builds something else,
-`implode( ',', $row )`. Keys deeper than one level are not tracked: in
-`array( 'a' => array( 'id' => 'x', 'value' => get_option( 'y' ) ) )`, the
-`'id'` read from the inner array takes the stored `'value'`'s taint.
+**Inside a function, an array keeps four levels of elements.** A literal, a
+read, a join, an assignment and a copy keep each element apart. In
+`$a = array( 'a' => array( 'id' => 'x', 'value' => get_option( 'y' ) ) )`,
+`$a['a']['id']` is clean. A part deeper than four levels folds into its node,
+which loses precision and never taint.
 
-**A key carries only its collection's own taint.** A `foreach` key over `$_GET`
-is request data. A key over a local array is not, whatever its elements hold.
-A key written from request data is not tracked either: after
-`$rows[ $_GET['k'] ] = 1`, the `$k` in `foreach ( $rows as $k => $v )` is
-clean.
+**Through a function, an element keeps its key only one level down.** A
+function's summary and an include's scope still hold one level. So a function
+that returns the array above hands back `'a'` as one set, and the `'id'` read
+from it takes the stored `'value'`'s taint. A function whose result keeps its
+input's keys, such as `array_filter()` or `apply_filters()` on an array, keeps
+each element under its string key. An integer key can be renumbered, so its
+element joins the whole-array slot, as does every element of a function that
+builds something else, `implode( ',', $row )`.
+
+**A key carries its collection's own taint and what the code used as a key.**
+A `foreach` key over `$_GET` is request data. After `$rows[ $_GET['k'] ] = 1`,
+the `$k` in `foreach ( $rows as $k => $v )` is request data too, and `$v` is
+not. `array_keys()` reads the keys the same way.
+
+**A summary does not tell a parameter's keys from its values.** A function is
+summarised with each parameter tainted as a whole, keys included. So when a
+callee prints the keys of an array its caller passes, the caller's values reach
+those keys:
+
+```php
+function acme_attributes( $atts ) {
+    $out = '';
+    foreach ( $atts as $name => $value ) {
+        $out .= ' ' . $name . '="' . esc_attr( $value ) . '"';
+    }
+    return $out;
+}
+
+echo acme_attributes( array( 'title' => $_GET['t'] ) );   // reported
+```
+
+The key is the literal `'title'`, and the value is escaped. A key the callee
+checks against an allowlist or a character pattern before it prints it comes
+back clean. **Direction:** over-reports.
 
 ### Object properties are per class, not per instance
 
