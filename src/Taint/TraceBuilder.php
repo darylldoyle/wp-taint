@@ -95,7 +95,7 @@ final class TraceBuilder
         // A value whose taint is all in its elements has no provenance of
         // its own. The write into the elements says where it came from.
         $provenance = $this->state->provenanceOf($current)
-            ?? $this->state->containerProvenanceOf($current)
+            ?? $this->state->partProvenanceOf($current, null)
             ?? $this->elementProvenance($current, $kind, $keys);
 
         if ($provenance === null) {
@@ -149,9 +149,9 @@ final class TraceBuilder
      */
     private function elementProvenance(Operand $operand, TaintKind $kind, ?array $keys): ?Provenance
     {
-        foreach ($this->state->keyedTaintMapOf($operand) as $key => $taint) {
+        foreach ($this->state->shapeOf($operand)->elementsFlattenedByKey() as $key => $taint) {
             if ($taint->has($kind) && ($keys === null || in_array($key, $keys, true))) {
-                return $this->state->keyedProvenanceOf($operand, $key);
+                return $this->state->partProvenanceOf($operand, $key);
             }
         }
 

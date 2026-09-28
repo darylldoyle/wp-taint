@@ -587,7 +587,7 @@ final class FunctionAnalysis
 
                     if ($keys !== []) {
                         foreach ($keys as $index => $taint) {
-                            $this->state->addKeyedTaint($operand, $index, $taint, $provenance);
+                            $this->state->addShape($operand, Shape::element($index, Shape::of($taint)), $provenance);
                         }
 
                         continue;
@@ -1101,18 +1101,18 @@ final class FunctionAnalysis
         }
 
         $provenance = $this->state->provenanceOf($value)
-            ?? $this->state->containerProvenanceOf($value);
+            ?? $this->state->partProvenanceOf($value, null);
 
         if ($provenance === null) {
             return false;
         }
 
-        // One way only. The collection's element slot is never *set* by
-        // anything — writes into it all go through addContainerTaint, which
-        // grows — so adding here cannot start a fight. Pushing back the other
+        // One way only. The collection's shape is never *set* by anything —
+        // writes into it all go through addShape(), which grows — so adding
+        // here cannot start a fight. Pushing back the other
         // way would, because an ordinary assignment to the loop variable owns
         // that operand and would reset it every pass.
-        return $this->state->addContainerTaint($collection, $held, $provenance);
+        return $this->state->addShape($collection, Shape::rest(Shape::of($held)), $provenance);
     }
 
     /**
@@ -1129,15 +1129,16 @@ final class FunctionAnalysis
             $changed = $this->state->add($right, $own, $provenance) || $changed;
         }
 
-        $elements = $this->state->containerTaintOf($left)->union($this->state->containerTaintOf($right));
+        $elements = $this->state->shapeOf($left)->restPart()->flatten()
+            ->union($this->state->shapeOf($right)->restPart()->flatten());
 
         if (! $elements->isEmpty()) {
-            $provenance = $this->state->containerProvenanceOf($left)
-                ?? $this->state->containerProvenanceOf($right);
+            $provenance = $this->state->partProvenanceOf($left, null)
+                ?? $this->state->partProvenanceOf($right, null);
 
             if ($provenance !== null) {
-                $changed = $this->state->addContainerTaint($left, $elements, $provenance) || $changed;
-                $changed = $this->state->addContainerTaint($right, $elements, $provenance) || $changed;
+                $changed = $this->state->addShape($left, Shape::rest(Shape::of($elements)), $provenance) || $changed;
+                $changed = $this->state->addShape($right, Shape::rest(Shape::of($elements)), $provenance) || $changed;
             }
         }
 
@@ -1419,19 +1420,19 @@ final class FunctionAnalysis
 
         // `$a = $b` where `$b` is an array with taint written into its elements
         // has to carry that across, or the taint is lost at the assignment.
-        $container = self::guarded($this->state->containerTaintOf($value), $proof);
+        $container = self::guarded($this->state->shapeOf($value)->restPart()->flatten(), $proof);
 
         if (! $container->isEmpty()) {
-            $changed = $this->state->addContainerTaint($op->var, $container, $provenance) || $changed;
-            $changed = $this->state->addContainerTaint($op->result, $container, $provenance) || $changed;
+            $changed = $this->state->addShape($op->var, Shape::rest(Shape::of($container)), $provenance) || $changed;
+            $changed = $this->state->addShape($op->result, Shape::rest(Shape::of($container)), $provenance) || $changed;
         }
 
         // The per-key slots travel with the array. Without this `$b = $a` would
         // lose the precision and fall back to the whole-array answer. A value
         // that passed a guard is a scalar, so it has none worth carrying.
         if ($proof === null) {
-            $changed = $this->state->copyKeyedTaint($value, $op->var) || $changed;
-            $changed = $this->state->copyKeyedTaint($value, $op->result) || $changed;
+            $changed = $this->state->copyElements($value, $op->var) || $changed;
+            $changed = $this->state->copyElements($value, $op->result) || $changed;
         }
 
         return $this->propagateIndirectWrite($op, $taint->union($container)) || $changed;
@@ -1500,10 +1501,9 @@ final class FunctionAnalysis
             // only this. `$context['id'] = 42` no longer taints
             // `$context['title']`.
             if ($key !== null) {
-                return $this->state->addKeyedTaint(
+                return $this->state->addShape(
                     $target->var,
-                    $key,
-                    $taint,
+                    Shape::element($key, Shape::of($taint)),
                     new Provenance(
                         TraceVerb::Propagate,
                         $op,
@@ -1520,9 +1520,9 @@ final class FunctionAnalysis
             // re-version an array for an element write: `$a = array();` and
             // `$a[$k] = $tainted;` write the same operand, and letting them
             // share a slot makes the fixed point oscillate.
-            return $this->state->addContainerTaint(
+            return $this->state->addShape(
                 $target->var,
-                $taint,
+                Shape::rest(Shape::of($taint)),
                 new Provenance(
                     TraceVerb::Propagate,
                     $op,
@@ -1820,8 +1820,8 @@ final class FunctionAnalysis
      */
     private function transferKeyedRead(Op\Expr\ArrayDimFetch $op, string|int $key): bool
     {
-        $keyed = $this->state->keyedTaintOf($op->var, $key);
-        $fallback = $this->state->containerTaintOf($op->var)
+        $keyed = $this->state->shapeOf($op->var)->elementAt($key)->flatten();
+        $fallback = $this->state->shapeOf($op->var)->restPart()->flatten()
             ->union($this->state->taintOf($op->var));
         $taint = $keyed->union($fallback);
 
@@ -1833,7 +1833,7 @@ final class FunctionAnalysis
         // element: its write, or the call whose return put it there. The
         // array's own provenance says nothing about it, and following that
         // left a returned element's trace at "read out of" with no source.
-        $element = $fallback->isEmpty() ? $this->state->keyedProvenanceOf($op->var, $key) : null;
+        $element = $fallback->isEmpty() ? $this->state->partProvenanceOf($op->var, $key) : null;
 
         if ($element !== null) {
             return $this->state->set($op->result, $taint, $element);
@@ -1882,14 +1882,14 @@ final class FunctionAnalysis
         // the per-key slots — a computed key could be any of them, and a
         // `foreach` visits all of them.
         $taint = $this->state->effectiveTaintOf($container)
-            ->union($this->state->allKeyedTaintOf($container));
+            ->union($this->state->shapeOf($container)->elementsFlattened());
 
         if ($taint->isEmpty()) {
             return $this->state->set($op->result, $taint);
         }
 
         $provenance = $this->state->taintOf($container)->isEmpty()
-            ? $this->state->containerProvenanceOf($container)
+            ? $this->state->partProvenanceOf($container, null)
             : null;
 
         return $this->state->set(
@@ -2286,10 +2286,9 @@ final class FunctionAnalysis
                 continue;
             }
 
-            $changed = $this->state->addKeyedTaint(
+            $changed = $this->state->addShape(
                 $op->result,
-                $key,
-                $taint,
+                Shape::element($key, Shape::of($taint)),
                 new Provenance(
                     TraceVerb::Propagate,
                     $op,
@@ -2305,9 +2304,9 @@ final class FunctionAnalysis
             return $changed;
         }
 
-        return $this->state->addContainerTaint(
+        return $this->state->addShape(
             $op->result,
-            $valueTaint,
+            Shape::rest(Shape::of($valueTaint)),
             new Provenance(TraceVerb::Propagate, $op, 'Placed into an array literal.', $unkeyed),
         ) || $changed;
     }
@@ -2356,9 +2355,11 @@ final class FunctionAnalysis
 
             $proof = $this->guards->proofFor($input, $this->currentBlock);
             $taint = $taint->union(self::guarded($this->state->taintOf($input), $proof));
-            $container = $container->union(self::guarded($this->state->containerTaintOf($input), $proof));
+            $container = $container->union(self::guarded($this->state->shapeOf($input)->restPart()->flatten(), $proof));
 
-            foreach ($this->state->keyedTaintMapOf($input) as $key => $keyed) {
+            foreach ($this->state->shapeOf($input)->elements() as $key => $element) {
+                $keyed = $element->flatten();
+
                 if ($keepsKeys && is_string($key)) {
                     $kept[] = [$input, $key, self::guarded($keyed, $proof)];
 
@@ -2404,7 +2405,7 @@ final class FunctionAnalysis
         }
 
         if (! $container->isEmpty()) {
-            $changed = $this->state->addContainerTaint($op->result, $container, $provenance) || $changed;
+            $changed = $this->state->addShape($op->result, Shape::rest(Shape::of($container)), $provenance) || $changed;
         }
 
         foreach ($kept as [$input, $key, $keyed]) {
@@ -2412,11 +2413,10 @@ final class FunctionAnalysis
                 continue;
             }
 
-            $changed = $this->state->addKeyedTaint(
+            $changed = $this->state->addShape(
                 $op->result,
-                $key,
-                $keyed,
-                $this->state->keyedProvenanceOf($input, $key) ?? $provenance,
+                Shape::element($key, Shape::of($keyed)),
+                $this->state->partProvenanceOf($input, $key) ?? $provenance,
             ) || $changed;
         }
 
@@ -2652,8 +2652,8 @@ final class FunctionAnalysis
         // The elements travel as elements. Returning only the value's own
         // taint lost everything written into it: `$a['k'] = $_GET['x'];
         // return $a;` handed every caller a clean array.
-        $container = self::guarded($this->state->containerTaintOf($op->expr), $proof);
-        $keyed = $proof === null ? $this->state->keyedTaintMapOf($op->expr) : [];
+        $container = self::guarded($this->state->shapeOf($op->expr)->restPart()->flatten(), $proof);
+        $keyed = $proof === null ? $this->state->shapeOf($op->expr)->elementsFlattenedByKey() : [];
 
         $this->reportShortcodeReturn(
             $op,
@@ -2978,7 +2978,7 @@ final class FunctionAnalysis
         if ($this->resultMode === CallResultMode::Container) {
             return $taint->isEmpty() || $provenance === null
                 ? false
-                : $this->state->addContainerTaint($result, $taint, $provenance);
+                : $this->state->addShape($result, Shape::rest(Shape::of($taint)), $provenance);
         }
 
         if (! $this->unionResultWrites) {
@@ -3178,7 +3178,7 @@ final class FunctionAnalysis
             $kept = $this->undoneEscaping($this->state->unionOf($inputs));
 
             if (! $kept->isEmpty()) {
-                $changed = $this->state->addContainerTaint($receiver, $kept, new Provenance(
+                $changed = $this->state->addShape($receiver, Shape::rest(Shape::of($kept)), new Provenance(
                     TraceVerb::Propagate,
                     $op,
                     sprintf('%s keeps its arguments, so the object now holds %s.', $name, $kept->describe()),
@@ -3258,7 +3258,7 @@ final class FunctionAnalysis
         );
 
         return $effect->asContainer
-            ? $this->state->addContainerTaint($target, $taint, $provenance)
+            ? $this->state->addShape($target, Shape::rest(Shape::of($taint)), $provenance)
             : $this->state->add($target, $taint, $provenance);
     }
 
@@ -3308,7 +3308,7 @@ final class FunctionAnalysis
             }
 
             $flat = $this->state->effectiveTaintOf($args);
-            $byKey = $this->state->keyedTaintMapOf($args);
+            $byKey = $this->state->shapeOf($args)->elementsFlattenedByKey();
 
             foreach ($targets as $target) {
                 $key = strtolower($target . '::{main}');
@@ -3333,7 +3333,7 @@ final class FunctionAnalysis
 
         if ($args !== null) {
             $taint = $this->state->effectiveTaintOf($args)
-                ->union($this->state->allKeyedTaintOf($args));
+                ->union($this->state->shapeOf($args)->elementsFlattened());
 
             if (! $taint->isEmpty()) {
                 $scope['args'] = $taint;
@@ -3346,7 +3346,7 @@ final class FunctionAnalysis
                 // The keys travel too, so a template reading `$args['id']` is
                 // no more a finding than reading `$context['id']` in the file
                 // that built the array.
-                $keyed['args'] = $this->state->keyedTaintMapOf($args);
+                $keyed['args'] = $this->state->shapeOf($args)->elementsFlattenedByKey();
             }
         }
 
@@ -4681,7 +4681,7 @@ final class FunctionAnalysis
                 imprecise: true,
             );
 
-            $changed = $this->state->addContainerTaint($target, $taint, $provenance) || $changed;
+            $changed = $this->state->addShape($target, Shape::rest(Shape::of($taint)), $provenance) || $changed;
         }
 
         return $changed;
@@ -4826,10 +4826,11 @@ final class FunctionAnalysis
             return $taint->union($this->state->effectiveTaintOf($argument));
         }
 
-        $taint = $taint->union($this->state->taintOf($argument))->union($this->state->containerTaintOf($argument));
+        $taint = $taint->union($this->state->taintOf($argument))
+            ->union($this->state->shapeOf($argument)->restPart()->flatten());
 
         foreach ($keys as $key) {
-            $taint = $taint->union($this->state->keyedTaintOf($argument, $key));
+            $taint = $taint->union($this->state->shapeOf($argument)->elementAt($key)->flatten());
         }
 
         return $taint;
@@ -4860,13 +4861,14 @@ final class FunctionAnalysis
                 $elements = $elements->union($kinds);
             }
 
-            return $this->state->addContainerTaint($result, $elements, $provenance);
+            return $this->state->addShape($result, Shape::rest(Shape::of($elements)), $provenance);
         }
 
-        $changed = $this->state->addContainerTaint($result, $elements, $provenance);
+        $changed = $this->state->addShape($result, Shape::rest(Shape::of($elements)), $provenance);
 
         foreach ($keyed as $key => $kinds) {
-            $changed = $this->state->addKeyedTaint($result, $key, $kinds, $provenance) || $changed;
+            $changed = $this->state->addShape($result, Shape::element($key, Shape::of($kinds)), $provenance)
+                || $changed;
         }
 
         return $changed;
@@ -4934,7 +4936,7 @@ final class FunctionAnalysis
                 $contributors,
             );
 
-            $changed = $this->state->addContainerTaint($argument, $taint, $provenance) || $changed;
+            $changed = $this->state->addShape($argument, Shape::rest(Shape::of($taint)), $provenance) || $changed;
         }
 
         return $changed;
