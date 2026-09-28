@@ -989,11 +989,14 @@ final class GuardAnalyzer
      * Two shapes, and they are mirror images.
      *
      * **Matched, anchored class.** `/^[a-z0-9_-]+$/` succeeding proves the
-     * value is those characters end to end. `/^\d/` proves nothing:
-     * `1<script>` passes it, because the anchor covers only the first
-     * character. A negated class, `/^[^<>]+$/`, proves the value is anything
-     * but those characters. A `$` without `D` also matches before one final
-     * newline, which carries nothing on its own.
+     * value is those characters end to end. So does a run of classes and
+     * plain characters, `/^[a-z_:][a-z_:.0-9-]*$/`, which is how an HTML
+     * attribute name is checked: the value is made of the characters they
+     * name between them. `/^\d/` proves nothing: `1<script>` passes it,
+     * because the anchor covers only the first character. A negated class,
+     * `/^[^<>]+$/`, proves the value is anything but those characters. A `$`
+     * without `D` also matches before one final newline, which carries
+     * nothing on its own.
      *
      * **Not matched, bare class.** `! preg_match( '/[&<>"\']/', $s )` proves the
      * value contains none of those characters. Core's `wp_specialchars()`
@@ -1018,17 +1021,14 @@ final class GuardAnalyzer
         $quantifier = '(?:[+*]|\{\d+(?:,\d*)?\})';
 
         if ($matched) {
-            if (preg_match('/^\^\[(\^?)' . $class . '\]' . $quantifier . '\$$/', $body, $matches) !== 1) {
+            $allowed = self::anchoredCharacters($body, $caseless);
+
+            if ($allowed === null) {
                 return null;
             }
 
-            $characters = CharacterProof::expandClass($matches[2], $caseless);
-
-            if ($characters === null) {
-                return null;
-            }
-
-            $proof = $matches[1] === '^'
+            [$characters, $negated] = $allowed;
+            $proof = $negated
                 ? CharacterProof::ofAllExcept($characters)
                 : CharacterProof::ofCharacters($characters);
         } else {
@@ -1049,5 +1049,86 @@ final class GuardAnalyzer
         }
 
         return $proof->clears->isEmpty() ? null : $proof;
+    }
+
+    /**
+     * The characters a pattern anchored at both ends admits, and whether it
+     * admits every character but those.
+     *
+     * The body is a run of atoms between `^` and `$`, each with an optional
+     * quantifier. An atom is a class, a plain character, an escaped
+     * punctuation character, or `\d`, `\w` or `\s`. Whatever the run
+     * matches is made of characters the atoms name, whichever way the
+     * quantifiers fall. A negated class counts only on its own: next to
+     * anything else it would admit what the others exclude.
+     *
+     * Anything else proves nothing here: an alternation, a group, `.`, a
+     * lookaround, or an anchor on one end only.
+     *
+     * @return array{string, bool}|null
+     */
+    private static function anchoredCharacters(string $body, bool $caseless): ?array
+    {
+        $length = strlen($body);
+
+        if ($length < 3 || $body[0] !== '^' || $body[$length - 1] !== '$' || $body[$length - 2] === '\\') {
+            return null;
+        }
+
+        $inner = substr($body, 1, -1);
+        $characters = '';
+        $atoms = 0;
+        $negated = false;
+        $position = 0;
+        $end = strlen($inner);
+
+        while ($position < $end) {
+            $char = $inner[$position];
+
+            if ($char === '[') {
+                if (preg_match('/\G\[(\^?)((?:[^\]\\\\]|\\\\.)+)\]/', $inner, $matches, 0, $position) !== 1) {
+                    return null;
+                }
+
+                $class = CharacterProof::expandClass($matches[2], $caseless);
+
+                if ($class === null) {
+                    return null;
+                }
+
+                $negated = $negated || $matches[1] === '^';
+                $characters .= $class;
+                $position += strlen($matches[0]);
+            } elseif ($char === '\\') {
+                $next = $inner[$position + 1] ?? '';
+                $escape = in_array($next, ['d', 'w', 's'], true) || ($next !== '' && ! ctype_alnum($next))
+                    ? CharacterProof::expandClass('\\' . $next, $caseless)
+                    : null;
+
+                if ($escape === null) {
+                    return null;
+                }
+
+                $characters .= $escape;
+                $position += 2;
+            } elseif (str_contains('.^$|?*+()[]{}', $char)) {
+                return null;
+            } else {
+                $characters .= $caseless ? strtolower($char) . strtoupper($char) : $char;
+                $position++;
+            }
+
+            $atoms++;
+
+            if (preg_match('/\G(?:[?*+]|\{\d+(?:,\d*)?\})[?+]?/', $inner, $matches, 0, $position) === 1) {
+                $position += strlen($matches[0]);
+            }
+        }
+
+        if ($atoms === 0 || ($negated && $atoms > 1)) {
+            return null;
+        }
+
+        return [$characters, $negated];
     }
 }

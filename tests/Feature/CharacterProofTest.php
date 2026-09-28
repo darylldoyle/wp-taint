@@ -201,3 +201,77 @@ it('settles a marker a digit check leaves nothing for', function (): void {
         }
         PHP))->toBe(['wp.output.unescaped-unknown@14']);
 });
+
+it('credits a run of classes and characters anchored at both ends', function (): void {
+    // Contact Form 7 checks an attribute name this way before printing it.
+    expect(proofFindings(<<<'PHP'
+        function acme_attribute() {
+            $name = $_GET['name'];
+            if ( preg_match( '/^[a-z_:][a-z_:.0-9-]*$/', $name ) ) {
+                echo $name;
+            }
+        }
+        function acme_prefixed() {
+            $slug = $_GET['slug'];
+            if ( preg_match( '/^acme-\d{1,4}$/', $slug ) ) {
+                echo $slug;
+            }
+        }
+        function acme_loop() {
+            foreach ( (array) $_GET['atts'] as $name => $value ) {
+                if ( ! preg_match( '/^[a-z_:][a-z_:.0-9-]*$/', $name ) ) {
+                    continue;
+                }
+                echo $name;
+            }
+        }
+        PHP))->toBe([]);
+});
+
+it('does not credit a run that admits more than it names', function (string $pattern): void {
+    expect(proofFindings(<<<PHP
+        function acme_run() {
+            \$v = \$_GET['v'];
+            if ( preg_match( '{$pattern}', \$v ) ) {
+                echo \$v;
+            }
+        }
+        PHP))->toBe(['wp.xss.unescaped-output@5']);
+})->with([
+    'any character' => ['/^[a-z].+$/'],
+    'alternation' => ['/^[a-z]+|<b>$/'],
+    'group' => ['/^([a-z]+)$/'],
+    'negated class beside another' => ['/^[a-z][^0-9]*$/'],
+    'one end only' => ['/^[a-z][a-z0-9]*/'],
+    'escaped end' => ['/^[a-z]+\\$/'],
+    'letter escape' => ['/^[a-z]\\S+$/'],
+]);
+
+it('still reads a negated class on its own as everything but its characters', function (): void {
+    expect(proofFindings(<<<'PHP'
+        function acme_run() {
+            global $wpdb;
+            $v = $_GET['v'];
+            if ( preg_match( '/^[^<>"\'&]+$/', $v ) ) {
+                echo $v;
+                $wpdb->query( "DELETE FROM t WHERE id = $v" );
+            }
+        }
+        PHP))->toBe(['wp.sqli.wpdb-query@7']);
+});
+
+it('clears what a quote escaper left when a later sanitiser clears SQL outright', function (): void {
+    // An escaped value is no more dangerous than a raw one, so a sanitiser
+    // that clears the raw value's SQL clears the escaped value's residual too.
+    expect(proofFindings(<<<'PHP'
+        function acme_run() {
+            global $wpdb;
+            $slug = sanitize_title( esc_sql( $_GET['s'] ) );
+            $wpdb->query( "DELETE FROM t WHERE slug = $slug" );
+            $raw = esc_sql( $_GET['r'] );
+            $wpdb->query( "DELETE FROM t WHERE r = $raw" );
+            $twice = esc_sql( esc_sql( $_GET['t'] ) );
+            $wpdb->query( "DELETE FROM t WHERE t = $twice" );
+        }
+        PHP))->toBe(['wp.sqli.unprepared-query@7', 'wp.sqli.unprepared-query@9']);
+});
