@@ -107,9 +107,17 @@ final class Sanitizer
 
         // Clearing SQL clears a value that brings its own quotes too: a
         // quote-escaper escapes those quotes, and anything stricter removes them.
+        // Anything stricter clears what a quote-escaper left behind as well.
+        // `sanitize_key( esc_sql( $v ) )` is no less safe than
+        // `sanitize_key( $v )`, and keeping `sql_unquoted` through it made the
+        // escaped value the more dangerous of the two.
         $cleared = $this->clears->has(TaintKind::Sql)
             ? $this->clears->union(TaintSet::of(TaintKind::SqlSelfQuoted, TaintKind::SqlUnticked))
             : $this->clears;
+
+        if ($this->clears->has(TaintKind::Sql) && ! $this->quotedOnly) {
+            $cleared = $cleared->with(TaintKind::SqlUnquoted);
+        }
 
         return $incoming->without($cleared);
     }

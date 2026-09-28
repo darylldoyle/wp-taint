@@ -154,6 +154,11 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A sanitiser that clears SQL outright kept what a quote-escaper had left of
+  it. `sanitize_title( esc_sql( $v ) )` still carried `sql_unquoted`, though
+  `sanitize_title( $v )` carries no SQL at all, so the escaped value came out
+  the more dangerous of the two. It now clears that too.
+
 - An option saved as an array stored nothing, so a flow through one of its
   elements was missed. An unauthenticated handler that saved
   `array( 'target' => $_POST['url'] )`, and a redirect to the `target` read

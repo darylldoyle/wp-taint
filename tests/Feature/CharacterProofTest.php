@@ -259,3 +259,19 @@ it('still reads a negated class on its own as everything but its characters', fu
         }
         PHP))->toBe(['wp.sqli.wpdb-query@7']);
 });
+
+it('clears what a quote escaper left when a later sanitiser clears SQL outright', function (): void {
+    // An escaped value is no more dangerous than a raw one, so a sanitiser
+    // that clears the raw value's SQL clears the escaped value's residual too.
+    expect(proofFindings(<<<'PHP'
+        function acme_run() {
+            global $wpdb;
+            $slug = sanitize_title( esc_sql( $_GET['s'] ) );
+            $wpdb->query( "DELETE FROM t WHERE slug = $slug" );
+            $raw = esc_sql( $_GET['r'] );
+            $wpdb->query( "DELETE FROM t WHERE r = $raw" );
+            $twice = esc_sql( esc_sql( $_GET['t'] ) );
+            $wpdb->query( "DELETE FROM t WHERE t = $twice" );
+        }
+        PHP))->toBe(['wp.sqli.unprepared-query@7', 'wp.sqli.unprepared-query@9']);
+});
