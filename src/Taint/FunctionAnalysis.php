@@ -2317,7 +2317,10 @@ final class FunctionAnalysis
 
     private static function sqlResiduals(): TaintSet
     {
-        return TaintSet::of(TaintKind::SqlUnquoted, TaintKind::SqlSelfQuoted, TaintKind::SqlUnticked);
+        /** @var TaintSet|null $residuals */
+        static $residuals = null;
+
+        return $residuals ??= TaintSet::of(TaintKind::SqlUnquoted, TaintKind::SqlSelfQuoted, TaintKind::SqlUnticked);
     }
 
     /**
@@ -3930,9 +3933,7 @@ final class FunctionAnalysis
             return TaintSet::empty();
         }
 
-        return $reached->intersect(
-            TaintSet::of(TaintKind::SqlUnquoted, TaintKind::SqlSelfQuoted, TaintKind::SqlUnticked),
-        );
+        return $reached->intersect(self::sqlResiduals());
     }
 
     /**

@@ -31,10 +31,16 @@ final class TaintSet
      * literal, and adding a kind left it silently one bit short — every value
      * seeded as "all kinds" quietly lost the new one. A constant that has to be
      * kept in step with an enum by hand will eventually not be.
+     *
+     * Derived once per process. Every summary a call applies asks for it, and
+     * building it filtered every case of the enum each time.
      */
     public static function allDataflowKinds(): self
     {
-        return self::of(...TaintKind::dataflowKinds());
+        /** @var self|null $all */
+        static $all = null;
+
+        return $all ??= self::of(...TaintKind::dataflowKinds());
     }
 
     public static function of(TaintKind ...$kinds): self

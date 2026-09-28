@@ -316,18 +316,15 @@ enum TaintKind: string
      */
     public function isDerived(): bool
     {
-        return in_array(
-            $this,
-            [
-                self::SqlUnquoted,
-                self::SqlSelfQuoted,
-                self::SqlUnticked,
-                self::Escaped,
-                self::EscapeVoided,
-                self::Unknown,
-            ],
-            true,
-        );
+        return match ($this) {
+            self::SqlUnquoted,
+            self::SqlSelfQuoted,
+            self::SqlUnticked,
+            self::Escaped,
+            self::EscapeVoided,
+            self::Unknown => true,
+            default => false,
+        };
     }
 
     /**
@@ -340,7 +337,10 @@ enum TaintKind: string
      */
     public static function dataflowKinds(): array
     {
-        return array_values(array_filter(
+        /** @var list<self>|null $kinds */
+        static $kinds = null;
+
+        return $kinds ??= array_values(array_filter(
             self::cases(),
             static fn (self $kind): bool => $kind->isDataflowKind() && ! $kind->isDerived(),
         ));
