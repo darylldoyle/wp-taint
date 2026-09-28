@@ -231,6 +231,28 @@ what every part inherits. So does a callback `array_map()` and its relatives
 run, and a function declared twice, whose two bodies number their parts apart.
 **Direction:** over-reports.
 
+### A write into an element keeps only the value's own taint
+
+```php
+$rows   = array();
+$rows[] = array( 'title' => $_GET['t'] );
+echo $rows[0]['title'];                 // not reported
+
+$a['x']['y'] = $_GET['v'];
+echo $a['x']['y'];                      // not reported
+
+$this->opts['name'] = $_GET['n'];       // in one method
+echo $this->opts['name'];               // in another: not reported
+```
+
+An element write stores the value's own taint and what it holds under a
+computed key, not the elements a literal holds under its keys. A write two keys
+deep, or into an element of a property, lands on a temporary that nothing reads
+again. A fix for both exists. It lands once the analysis keeps enough structure
+that the flows it adds are real ones.
+
+**Direction:** under-reports.
+
 ### Object properties are per class, not per instance
 
 `Foo::$value` is one slot. Taint written to `$this->value` in any instance of
@@ -250,6 +272,13 @@ value that one of PHP's own methods is declared to return. For a property,
 that holds through a join when every way in agrees on the class, or brings a
 literal, `null`, an array or a local nothing else can set. A value from a
 function or method that declares nothing shares the slot.
+
+A property keeps its value's elements apart, as a local array does, to four
+levels. `$this->opts = array( 'name' => $_GET['n'], 'mode' => 'grid' )` in one
+method makes `$this->opts['name']` tainted in another, and `$this->opts['mode']`
+clean. So does a constructor that builds the array from its parameter, for each
+caller's argument. An option stays one set: `get_option()` hands back all of
+what was saved.
 
 The trace does reach back to the source: the map records the trace of the write
 that tainted a property, and a read splices it in ahead of its own step. Without

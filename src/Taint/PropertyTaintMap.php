@@ -49,7 +49,13 @@ final class PropertyTaintMap
     /** @var array<string, bool> */
     private array $anchored = [];
 
-    /** @var array<string, TaintSet> */
+    /**
+     * Each property's value as a shape: its own taint on top and, for an
+     * array, its elements under their keys, so a read of `$this->opts['mode']`
+     * sees only what `'mode'` was given.
+     *
+     * @var array<string, Shape>
+     */
     private array $taint = [];
 
     /**
@@ -84,11 +90,22 @@ final class PropertyTaintMap
         $this->log = $log;
     }
 
+    /**
+     * Everything the property holds, by any route.
+     */
     public function get(?string $class, string $property): TaintSet
+    {
+        return $this->valueOf($class, $property)->flatten();
+    }
+
+    /**
+     * The property's value: its own taint, and its elements under their keys.
+     */
+    public function valueOf(?string $class, string $property): Shape
     {
         $this->log?->record('p:' . self::key($class, $property));
 
-        return $this->taint[self::key($class, $property)] ?? TaintSet::empty();
+        return $this->taint[self::key($class, $property)] ?? Shape::empty();
     }
 
     public function isTracked(?string $class, string $property): bool
@@ -127,7 +144,7 @@ final class PropertyTaintMap
 
             $seen = true;
 
-            if (! ($this->taint[$key] ?? TaintSet::empty())->isEmpty()) {
+            if (! ($this->taint[$key] ?? Shape::empty())->isEmpty()) {
                 return false;
             }
         }
@@ -210,19 +227,20 @@ final class PropertyTaintMap
     /**
      * @param list<TraceStep> $origin the trace of the write that produced this taint
      */
-    public function add(?string $class, string $property, TaintSet $taint, array $origin = []): bool
+    public function add(?string $class, string $property, Shape $value, array $origin = []): bool
     {
         if ($this->sealed) {
             return false;
         }
 
-        // Another run reads this, and a loop's element numbers are the
-        // writing run's own: see TaintSet::withoutElements().
-        $taint = $taint->withoutElements();
+        // Another run reads this: a loop's element numbers are the writing
+        // run's own, see TaintSet::withoutElements(), and a write belongs to
+        // the graph it was made in.
+        $value = $value->mapSets(static fn (TaintSet $taint): TaintSet => $taint->withoutElements());
 
         $this->track($class, $property);
 
-        if ($taint->isEmpty()) {
+        if ($value->isEmpty()) {
             return false;
         }
 
@@ -231,10 +249,12 @@ final class PropertyTaintMap
         if ($origin !== []) {
             $this->origins[$key] = self::preferredOrigin($this->origins[$key] ?? [], $origin);
         }
-        $existing = $this->taint[$key] ?? TaintSet::empty();
-        $merged = $existing->union($taint);
 
-        if ($merged->equals($existing)) {
+        $existing = $this->taint[$key] ?? Shape::empty();
+        $merged = $existing->join($value);
+
+        // A join that adds nothing hands back the shape it joined into.
+        if ($merged === $existing) {
             return false;
         }
 
@@ -286,11 +306,11 @@ final class PropertyTaintMap
             }
         }
 
-        foreach ($other->taint as $key => $taint) {
-            $existing = $this->taint[$key] ?? TaintSet::empty();
-            $merged = $existing->union($taint);
+        foreach ($other->taint as $key => $value) {
+            $existing = $this->taint[$key] ?? Shape::empty();
+            $merged = $existing->join($value);
 
-            if (! $merged->equals($existing)) {
+            if ($merged !== $existing) {
                 $this->taint[$key] = $merged;
                 $changed[$key] = true;
             }
