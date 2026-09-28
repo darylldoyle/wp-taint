@@ -225,7 +225,8 @@ a numeric or boolean type, `is_string()` proves nothing, since the dangerous
 values are strings.
 
 For the checks php-cfg does not assert on, `ctype_*`, `in_array( …, true )`,
-`array_key_exists`, `preg_match`, {@see GuardAnalyzer} computes **dominators**
+`array_key_exists`, `preg_match`, a comparison with a literal, `empty()` and a
+`switch` case, {@see GuardAnalyzer} computes **dominators**
 over the block graph and asks whether the validating edge lies on every path to
 the sink. It runs at reporting time and can only suppress a finding, never
 create one, so no part of the fixed point changes and nothing can oscillate.
@@ -239,8 +240,20 @@ plugin vendoring a copy of it was reported until this existed.
 A guard also narrows a value on the path that **returns** it, not only on the
 path to a sink, which is the shape that fast path uses.
 
-**What a guard reaches.** The check is tied to a name, so it covers every use of
-that name it dominates:
+**What a guard reaches.** The check covers the value it tested, wherever it
+dominates a use of it. The same name is not enough. A value written after the
+check is not the one it checked, so it is reported:
+
+```php
+if ( empty( $title ) ) {
+    $title = $_POST['fallback'];
+    echo $title;                        // reported
+}
+```
+
+A join of the tested value with a literal counts as the tested value, which is
+the fallback form of an allowlist. A value computed from the tested one takes
+the proof where it is computed, and keeps it through a join. The check covers:
 
 - a variable, and an element under a literal key: `ctype_digit( $_GET['id'] )`
   covers a later `$_GET['id']`, and `in_array( $params['orderby'], … )` covers
@@ -249,10 +262,18 @@ that name it dominates:
   `in_array( strtoupper( $dir ), … )` covers `strtoupper( $dir )`. The
   normalisers are `strtoupper`, `strtolower`, `trim`, `ltrim`, `rtrim` and
   `sanitize_key`.
-- either side of `&&` and `||`. php-cfg joins a constant from the path that
-  short-circuited with the right-hand side, so the right-hand side is known only
-  on the edge where the join is not that constant: `isset( $x ) && ctype_digit(
-  $x )` proves `$x` digits where it is true, and says nothing where it is false.
+- either side of `&&` and `||`, both ways. `isset( $x ) && ctype_digit( $x )`
+  proves `$x` digits where it is true, and nothing where it is false.
+  `'grid' === $mode || 'list' === $mode` proves `$mode` one of the two where it
+  is true. `'grid' !== $mode && 'list' !== $mode` proves the same where it is
+  false, which is the guard clause form.
+
+**Comparisons.** `===` and `!==` with a literal or a constant hold the value to
+that literal. A loose `==`, `!=` or `switch` case holds it only to a string that
+is not numeric: `'1' == ' 1'`, and on PHP 7 `1 == '1<script>'`. So a case on a
+number or a numeric string, or `== true`, proves nothing. `empty( $x )` holds
+it to an empty value: `''`, `'0'`, `0`, `null`, `false` or an empty array. A
+`match` is read as the `===` chain it is.
 
 **What a guard proves, kind by kind.** A check against a fixed list of
 literals, or a number check, leaves nothing but an object id. A character check
@@ -308,6 +329,13 @@ that calls one reports the value after it.
 - **Loose `in_array()` is not a guard.** Type juggling smuggles values past it.
 - **An allowlist it cannot read is not a guard.** `in_array( $id, array_keys(
   $definitions ), true )` constrains the value, and to what is not visible here.
+- **A case that falls through from the one above is not credited.** Its block
+  is entered from the case above as well as by its own. Cases written together
+  with no body between them share one block, and are credited.
+- **A write to an element after the check is not seen.** An element under a
+  literal key is read afresh each time, and a write to it makes no new value.
+  `in_array( $params['orderby'], … )` still covers a later `$params['orderby']`
+  after `$params['orderby'] = $_GET['o']`.
 - **A guard in one loop does not cover a sink in another.**
 
   ```php
@@ -719,7 +747,12 @@ self-quoted one to the quoted position, gets the finding at the callee's query.
 
 **What is missed.** A caller that escapes a value and a callee that adds the
 quotes: the callee's summary is built from `sql` and cannot see the quotes it
-adds around an escaped value, so the caller's value still reads as unquoted. A
+adds around an escaped value, so the caller's value still reads as unquoted.
+UpdraftPlus's `escape_table_name()` is this shape: it doubles the backticks and
+a second function adds them. Its catalogue entry says what it returns, one
+quoted identifier, with `self_quoted = true`. An escaper written in one
+function is read from its body, as Yoast's ORM is. A name inside backticks a
+callee adds is not seen as a choice: the caller's query holds it bare. A
 quote left open at the end of one concatenation and closed by a later one
 across a branch merge. A quote inside an SQL comment, which is read as opening
 a string. A query that reaches the sink whole, not as a concatenation, carrying

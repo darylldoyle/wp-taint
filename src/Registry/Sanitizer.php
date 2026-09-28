@@ -86,6 +86,16 @@ final class Sanitizer
          * comes back unfiltered when the filter fails, so it counts as written.
          */
         public readonly ?int $optionsArgument = null,
+        /**
+         * This entry returns the value inside quotes of its own.
+         *
+         * UpdraftPlus's `escape_table_name()` doubles every backtick and wraps
+         * the name in backticks: one quoted identifier. That is safe where the
+         * query writes it bare, and not inside more quotes, where its own
+         * close them. So the result carries {@see TaintKind::SqlSelfQuoted},
+         * as a concatenation that quotes an escaped value does.
+         */
+        public readonly bool $selfQuoted = false,
     ) {
     }
 
@@ -151,6 +161,12 @@ final class Sanitizer
             )
         ) {
             $cleared = $cleared->union(TaintSet::of(TaintKind::SqlUnquoted));
+        }
+
+        $sql = TaintSet::of(TaintKind::Sql, TaintKind::SqlUnquoted, TaintKind::SqlSelfQuoted, TaintKind::SqlUnticked);
+
+        if ($this->selfQuoted && ! $incoming->intersect($sql)->isEmpty()) {
+            $cleared = $cleared->without($sql)->with(TaintKind::SqlSelfQuoted);
         }
 
         return $cleared;

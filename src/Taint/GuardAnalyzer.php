@@ -156,9 +156,7 @@ final class GuardAnalyzer
             return null;
         }
 
-        $names = $this->namesOf($operand);
-
-        if ($names === []) {
+        if ($this->namesOf($operand) === []) {
             return null;
         }
 
@@ -181,7 +179,7 @@ final class GuardAnalyzer
         $proof = null;
 
         foreach ($dominating as $candidate) {
-            $entered = $this->enteredOnlyValidated($candidate, $names);
+            $entered = $this->enteredOnlyValidated($candidate, $operand);
 
             if ($entered !== null) {
                 $proof = $proof === null ? $entered : $proof->and($entered);
@@ -198,23 +196,25 @@ final class GuardAnalyzer
      *
      * The value arrives by one of the edges, so only what every edge proves
      * holds. An edge that replaces the value with a literal proves everything.
-     *
-     * @param list<string> $names
      */
-    private function enteredOnlyValidated(Block $block, array $names): ?CharacterProof
+    private function enteredOnlyValidated(Block $block, Operand $subject): ?CharacterProof
     {
         $proof = null;
         $validated = false;
 
         foreach ($block->parents as $parent) {
             $terminal = $parent->children[count($parent->children) - 1] ?? null;
-            $edge = $terminal instanceof Op\Stmt\JumpIf ? $this->validatesOnEdge($terminal, $block, $names) : null;
+            $edge = match (true) {
+                $terminal instanceof Op\Stmt\JumpIf => $this->validatesOnEdge($terminal, $block, $subject),
+                $terminal instanceof Op\Stmt\Switch_ => $this->validatesOnCase($terminal, $block, $subject),
+                default => null,
+            };
 
             if ($edge === null && $this->endsBeforeJumping($parent)) {
                 continue;
             }
 
-            if ($edge === null && $this->replacesWithLiteral($parent, $names)) {
+            if ($edge === null && $this->replacesWithLiteral($parent, $subject)) {
                 $edge = CharacterProof::complete();
             } else {
                 $validated = $validated || $edge !== null;
@@ -245,11 +245,11 @@ final class GuardAnalyzer
      * The branch that failed the check does not carry the unchecked value on.
      * Only a literal counts. Anything else could be as tainted as what it
      * replaced, and a guarded sink is not reported at all.
-     *
-     * @param list<string> $names
      */
-    private function replacesWithLiteral(Block $block, array $names): bool
+    private function replacesWithLiteral(Block $block, Operand $subject): bool
     {
+        $names = $this->namesOf($subject);
+
         for ($depth = 0; $depth < 8; $depth++) {
             foreach ($block->children as $op) {
                 if (
@@ -288,7 +288,7 @@ final class GuardAnalyzer
 
         $definition = OperandHelper::definingOp($operand);
 
-        return $definition instanceof Op\Expr\ConstFetch;
+        return $definition instanceof Op\Expr\ConstFetch || $definition instanceof Op\Expr\ClassConstFetch;
     }
 
     /**
@@ -358,51 +358,102 @@ final class GuardAnalyzer
 
     private function proofWhenTrue(Operand $condition, Operand $value): ?CharacterProof
     {
-        $names = $this->namesOf($value);
-        $positive = true;
+        return $this->namesOf($value) === [] ? null : $this->proofWhen($condition, true, $value);
+    }
 
-        if ($names === []) {
+    /**
+     * What a condition coming out this way proves about the value.
+     *
+     * Which way a check has to come out for the value to be safe, and which way
+     * the condition came out once the negations are counted, are not the same
+     * question. Treating them as one had the polarity backwards for exactly the
+     * case that motivated the denylist support: `ctype_digit()` proves safety
+     * when it *succeeds*, `preg_match( '/[&<>]/' )` when it *fails*.
+     */
+    private function proofWhen(Operand $condition, bool $outcome, Operand $subject, int $depth = 0): ?CharacterProof
+    {
+        if ($depth > 8) {
             return null;
         }
 
-        while (true) {
-            $definition = OperandHelper::definingOp($condition);
+        $definition = OperandHelper::definingOp($condition);
 
-            if ($definition instanceof Op\Expr\BooleanNot) {
-                $positive = ! $positive;
-                $condition = $definition->expr;
-
-                continue;
-            }
-
-            if ($definition instanceof Op\Expr\Cast\Bool_) {
-                $condition = $definition->expr;
-
-                continue;
-            }
-
-            // True overall only tells us about the joined operand when true is
-            // not the constant it was joined with. See validatesOnEdge().
-            if ($definition instanceof Op\Phi) {
-                $joined = self::shortCircuited($definition);
-
-                if ($joined === null || $positive === $joined[0]) {
-                    return null;
-                }
-
-                $condition = $joined[1];
-
-                continue;
-            }
-
-            if (! $definition instanceof Op\Expr\FuncCall && ! $definition instanceof Op\Expr\NsFuncCall) {
-                return null;
-            }
-
-            $safe = $this->safeWhen($definition, $names);
-
-            return $safe !== null && $safe[0] === $positive ? $safe[1] : null;
+        if ($definition instanceof Op\Expr\BooleanNot) {
+            return $this->proofWhen($definition->expr, ! $outcome, $subject, $depth + 1);
         }
+
+        if ($definition instanceof Op\Expr\Cast\Bool_) {
+            return $this->proofWhen($definition->expr, $outcome, $subject, $depth + 1);
+        }
+
+        if ($definition instanceof Op\Phi) {
+            return $this->joinedProof($definition, $outcome, $subject, $depth + 1);
+        }
+
+        // `empty( $x )` holds for a value that is one of '', '0', 0, null,
+        // false or an empty array, and nothing else.
+        $safe = match (true) {
+            $definition instanceof Op\Expr\Empty_ => $this->refersTo($definition->expr, $subject)
+                ? [true, CharacterProof::complete()]
+                : null,
+            $definition instanceof Op\Expr\BinaryOp => $this->comparisonProof($definition, $subject),
+            $definition instanceof Op\Expr\FuncCall,
+            $definition instanceof Op\Expr\NsFuncCall => $this->safeWhen($definition, $subject),
+            default => null,
+        };
+
+        return $safe !== null && $safe[0] === $outcome ? $safe[1] : null;
+    }
+
+    /**
+     * What `a && b` or `a || b` coming out this way proves.
+     *
+     * php-cfg joins the constant from the path that short-circuited, `false`
+     * for `&&` and `true` for `||`, with `b` from the path that did not: see
+     * shortCircuited(). Coming out the other way than that constant, both ran
+     * and came out that way, so what either proves holds. Coming out as the
+     * constant, either `a` did, or `a` came out the other way and `b` as the
+     * constant. Only what both of those prove holds:
+     *
+     * ```php
+     * if ( 'grid' === $mode || 'list' === $mode ) { … }
+     * if ( 'grid' !== $mode && 'list' !== $mode ) { return; }
+     * ```
+     */
+    private function joinedProof(Op\Phi $phi, bool $outcome, Operand $subject, int $depth): ?CharacterProof
+    {
+        $joined = self::shortCircuited($phi);
+
+        if ($joined === null) {
+            return null;
+        }
+
+        [$constant, $right] = $joined;
+        $left = self::shortCircuitedLeft($phi, $constant);
+        $ranOn = self::either(
+            $left === null ? null : $this->proofWhen($left, ! $constant, $subject, $depth),
+            $this->proofWhen($right, $outcome, $subject, $depth),
+        );
+
+        if ($outcome !== $constant) {
+            return $ranOn;
+        }
+
+        $shortCircuit = $left === null ? null : $this->proofWhen($left, $constant, $subject, $depth);
+
+        return $shortCircuit === null || $ranOn === null ? null : $shortCircuit->or($ranOn);
+    }
+
+    /**
+     * What two facts that both hold prove, when either may prove nothing.
+     */
+    private static function either(?CharacterProof $first, ?CharacterProof $second): ?CharacterProof
+    {
+        if ($first === null || $second === null) {
+            return $first ?? $second;
+        }
+
+        return $first->and($second);
     }
 
     /**
@@ -439,80 +490,135 @@ final class GuardAnalyzer
     }
 
     /**
+     * The left-hand operand of the `&&` or `||` a join was written for: the
+     * condition of the jump that went straight to the join with the constant.
+     */
+    private static function shortCircuitedLeft(Op\Phi $phi, bool $constant): ?Operand
+    {
+        $block = $phi->getAttribute('block');
+
+        if (! $block instanceof Block) {
+            return null;
+        }
+
+        foreach ($block->parents as $parent) {
+            $terminal = $parent->children[count($parent->children) - 1] ?? null;
+
+            if (
+                $terminal instanceof Op\Stmt\JumpIf
+                && $terminal->if !== $terminal->else
+                && ($constant ? $terminal->if : $terminal->else) === $block
+            ) {
+                return $terminal->cond;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Does this branch prove the value safe on the edge we arrived by?
      *
      * `if ( ! ctype_digit( $id ) ) { return; }` validates on the *else* edge;
-     * `if ( ctype_digit( $id ) ) { use( $id ); }` on the *if* edge. Every
-     * `BooleanNot` between the call and the condition flips which.
-     *
-     * @param list<string> $names
+     * `if ( ctype_digit( $id ) ) { use( $id ); }` on the *if* edge.
      */
-    private function validatesOnEdge(Op\Stmt\JumpIf $jump, Block $arrivedAt, array $names): ?CharacterProof
+    private function validatesOnEdge(Op\Stmt\JumpIf $jump, Block $arrivedAt, Operand $subject): ?CharacterProof
     {
-        $positive = true;
-        $operand = $jump->cond;
-
-        while (true) {
-            $definition = OperandHelper::definingOp($operand);
-
-            if ($definition instanceof Op\Expr\BooleanNot) {
-                $positive = ! $positive;
-                $operand = $definition->expr;
-
-                continue;
-            }
-
-            if ($definition instanceof Op\Expr\Cast\Bool_) {
-                $operand = $definition->expr;
-
-                continue;
-            }
-
-            // `isset( $x ) && in_array( $x, … )` joins `false`, from the path
-            // where isset() failed, with in_array()'s result. The join tells
-            // us in_array() came out true only on the edge where it is not
-            // that constant: see shortCircuited().
-            if ($definition instanceof Op\Phi) {
-                $joined = self::shortCircuited($definition);
-
-                if ($joined === null) {
-                    return null;
-                }
-
-                [$constant, $operand] = $joined;
-                $informative = $positive === ! $constant ? $jump->if : $jump->else;
-
-                if ($informative !== $arrivedAt) {
-                    return null;
-                }
-
-                continue;
-            }
-
-            if (! $definition instanceof Op\Expr\FuncCall && ! $definition instanceof Op\Expr\NsFuncCall) {
-                return null;
-            }
-
-            $safe = $this->safeWhen($definition, $names);
-
-            if ($safe === null) {
-                return null;
-            }
-
-            [$safeWhen, $proof] = $safe;
-
-            // Which way the call has to come out for the value to be safe, and
-            // then which edge that is once the negations are counted.
-            //
-            // These are not the same question, and treating them as one had the
-            // polarity backwards for exactly the case that motivated the
-            // denylist support: `ctype_digit()` proves safety when it
-            // *succeeds*, `preg_match( '/[&<>]/' )` when it *fails*.
-            $conditionIsTrue = $positive ? $safeWhen : ! $safeWhen;
-            $wanted = $conditionIsTrue ? $jump->if : $jump->else;
-
-            return $wanted === $arrivedAt ? $proof : null;
+        if ($jump->if === $jump->else) {
+            return null;
         }
+
+        return match ($arrivedAt) {
+            $jump->if => $this->proofWhen($jump->cond, true, $subject),
+            $jump->else => $this->proofWhen($jump->cond, false, $subject),
+            default => null,
+        };
+    }
+
+    /**
+     * Does a `switch` on the value enter this block only by its cases?
+     *
+     * `case 'grid':` compares loosely, so only a case that a loose comparison
+     * cannot stretch counts: a string that is not numeric. `'1.0' == 1` and
+     * `' 1' == '1'` both hold. A block the default also enters proves nothing.
+     *
+     */
+    private function validatesOnCase(Op\Stmt\Switch_ $switch, Block $arrivedAt, Operand $subject): ?CharacterProof
+    {
+        if (! $this->refersTo($switch->cond, $subject) || $switch->default === $arrivedAt) {
+            return null;
+        }
+
+        $cases = 0;
+
+        foreach ($switch->targets as $index => $target) {
+            if ($target !== $arrivedAt) {
+                continue;
+            }
+
+            $case = $switch->cases[$index] ?? null;
+
+            if (! $case instanceof Operand || ! self::isLooseSafeLiteral($case)) {
+                return null;
+            }
+
+            $cases++;
+        }
+
+        return $cases > 0 ? CharacterProof::complete() : null;
+    }
+
+    /**
+     * What a comparison has to evaluate to for the value to be safe.
+     *
+     * `$x === 'grid'` settles the value when it holds, `$x !== 'grid'` when it
+     * fails, against any literal or constant. A loose `==` or `!=` counts only
+     * against a string that is not numeric, which it cannot stretch.
+     *
+     * @return array{0: bool, 1: CharacterProof}|null
+     */
+    private function comparisonProof(Op\Expr\BinaryOp $comparison, Operand $subject): ?array
+    {
+        $strict = $comparison instanceof Op\Expr\BinaryOp\Identical
+            || $comparison instanceof Op\Expr\BinaryOp\NotIdentical;
+        $loose = $comparison instanceof Op\Expr\BinaryOp\Equal
+            || $comparison instanceof Op\Expr\BinaryOp\NotEqual;
+
+        if (! $strict && ! $loose) {
+            return null;
+        }
+
+        $other = match (true) {
+            $this->refersTo($comparison->left, $subject) => $comparison->right,
+            $this->refersTo($comparison->right, $subject) => $comparison->left,
+            default => null,
+        };
+
+        if ($other === null) {
+            return null;
+        }
+
+        $settles = $strict ? self::isLiteralValue($other) : self::isLooseSafeLiteral($other);
+
+        if (! $settles) {
+            return null;
+        }
+
+        $whenTrue = $comparison instanceof Op\Expr\BinaryOp\Identical
+            || $comparison instanceof Op\Expr\BinaryOp\Equal;
+
+        return [$whenTrue, CharacterProof::complete()];
+    }
+
+    /**
+     * A literal a loose comparison cannot stretch: a string that is not
+     * numeric.
+     */
+    private static function isLooseSafeLiteral(Operand $operand): bool
+    {
+        $value = OperandHelper::literalValue($operand);
+
+        return is_string($value) && $value !== '' && ! is_numeric(trim($value));
     }
 
     /**
@@ -522,11 +628,9 @@ final class GuardAnalyzer
      * True for a predicate that confirms the value is acceptable, false for one
      * that detects something unacceptable, null when it says nothing at all.
      *
-     * @param list<string> $names
-     *
      * @return array{0: bool, 1: CharacterProof}|null
      */
-    private function safeWhen(Op\Expr\FuncCall|Op\Expr\NsFuncCall $call, array $names): ?array
+    private function safeWhen(Op\Expr\FuncCall|Op\Expr\NsFuncCall $call, Operand $subject): ?array
     {
         $function = OperandHelper::literalString($call->name);
 
@@ -541,7 +645,7 @@ final class GuardAnalyzer
         ));
 
         $checksValue = fn (int $index): bool => isset($arguments[$index])
-            && $this->refersTo($arguments[$index], $names);
+            && $this->refersTo($arguments[$index], $subject);
 
         if (isset(self::CHARACTER_SETS[$function])) {
             return $checksValue(0) ? [true, CharacterProof::ofCharacters(self::CHARACTER_SETS[$function])] : null;
@@ -587,12 +691,10 @@ final class GuardAnalyzer
     /**
      * The variable names an operand stands for.
      *
-     * SSA renames on every write, so the operand at the sink is rarely the one
-     * the guard tested. The original name is what ties them together, which is
-     * approximate in exactly one direction: a *different* variable of the same
-     * name would be credited. Since this only ever suppresses, and a guard on
-     * `$id` followed by a sink on a different `$id` is not something real code
-     * does, that is the safe side to be wrong on.
+     * The first test of whether a guard is about a value: a check on `$id`
+     * says nothing about `$name`. A name is not enough on its own, because a
+     * write after the check keeps the name and changes the value, so
+     * refersTo() asks for the value too.
      *
      * @return list<string>
      */
@@ -653,37 +755,148 @@ final class GuardAnalyzer
             return $key === null || $base === null ? null : $base . '[' . var_export($key, true) . ']';
         }
 
-        if (
-            ($definition instanceof Op\Expr\FuncCall || $definition instanceof Op\Expr\NsFuncCall)
-            && count($definition->args) === 1
-        ) {
-            $function = strtolower(ltrim(OperandHelper::literalString($definition->name) ?? '', '\\'));
-            $argument = $definition->args[0] ?? null;
+        $normalised = $definition === null ? null : self::normaliserOf($definition);
 
-            if (! in_array($function, self::NORMALISERS, true) || ! $argument instanceof Operand) {
-                return null;
-            }
-
-            $base = $this->namesOf($argument, $depth + 1)[0] ?? null;
-
-            return $base === null ? null : $function . '(' . $base . ')';
+        if ($normalised === null) {
+            return null;
         }
 
-        return null;
+        $base = $this->namesOf($normalised[1], $depth + 1)[0] ?? null;
+
+        return $base === null ? null : $normalised[0] . '(' . $base . ')';
     }
 
     /**
-     * @param list<string> $names
+     * The normaliser a call applies, and the value it applies it to.
+     *
+     * @return array{0: string, 1: Operand}|null
      */
-    private function refersTo(Operand $operand, array $names): bool
+    private static function normaliserOf(Op $op): ?array
     {
-        foreach ($this->namesOf($operand) as $name) {
-            if (in_array($name, $names, true)) {
-                return true;
+        if ((! $op instanceof Op\Expr\FuncCall && ! $op instanceof Op\Expr\NsFuncCall) || count($op->args) !== 1) {
+            return null;
+        }
+
+        $function = strtolower(ltrim(OperandHelper::literalString($op->name) ?? '', '\\'));
+        $argument = $op->args[0] ?? null;
+
+        return in_array($function, self::NORMALISERS, true) && $argument instanceof Operand
+            ? [$function, $argument]
+            : null;
+    }
+
+    /**
+     * Whether the operand a guard tested is the value it is asked about.
+     *
+     * The same name is not enough. A value written after the check is not the
+     * one it checked:
+     *
+     * ```php
+     * if ( empty( $title ) ) {
+     *     $title = $_POST['fallback'];
+     *     echo $title;
+     * }
+     * ```
+     *
+     * So the value has to be the one tested, or a join of it with literals: the
+     * fallback form of an allowlist writes one on the branch that failed. A
+     * value computed from the tested one takes the proof where it is computed,
+     * so it needs none here.
+     */
+    private function refersTo(Operand $tested, Operand $subject): bool
+    {
+        if (array_intersect($this->namesOf($tested), $this->namesOf($subject)) === []) {
+            return false;
+        }
+
+        $seen = [];
+
+        return $this->carriesOnly($subject, $tested, 0, $seen);
+    }
+
+    /**
+     * Whether every value this operand can hold is the tested one or a literal.
+     *
+     * @param array<int, true> $seen joins already followed, so a loop ends
+     */
+    private function carriesOnly(Operand $value, Operand $tested, int $depth, array &$seen): bool
+    {
+        if ($this->sameValue($value, $tested, 0) || self::isLiteralValue($value)) {
+            return true;
+        }
+
+        $definition = OperandHelper::definingOp($value);
+
+        if ($definition instanceof Op\Expr\Assign && self::isLiteralValue($definition->expr)) {
+            return true;
+        }
+
+        // php-cfg writes a narrowed copy of the value into each branch of an
+        // `is_numeric()` check. The copy holds the same value.
+        if ($definition instanceof Op\Expr\Assertion && $depth < 8) {
+            return $this->carriesOnly($definition->expr, $tested, $depth + 1, $seen);
+        }
+
+        if (! $definition instanceof Op\Phi || $depth >= 8) {
+            return false;
+        }
+
+        if (isset($seen[spl_object_id($definition)])) {
+            return true;
+        }
+
+        $seen[spl_object_id($definition)] = true;
+
+        foreach ($definition->vars as $var) {
+            if (! $var instanceof Operand || ! $this->carriesOnly($var, $tested, $depth + 1, $seen)) {
+                return false;
             }
         }
 
-        return false;
+        return true;
+    }
+
+    /**
+     * Whether two operands hold the same value.
+     *
+     * SSA gives one operand per write, so a variable read twice is the same
+     * operand. An element under a literal key and a normaliser around a value
+     * are read afresh each time: see expressionName(). They are the same value
+     * when they are the same read of the same value.
+     */
+    private function sameValue(Operand $first, Operand $second, int $depth): bool
+    {
+        if ($first === $second) {
+            return true;
+        }
+
+        $one = OperandHelper::definingOp($first);
+        $other = OperandHelper::definingOp($second);
+
+        if ($one === null || $other === null || $depth >= 4) {
+            return false;
+        }
+
+        // `( $x = $_GET['x'] ) === 'a'` tests the assignment's result, and a
+        // later read of $x is the variable it wrote.
+        if ($one === $other && $one instanceof Op\Expr\Assign) {
+            return true;
+        }
+
+        if ($one instanceof Op\Expr\ArrayDimFetch && $other instanceof Op\Expr\ArrayDimFetch) {
+            $key = $one->dim instanceof Operand ? OperandHelper::literalKey($one->dim) : null;
+            $otherKey = $other->dim instanceof Operand ? OperandHelper::literalKey($other->dim) : null;
+
+            return $key !== null && $key === $otherKey && $this->sameValue($one->var, $other->var, $depth + 1);
+        }
+
+        $normalised = self::normaliserOf($one);
+        $otherNormalised = self::normaliserOf($other);
+
+        return $normalised !== null
+            && $otherNormalised !== null
+            && $normalised[0] === $otherNormalised[0]
+            && $this->sameValue($normalised[1], $otherNormalised[1], $depth + 1);
     }
 
     private function isTrue(Operand $operand): bool

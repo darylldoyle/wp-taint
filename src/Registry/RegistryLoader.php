@@ -33,6 +33,7 @@ final class RegistryLoader
         'function', 'class', 'method', 'static_method', 'arg', 'args', 'all_args', 'clears',
         'requires_literal_arg', 'literal_violation_rule_id', 'note', 'imprecise',
         'clears_by', 'pattern_arg', 'replacement_arg', 'quoted_only', 'alphabet', 'filter_arg', 'options_arg',
+        'self_quoted',
     ];
 
     private const PROPAGATOR_KEYS = [
@@ -272,15 +273,29 @@ final class RegistryLoader
                     : 'sets more than one of clears, clears_by and alphabet; each decides what it clears.');
             }
 
+            $clears = match (true) {
+                $clearsBy !== null => TaintSet::empty(),
+                $alphabet !== null => $alphabet->clears,
+                $clearsEverything => TaintSet::allDataflowKinds(),
+                default => $this->kinds($file, $context, $clearsRaw, allowWildcard: true),
+            };
+            $selfQuoted = $this->boolValue($file, $context . ' self_quoted', $entry['self_quoted'] ?? false);
+
+            // A value that brings its own quotes is SQL-safe where it is
+            // written bare, so the entry has to clear `sql` for the claim to
+            // mean anything, and it cannot also be safe only inside quotes.
+            if ($selfQuoted && ($clearsEverything || ! $clears->has(TaintKind::Sql) || isset($entry['quoted_only']))) {
+                throw RegistryException::at(
+                    $file,
+                    $context,
+                    'sets self_quoted, which needs clears to name sql and no quoted_only.',
+                );
+            }
+
             $accumulator->addSanitizer(new Sanitizer(
                 $matcher,
                 $this->arguments($file, $context, $entry, ArgumentSelector::index(0)),
-                match (true) {
-                    $clearsBy !== null => TaintSet::empty(),
-                    $alphabet !== null => $alphabet->clears,
-                    $clearsEverything => TaintSet::allDataflowKinds(),
-                    default => $this->kinds($file, $context, $clearsRaw, allowWildcard: true),
-                },
+                $clears,
                 $clearsEverything,
                 isset($entry['requires_literal_arg'])
                     ? $this->intValue($file, $context . ' requires_literal_arg', $entry['requires_literal_arg'])
@@ -299,6 +314,7 @@ final class RegistryLoader
                     ?? $this->boolValue($file, $context . ' quoted_only', $entry['quoted_only'] ?? false),
                 $this->optionalPosition($file, $context . ' filter_arg', $entry['filter_arg'] ?? null),
                 $this->optionalPosition($file, $context . ' options_arg', $entry['options_arg'] ?? null),
+                $selfQuoted,
             ));
         }
     }

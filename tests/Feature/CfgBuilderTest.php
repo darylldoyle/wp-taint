@@ -115,8 +115,8 @@ describe('lowering constructs php-cfg cannot parse', function (): void {
             <?php
             $mode = $_GET['mode'];
             $label = match ($mode) {
-                'a' => $mode,
-                default => 'x',
+                'a' => 'x',
+                default => $mode,
             };
             echo $label;
             PHP);
