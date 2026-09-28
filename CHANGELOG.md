@@ -144,6 +144,16 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- An option saved as an array stored nothing, so a flow through one of its
+  elements was missed. An unauthenticated handler that saved
+  `array( 'target' => $_POST['url'] )`, and a redirect to the `target` read
+  back later, went unreported. A write now stores the whole value, its
+  elements and keys included.
+- An escaped value saved through a helper carried `escaped` into the option.
+  A read through the filterable `get_option()` then reported the escaping as
+  voided. The escaping ledger now stays out of the store on both routes, as it
+  did for a direct write.
+
 - A promoted constructor parameter, `__construct( private string $name )`,
   never wrote its property, so a value handed to the constructor did not reach
   the methods that read `$this->name`. The parameter is now lowered to a
@@ -574,6 +584,22 @@ Further precision changes from corpus adjudication of the new attribute rule:
   superglobal, clearing a false traversal report on `fopen()`.
 
 ### Changed
+
+- An option only an administrator can write stores nothing. A later
+  `get_option()` of it carries what stored data always carries, and no `url`,
+  `path` or `shell`. Administrators are trusted in WordPress, so a redirect to
+  a target an administrator saved is not reported. A write is
+  administrator-only when every way the scan can see to it passes a check of a
+  site-wide grant, such as `manage_options` or a plugin's own capability. The
+  check can be a dominating `current_user_can()`, an admin page registered with
+  such a capability through `add_menu_page()` or another `add_*_page()`
+  function, or a REST route whose permission callback requires one. A nonce
+  does not count, and nor does a role such as `edit_posts`. A check through a
+  helper counts only when the helper reaches a capability function, so
+  LiteSpeed Cache's `can_optm()`, which lets every visitor through, does not.
+  A helper that saves is judged by every path to it, and a hook callback is
+  open whoever fires its hook. Every other write keeps what it carried. See
+  KNOWN_LIMITATIONS.md.
 
 - The Gravity Forms hook wrappers, `gf_do_action()` and `gf_apply_filters()`,
   moved from the WordPress catalogue to `registries/gravity-forms.toml`. The

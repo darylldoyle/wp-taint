@@ -87,9 +87,42 @@ final class CallGraph
      */
     private array $called = [];
 
+    /**
+     * The methods the builder walked, by name, built on first use.
+     *
+     * @var array<string, list<string>>|null method name => `class::method` keys
+     */
+    private ?array $methodsByName = null;
+
     public function addFunction(string $key): void
     {
         $this->known[$key] = true;
+        $this->methodsByName = null;
+    }
+
+    /**
+     * Every method of this name the builder walked, whatever its class.
+     *
+     * For a call whose receiver's class is out of reach, these are the bodies
+     * it could run.
+     *
+     * @return list<string>
+     */
+    public function methodsNamed(string $method): array
+    {
+        if ($this->methodsByName === null) {
+            $this->methodsByName = [];
+
+            foreach (array_keys($this->known) as $key) {
+                $at = strrpos($key, '::');
+
+                if ($at !== false) {
+                    $this->methodsByName[substr($key, $at + 2)][] = $key;
+                }
+            }
+        }
+
+        return $this->methodsByName[strtolower($method)] ?? [];
     }
 
     public function addEdge(string $from, string $to, bool $viaHook = false): void
@@ -222,6 +255,16 @@ final class CallGraph
     public function calleesOf(string $key): array
     {
         return $this->edges[$key] ?? [];
+    }
+
+    /**
+     * The catalogue calls this function makes, as matcher identities.
+     *
+     * @return list<string>
+     */
+    public function externalsOf(string $key): array
+    {
+        return $this->externals[$key] ?? [];
     }
 
     public function knows(string $key): bool

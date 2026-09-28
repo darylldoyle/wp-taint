@@ -56,6 +56,20 @@ use SplObjectStorage;
  * Nonce checks never count, whatever their spelling: a nonce proves the
  * request came from a form this site rendered, and a subscriber holds a valid
  * nonce for every form they can see. Entitlement is the whole question here.
+ *
+ * ## Site-wide grants only
+ *
+ * {@see siteWide()} asks a narrower question: does the caller administer the
+ * site? That is what decides whether an option write is one only an
+ * administrator can make. An object capability does not answer it. An author
+ * holds `edit_post` for their own posts, so `current_user_can( 'edit_post',
+ * $id )` lets them through. A helper counts only when it reaches a capability
+ * function, because `is_user_logged_in()` lets every subscriber through too.
+ * A helper the call graph can see is judged by its body, not its name. A
+ * method call still needs a name that reads like a check, and when the graph
+ * knows methods of that name, one of them must reach a capability function.
+ * The other rules are the same, the generosities included. See
+ * {@see AdministratorReach}.
  */
 final class CapabilityGuard
 {
@@ -74,6 +88,20 @@ final class CapabilityGuard
 
     /** Site-wide by definition, no capability argument to inspect. */
     private const SUPER = ['is_super_admin'];
+
+    /**
+     * What a helper has to reach to count in the site-wide mode: a check of
+     * some capability. The catalogue's other entitlement checks prove only
+     * that the caller is logged in.
+     */
+    private const CAPABILITY_CHECKS = [
+        'current_user_can',
+        'user_can',
+        'author_can',
+        'current_user_can_for_blog',
+        'is_super_admin',
+        'wp_user::has_cap',
+    ];
 
     /**
      * Name fragments that read as a permission check, for calls the graph
@@ -115,7 +143,18 @@ final class CapabilityGuard
     public function __construct(
         private readonly Registry $registry,
         private readonly ?CallGraph $callGraph,
+        /** Whether only a site-wide grant entitles. See {@see siteWide()}. */
+        private readonly bool $siteWideOnly = false,
     ) {
+    }
+
+    /**
+     * A guard that credits only a check of a site-wide grant, such as
+     * `manage_options` or a plugin's own capability.
+     */
+    public static function siteWide(Registry $registry, ?CallGraph $callGraph): self
+    {
+        return new self($registry, $callGraph, true);
     }
 
     /**
@@ -605,8 +644,15 @@ final class CapabilityGuard
                 return false;
             }
 
-            if ($class !== null && $this->helperEntitles(strtolower(ltrim($class, '\\') . '::' . $method))) {
+            $key = $class === null ? null : strtolower(ltrim($class, '\\') . '::' . $method);
+
+            if ($key !== null && $this->helperEntitles($key)) {
                 return true;
+            }
+
+            // A helper whose body the graph can see is judged by it.
+            if ($key !== null && $this->siteWideOnly && ($this->callGraph?->knows($key) ?? false)) {
+                return false;
             }
 
             return $this->looksLikeCheck($method);
@@ -622,7 +668,11 @@ final class CapabilityGuard
                 return $this->capabilityEntitles($definition, 0, 1);
             }
 
-            return $method !== null && $this->looksLikeCheck($method);
+            if ($method === null || ! $this->looksLikeCheck($method)) {
+                return false;
+            }
+
+            return ! $this->siteWideOnly || $this->methodEntitles($method);
         }
 
         return false;
@@ -654,7 +704,7 @@ final class CapabilityGuard
 
         return match ($this->registry->capabilityScope($capability)) {
             CapabilityScope::Site, null => true,
-            CapabilityScope::Object => isset($arguments[$objectArgument]),
+            CapabilityScope::Object => ! $this->siteWideOnly && isset($arguments[$objectArgument]),
             CapabilityScope::Role => false,
         };
     }
@@ -666,10 +716,36 @@ final class CapabilityGuard
     private function helperEntitles(string $key): bool
     {
         if ($this->callGraph !== null && $this->callGraph->knows($key)) {
-            return $this->callGraph->reaches($key, $this->registry->entitlementChecks(), self::MAX_DEPTH);
+            $checks = $this->siteWideOnly ? self::CAPABILITY_CHECKS : $this->registry->entitlementChecks();
+
+            return $this->callGraph->reaches($key, $checks, self::MAX_DEPTH);
         }
 
         return $this->looksLikeCheck($key);
+    }
+
+    /**
+     * Whether a method named like a check could be one, judged by the bodies
+     * the call could run.
+     *
+     * The receiver's class is out of reach here, so every method of the name
+     * the graph knows is a candidate, and one that reaches a capability check
+     * is enough. The name alone is not. LiteSpeed Cache guards its front-end
+     * optimiser with `$this->cls( 'Router' )->can_optm()`, which lets every
+     * visitor through, and a name with `can` in it read as a permission check.
+     * A method the graph knows nothing about still counts by its name.
+     */
+    private function methodEntitles(string $method): bool
+    {
+        $known = $this->callGraph?->methodsNamed($method) ?? [];
+
+        foreach ($known as $key) {
+            if ($this->callGraph?->reaches($key, self::CAPABILITY_CHECKS, self::MAX_DEPTH) ?? false) {
+                return true;
+            }
+        }
+
+        return $known === [];
     }
 
     private function looksLikeCheck(string $name): bool

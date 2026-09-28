@@ -72,6 +72,8 @@ badge:
 | [A sanitiser at input is credited at output](#a-sanitiser-at-input-is-credited-at-output) | Misses |
 | [A CSV formula prefix spelled any other way](#the-csv-neutraliser-the-rule-asks-for-is-recognised) | Over-reports |
 | [Stored sources carry no `path` or `url` taint](#stored-sources-carry-html-and-sql-taint-only-not-path-or-url) | Misses |
+| [An option write judged administrator-only through a caller the scan cannot see](#an-option-only-an-administrator-can-write-stores-nothing) | Misses |
+| [An administrator's option write reached through a plugin's own hook, WP-CLI, cron or activation](#an-option-only-an-administrator-can-write-stores-nothing) | Over-reports |
 | [A callable that cannot be traced to a name](#dynamic-calls-are-followed-as-far-as-the-value-can-be-traced) | Configurable |
 | [Trait `insteadof` conflict resolution; a parent outside the scan](#inherited-methods-resolve-insteadof-and-out-of-scan-parents-do-not) | Over-reports |
 | [A genuinely dynamic include path](#include-and-require-are-followed-unless-the-path-is-computed) | Misses |
@@ -818,12 +820,97 @@ The exception is a key the scan watched being written: `update_option(
 'acme_tpl', $request )` makes `get_option( 'acme_tpl' )` carry the write's
 *full* kinds, path and url included, with the write in the trace. That is
 not an assumption about what an option might hold; it is the flow, both ends
-visible.
+visible. The whole value is stored, so an array's elements count too. A write
+only an administrator can make stores nothing: see the next section.
 
 **Direction:** under-approximating, deliberately, at keys the scan never saw
 written. If a codebase really does let a low-privilege user write a path into
 an option outside the scanned tree, add a project-local `[[sources]]` entry
 with `kinds = ["path"]`.
+
+### An option only an administrator can write stores nothing
+
+A write only an administrator can make stores nothing in the option. A later
+`get_option()` of it carries what stored data always carries, and no `url`,
+`path` or `shell`. Administrators are trusted in WordPress. An administrator
+who saves a redirect target on a settings page and is later sent there has
+attacked nobody.
+
+```php
+function acme_settings_page() {                  // add_options_page( …, 'manage_options', … )
+    update_option( 'acme', array( 'target' => $_POST['url'] ) );
+}
+
+add_action( 'wp_ajax_nopriv_acme_save', function () {
+    update_option( 'acme', array( 'target' => $_POST['url'] ) );   // anyone: stored
+} );
+
+$settings = get_option( 'acme' );
+wp_redirect( $settings['target'] );              // reported only for the second write
+```
+
+A write is administrator-only when every way the scan can see to it passes a
+check that the caller holds a site-wide grant. That is a capability the
+`[[capabilities]]` catalogue calls `site`, such as `manage_options`, or a
+plugin's own capability. The check can be any of these:
+
+- a `current_user_can()` check that dominates the write, or dominates the call
+  or include that leads to it
+- the admin page the code runs on, registered with such a capability through
+  `add_menu_page()`, `add_submenu_page()`, `add_options_page()` or another
+  `add_*_page()` wrapper
+- a REST route whose every permission callback allows a request only behind
+  such a check
+
+A helper is judged by every path to it. A helper that saves settings is
+administrator-only when each of its callers is, or calls it behind a check. A
+second caller on `wp_ajax_nopriv_` makes it open. When the value comes in
+through a parameter, each call site decides for what it passes.
+
+Three checks never count: a nonce, a role capability such as `edit_posts` or
+`upload_files`, and an object capability such as `edit_post` with its id. An
+author passes the last one for their own posts, and a subscriber holds a valid
+nonce for every form they can see.
+
+Some of this is on the suppressing side:
+
+- **A caller the call graph cannot see is not counted.** A helper reached from
+  a `manage_options` page, and also from a call the scan could not resolve, is
+  treated as administrator-only.
+- **The capability check's generosities apply.** A computed capability counts,
+  and so does an admin page whose capability will not fold. A helper counts
+  when the call graph shows it reaching a capability check, whichever
+  capability it checks. For a method call on an object of unknown class, one
+  method of that name that reaches a check is enough. A call the graph knows
+  nothing about counts when its name reads like a check. See
+  [Object authorization](#object-authorization-is-a-scope-check-not-proof-the-check-is-right).
+- **Editors hold some site-wide grants.** `edit_others_posts`,
+  `moderate_comments` and `manage_categories` are `site` in the catalogue, so a
+  write behind one of them is treated as an administrator's.
+
+Some is on the reporting side:
+
+- **A hook callback is an entry point, whoever fires the hook.** A plugin's
+  own action, fired only from its settings page, still counts as one. The scan
+  cannot tell it apart from a core hook the plugin fires again. WooCommerce's
+  setup wizard fires `admin_enqueue_scripts` itself, and WordPress fires it on
+  every admin page. So what the callback reads itself is stored. What the
+  dispatch hands it is judged at the dispatch.
+- **Some entry points cannot be tied to a capability, so they count as open.**
+  These are WP-CLI commands, cron events, activation and uninstall hooks, a
+  `load-{$page}` callback and `uninstall.php`. A write only an administrator
+  can reach through one of them is still stored.
+- **A check that ends the request inside a helper is not a guard.** Astra
+  Sites calls `Helper::verify_ajax_request( 'manage_options' )` as a statement,
+  and the helper stops the request unless the caller holds the capability.
+  Only a branch on the check counts, so a write after that call is open.
+- **What a reachable write carries is still the property model's.**
+  Redirection's `Red_Options::save()` can be reached from the front end,
+  through a database version upgrade. The `url` on its write comes from
+  `Redirection_IP::$ip`, which a front-end request fills from `$_SERVER`. See
+  [Object properties are per class](#object-properties-are-per-class-not-per-instance).
+
+**Direction:** both, as listed.
 
 ### Dynamic calls are followed as far as the value can be traced
 

@@ -20,11 +20,53 @@ final class IncludeGraph
     private array $unresolved = [];
 
     /**
-     * @param list<string> $files
+     * Relative path => the keys of the functions that include it or load it
+     * as a template.
+     *
+     * An included file's top-level code has no caller in the call graph, and
+     * it runs only where the include does. WP File Manager saves its settings
+     * in `inc/root.php`, which only an admin page's callback includes. See
+     * {@see \Enshrined\WpTaint\Taint\AdministratorReach}.
+     *
+     * @var array<string, array<string, true>>
      */
-    public function record(string $site, array $files): void
+    private array $includers = [];
+
+    /**
+     * @param list<string> $files
+     * @param string|null  $includer the key of the function the site is in
+     */
+    public function record(string $site, array $files, ?string $includer = null): void
     {
         $this->targets[$site] = $files;
+
+        if ($includer === null) {
+            return;
+        }
+
+        foreach ($files as $file) {
+            $this->includers[$file][$includer] = true;
+        }
+    }
+
+    /**
+     * The functions with a site that includes this file.
+     *
+     * @return list<string>
+     */
+    public function includersOf(string $relativePath): array
+    {
+        return array_keys($this->includers[$relativePath] ?? []);
+    }
+
+    /**
+     * Every file some site includes.
+     *
+     * @return list<string>
+     */
+    public function includedFiles(): array
+    {
+        return array_keys($this->includers);
     }
 
     public function recordUnresolved(string $file, int $line, string $reason): void

@@ -64,7 +64,7 @@ final class IncludeGraphBuilder
         foreach (BlockOrder::of($context->func->cfg) as $block) {
             foreach ($block->children as $op) {
                 if ($op instanceof Op\Expr\FuncCall || $op instanceof Op\Expr\NsFuncCall) {
-                    $this->recordTemplate($graph, $op, $file, $absolute, $templateOffset);
+                    $this->recordTemplate($graph, $op, $context->key, $file, $absolute, $templateOffset);
 
                     continue;
                 }
@@ -88,7 +88,7 @@ final class IncludeGraphBuilder
                     continue;
                 }
 
-                $graph->record($site, $targets);
+                $graph->record($site, $targets, $context->key);
             }
         }
     }
@@ -114,6 +114,7 @@ final class IncludeGraphBuilder
     private function recordTemplate(
         IncludeGraph $graph,
         Op\Expr\FuncCall|Op\Expr\NsFuncCall $op,
+        string $includer,
         string $file,
         string $absolute,
         int &$offset,
@@ -147,7 +148,7 @@ final class IncludeGraphBuilder
             $path = $arguments[$loader->pathArgument] ?? null;
             $targets = $path === null ? [] : $this->resolver->resolvePath($path, $absolute);
 
-            $this->record($graph, $site, $targets, $file, $op->getLine(), 'the template path');
+            $this->record($graph, $site, $targets, $includer, $file, $op->getLine(), 'the template path');
 
             return;
         }
@@ -164,6 +165,7 @@ final class IncludeGraphBuilder
             $graph,
             $site,
             $this->resolver->resolveTemplate($slugs, $names, $absolute),
+            $includer,
             $file,
             $op->getLine(),
             'the template slug',
@@ -177,6 +179,7 @@ final class IncludeGraphBuilder
         IncludeGraph $graph,
         string $site,
         array $targets,
+        string $includer,
         string $file,
         int $line,
         string $what,
@@ -191,7 +194,7 @@ final class IncludeGraphBuilder
             return;
         }
 
-        $graph->record($site, $targets);
+        $graph->record($site, $targets, $includer);
     }
 
     /**
