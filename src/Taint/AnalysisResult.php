@@ -73,7 +73,7 @@ final class AnalysisResult
          * whatever the caller passed. The probe records where the seed would
          * have gone, and the caller publishes what it actually passed.
          *
-         * @var list<array{0: string, 1: string, 2: string, 3: int|string|null, 4: TaintSet}> see
+         * @var list<array{0: string, 1: string, 2: string, 3: Shape}> see
          *     {@see FunctionSummary::$paramToScope}
          */
         public readonly array $scopesReached = [],

@@ -154,6 +154,12 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A variable that crosses into another scope was one set. An included
+  template reading `$settings['mode']` took what `'title'` held, and so did a
+  closure reading a captured array. A template's `$args` kept one level of
+  keys, and lost the array's own taint when it had a literal key. Each
+  variable now keeps its elements under their keys, to four levels, and an
+  assignment in the included file still replaces what it was handed.
 - A function's return kept its array one level deep.
   `return array( 'general' => array( 'title' => $_GET['t'], 'mode' => 'grid' ) )`
   made a caller's `$settings['general']['mode']` read the title. A returned

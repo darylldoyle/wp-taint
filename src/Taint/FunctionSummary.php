@@ -13,7 +13,7 @@ namespace Enshrined\WpTaint\Taint;
  *
  * @phpstan-type PropertyReference array{0: string|null, 1: string, 2: TaintSet}
  * @phpstan-type CaptureReference array{0: string, 1: string, 2: TaintSet}
- * @phpstan-type ScopeReference array{0: string, 1: string, 2: string, 3: int|string|null, 4: TaintSet}
+ * @phpstan-type ScopeReference array{0: string, 1: string, 2: string, 3: Shape}
  */
 final class FunctionSummary
 {
@@ -90,14 +90,15 @@ final class FunctionSummary
          * The scope counterpart to {@see $paramToCapture}, for the three ways
          * a function hands its variables to code outside it: a file it
          * includes sees its whole scope (`in`, the included file's `::{main}`
-         * key, the variable's name, no array key); a template loaded with
+         * key, the variable's name); a template loaded with
          * `get_template_part()` sees `$args` (`in`, the template's key,
-         * `args`, and the array key when the argument had one); and a closure
-         * writes a by-reference capture back to the function that made it
-         * (`out`, the closure's key, the captured name). A probe run records
-         * these instead of publishing its seed, and the call site publishes
-         * the caller's actual taint. The fifth part is the kinds that reach the
-         * scope, and the caller publishes only those, as for properties.
+         * `args`); and a closure writes a by-reference capture back to the
+         * function that made it (`out`, the closure's key, the captured name).
+         * A probe run records these instead of publishing its seed, and the
+         * call site publishes the caller's actual taint. The fourth part is
+         * what reaches the variable, as a shape: its own taint, and its
+         * elements under their keys. The caller publishes only those kinds,
+         * part by part, as for properties.
          *
          * @var array<int, list<ScopeReference>>
          */
@@ -284,8 +285,7 @@ final class FunctionSummary
                     $reference[0],
                     $reference[1],
                     $reference[2],
-                    $reference[3],
-                    $set($index, $reference[4]),
+                    $reference[3]->mapSets(static fn (TaintSet $kinds): TaintSet => $set($index, $kinds)),
                 ],
                 $references,
             );
@@ -363,21 +363,14 @@ final class FunctionSummary
     /**
      * Which shared scope a reference names, as a string, for deduplicating.
      *
-     * The kinds are left out: two references to the same scope are one
-     * reference, carrying the kinds of both.
+     * What reaches it is left out: two references to the same variable are
+     * one reference, carrying what both carry.
      *
-     * @param array{0: string, 1: string, 2: string, 3: int|string|null, 4?: TaintSet} $reference
+     * @param array{0: string, 1: string, 2: string, 3?: Shape} $reference
      */
     public static function scopeKey(array $reference): string
     {
-        [$table, $key, $name, $arrayKey] = $reference;
-
-        return implode("\0", [
-            $table,
-            $key,
-            $name,
-            $arrayKey === null ? '-' : (is_int($arrayKey) ? 'i' : 's') . $arrayKey,
-        ]);
+        return implode("\0", [$reference[0], $reference[1], $reference[2]]);
     }
 
     /**
@@ -659,8 +652,8 @@ final class FunctionSummary
 
             foreach ([...($mine[$index] ?? []), ...($theirs[$index] ?? [])] as $reference) {
                 $id = self::scopeKey($reference);
-                $kinds = ($merged[$id][4] ?? TaintSet::empty())->union($reference[4]);
-                $merged[$id] = [$reference[0], $reference[1], $reference[2], $reference[3], $kinds];
+                $value = ($merged[$id][3] ?? Shape::empty())->join($reference[3]);
+                $merged[$id] = [$reference[0], $reference[1], $reference[2], $value];
             }
 
             ksort($merged);
@@ -706,6 +699,55 @@ final class FunctionSummary
         }
 
         return true;
+    }
+
+    /**
+     * The same scopes reached, each by the same value.
+     *
+     * @param array<int, list<ScopeReference>> $mine
+     * @param array<int, list<ScopeReference>> $theirs
+     */
+    private static function scopesEqual(array $mine, array $theirs): bool
+    {
+        if (array_keys($mine) !== array_keys($theirs)) {
+            return false;
+        }
+
+        foreach ($mine as $index => $references) {
+            $a = self::valuesByScope($references);
+            $b = self::valuesByScope($theirs[$index] ?? []);
+
+            if (array_keys($a) !== array_keys($b)) {
+                return false;
+            }
+
+            foreach ($a as $id => $value) {
+                if (! $value->equals($b[$id] ?? Shape::empty())) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @param list<ScopeReference> $references
+     *
+     * @return array<string, Shape> sorted by scope
+     */
+    private static function valuesByScope(array $references): array
+    {
+        $result = [];
+
+        foreach ($references as $reference) {
+            $id = self::scopeKey($reference);
+            $result[$id] = ($result[$id] ?? Shape::empty())->join($reference[3]);
+        }
+
+        ksort($result);
+
+        return $result;
     }
 
     /**
@@ -839,13 +881,7 @@ final class FunctionSummary
                 /** @param CaptureReference $reference */
                 static fn (array $reference): TaintSet => $reference[2],
             )
-            || ! self::referencesEqual(
-                $this->paramToScope,
-                $other->paramToScope,
-                self::scopeKey(...),
-                /** @param ScopeReference $reference */
-                static fn (array $reference): TaintSet => $reference[4],
-            )
+            || ! self::scopesEqual($this->paramToScope, $other->paramToScope)
         ) {
             return false;
         }

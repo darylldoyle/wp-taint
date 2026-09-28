@@ -72,10 +72,10 @@ final class FunctionAnalysis
 
     /**
      * Shared scopes the seeded parameter reached, keyed so a loop or a later
-     * round records each once, with the kinds that reached each. See
+     * round records each once, with what reached each. See
      * {@see AnalysisResult::$scopesReached}.
      *
-     * @var array<string, array{0: string, 1: string, 2: string, 3: int|string|null, 4: TaintSet}>
+     * @var array<string, array{0: string, 1: string, 2: string, 3: Shape}>
      */
     private array $scopesReached = [];
 
@@ -374,8 +374,7 @@ final class FunctionAnalysis
                 $reference[0],
                 $reference[1],
                 $reference[2],
-                $reference[3],
-                $reference[4]->withoutElements(),
+                $reference[3]->mapSets(static fn (TaintSet $taint): TaintSet => $taint->withoutElements()),
             ],
             array_values($this->scopesReached),
         );
@@ -439,9 +438,9 @@ final class FunctionAnalysis
         // publishes what it actually passed. File-level code has no
         // parameters, so it is never probed.
         if ($this->seedParameterIndex !== null) {
-            foreach ($named['taint'] as $name => $taint) {
-                if (isset($assigned[$name]) && ! $taint->isEmpty()) {
-                    $this->recordScopeReference('out', $this->context->key, $name, $taint);
+            foreach ($named['taint'] as $name => $value) {
+                if (isset($assigned[$name])) {
+                    $this->recordScopeReference('out', $this->context->key, $name, $value);
                 }
             }
 
@@ -451,12 +450,12 @@ final class FunctionAnalysis
         $scope = [];
         $origins = [];
 
-        foreach ($named['taint'] as $name => $taint) {
+        foreach ($named['taint'] as $name => $value) {
             if (! isset($assigned[$name])) {
                 continue;
             }
 
-            $scope[$name] = $taint;
+            $scope[$name] = $value;
 
             if (isset($named['origins'][$name])) {
                 $origins[$name] = $named['origins'][$name];
@@ -601,15 +600,19 @@ final class FunctionAnalysis
      * still owned by whatever assigns it: if the included file sets `$title`
      * itself, that assignment wins, which is exactly right.
      *
-     * @param array<string, TaintSet> $scope
+     * Each variable's own taint goes on every operand of its name, where an
+     * assignment overwrites it. Its elements go only on an operand nothing in
+     * this body writes, the value as it arrived, since elements only ever
+     * grow: `$args = array( 'id' => 7 )` in the template must not read the
+     * includer's `$args['id']`.
+     *
+     * @param array<string, Shape> $scope
      */
     private function seedScope(array $scope, string $description, string $originKey): void
     {
         if ($scope === []) {
             return;
         }
-
-        $keyed = $this->scopes->keyedInto($originKey);
 
         foreach ($this->blocks as $block) {
             foreach ($block->children as $op) {
@@ -631,20 +634,14 @@ final class FunctionAnalysis
                         prefix: $this->scopes->originOf($originKey, $name),
                     );
 
-                    // Per-key first: when the caller's array had precise keys,
-                    // seeding only the flat union would throw that away at the
-                    // boundary and every key would read as tainted again.
-                    $keys = $keyed[$name] ?? [];
+                    $this->state->add($operand, $scope[$name]->own(), $provenance);
 
-                    if ($keys !== []) {
-                        foreach ($keys as $index => $taint) {
-                            $this->state->addShape($operand, Shape::element($index, Shape::of($taint)), $provenance);
-                        }
-
-                        continue;
+                    // Under their keys: seeding them as one set would throw
+                    // the keys away at the boundary, and every key would read
+                    // as tainted again.
+                    if ($operand->ops === []) {
+                        $this->state->addShape($operand, $scope[$name]->structure(), $provenance);
                     }
-
-                    $this->state->add($operand, $scope[$name], $provenance);
                 }
             }
         }
@@ -701,10 +698,8 @@ final class FunctionAnalysis
         // caller with what it passed; see {@see applySummaryScopes}.
         if ($this->seedParameterIndex !== null) {
             foreach ($targets as $target) {
-                foreach ($visible['taint'] as $name => $taint) {
-                    if (! $taint->isEmpty()) {
-                        $this->recordScopeReference('in', strtolower($target . '::{main}'), $name, $taint);
-                    }
+                foreach ($visible['taint'] as $name => $value) {
+                    $this->recordScopeReference('in', strtolower($target . '::{main}'), $name, $value);
                 }
             }
 
@@ -726,16 +721,15 @@ final class FunctionAnalysis
      * Note that the seeded parameter reached a shared scope, and with what.
      * See {@see FunctionSummary::$paramToScope} for what the parts mean.
      */
-    private function recordScopeReference(
-        string $table,
-        string $key,
-        string $name,
-        TaintSet $taint,
-        int|string|null $arrayKey = null,
-    ): void {
-        $id = FunctionSummary::scopeKey([$table, $key, $name, $arrayKey]);
-        $kinds = ($this->scopesReached[$id][4] ?? TaintSet::empty())->union($taint);
-        $this->scopesReached[$id] = [$table, $key, $name, $arrayKey, $kinds];
+    private function recordScopeReference(string $table, string $key, string $name, Shape $value): void
+    {
+        if ($value->isEmpty()) {
+            return;
+        }
+
+        $id = FunctionSummary::scopeKey([$table, $key, $name]);
+        $joined = ($this->scopesReached[$id][3] ?? Shape::empty())->join($value);
+        $this->scopesReached[$id] = [$table, $key, $name, $joined];
     }
 
     /**
@@ -782,13 +776,15 @@ final class FunctionAnalysis
      * that taint came from.
      *
      * The trace is what stops a finding on the far side of an include from
-     * beginning "$title was in scope" and ending there.
+     * beginning "$title was in scope" and ending there. Each variable is a
+     * shape: its own taint, and its elements under their keys.
      *
-     * @return array{taint: array<string, TaintSet>, origins: array<string, list<TraceStep>>}
+     * @return array{taint: array<string, Shape>, origins: array<string, list<TraceStep>>}
      */
     private function namedScopeWithOrigins(): array
     {
-        $scope = [];
+        $own = [];
+        $parts = [];
         $origins = [];
 
         foreach ($this->blocks as $block) {
@@ -804,16 +800,24 @@ final class FunctionAnalysis
                         continue;
                     }
 
-                    $taint = $this->state->effectiveTaintOf($operand);
+                    $taint = $this->state->taintOf($operand);
+                    $shape = $this->state->shapeOf($operand);
 
-                    if ($taint->isEmpty()) {
+                    if ($taint->isEmpty() && $shape->isEmpty()) {
                         continue;
                     }
 
-                    $scope[$name] = ($scope[$name] ?? TaintSet::empty())->union($taint);
+                    // Most named values are scalars, so the own taint is
+                    // gathered as a set, and only a value with elements
+                    // joins a shape.
+                    $own[$name] = ($own[$name] ?? TaintSet::empty())->union($taint);
+
+                    if (! $shape->isEmpty()) {
+                        $parts[$name] = ($parts[$name] ?? Shape::empty())->join($shape);
+                    }
 
                     if (! isset($origins[$name])) {
-                        $origin = $this->scopeTrace($op, $operand, $name, $taint);
+                        $origin = $this->scopeTrace($op, $operand, $name, $taint->union($shape->flatten()));
 
                         if ($origin !== []) {
                             $origins[$name] = $origin;
@@ -821,6 +825,12 @@ final class FunctionAnalysis
                     }
                 }
             }
+        }
+
+        $scope = [];
+
+        foreach ($own as $name => $taint) {
+            $scope[$name] = Shape::node($taint, $parts[$name] ?? Shape::empty());
         }
 
         return ['taint' => $scope, 'origins' => $origins];
@@ -3099,9 +3109,11 @@ final class FunctionAnalysis
                 continue;
             }
 
-            $taint = $enclosing['taint'][$name] ?? null;
+            // A capture's record is one set: a closure's parameters are not
+            // split into parts either.
+            $taint = ($enclosing['taint'][$name] ?? Shape::empty())->flatten();
 
-            if ($taint === null || $taint->isEmpty()) {
+            if ($taint->isEmpty()) {
                 continue;
             }
 
@@ -3841,21 +3853,13 @@ final class FunctionAnalysis
                 return false;
             }
 
-            $flat = $this->state->effectiveTaintOf($args);
-            $byKey = $this->state->shapeOf($args)->elementsFlattenedByKey();
-
             foreach ($targets as $target) {
-                $key = strtolower($target . '::{main}');
-
-                if (! $flat->isEmpty()) {
-                    $this->recordScopeReference('in', $key, 'args', $flat);
-                }
-
-                foreach ($byKey as $arrayKey => $taint) {
-                    if (! $taint->isEmpty()) {
-                        $this->recordScopeReference('in', $key, 'args', $taint, $arrayKey);
-                    }
-                }
+                $this->recordScopeReference(
+                    'in',
+                    strtolower($target . '::{main}'),
+                    'args',
+                    $this->state->valueShapeOf($args),
+                );
             }
 
             return false;
@@ -3863,24 +3867,20 @@ final class FunctionAnalysis
 
         $scope = [];
         $origins = [];
-        $keyed = [];
 
+        // The keys travel too, so a template reading `$args['id']` is no more
+        // a finding than reading `$context['id']` in the file that built the
+        // array.
         if ($args !== null) {
-            $taint = $this->state->effectiveTaintOf($args)
-                ->union($this->state->shapeOf($args)->elementsFlattened());
+            $value = $this->state->valueShapeOf($args);
 
-            if (! $taint->isEmpty()) {
-                $scope['args'] = $taint;
-                $origin = $this->scopeTrace($op, $args, 'args', $taint);
+            if (! $value->isEmpty()) {
+                $scope['args'] = $value;
+                $origin = $this->scopeTrace($op, $args, 'args', $value->flatten());
 
                 if ($origin !== []) {
                     $origins['args'] = $origin;
                 }
-
-                // The keys travel too, so a template reading `$args['id']` is
-                // no more a finding than reading `$context['id']` in the file
-                // that built the array.
-                $keyed['args'] = $this->state->shapeOf($args)->elementsFlattenedByKey();
             }
         }
 
@@ -3888,7 +3888,7 @@ final class FunctionAnalysis
 
         foreach ($targets as $target) {
             $key = strtolower($target . '::{main}');
-            $changed = $this->scopes->addInto($key, $scope, $origins, $keyed) || $changed;
+            $changed = $this->scopes->addInto($key, $scope, $origins) || $changed;
         }
 
         return $changed;
@@ -4195,7 +4195,7 @@ final class FunctionAnalysis
 
             $changed = $this->scopes->addInto(
                 $closureKey,
-                [$name => $taint],
+                [$name => Shape::of($taint)],
                 [$name => $this->captureWriteTrace($op, $argument, $taint, $summary, $name)],
             ) || $changed;
         }
@@ -4228,33 +4228,33 @@ final class FunctionAnalysis
 
         $changed = false;
 
-        foreach ($references as [$table, $key, $name, $arrayKey, $kinds]) {
-            // Only what survives the body, as for properties. A form id that
-            // the callee passes through absint() on its way to an included
-            // file's `$settings` hands that file an object id, not the whole
-            // request it came from.
-            $taint = self::throughBody($argumentTaint, $kinds, $summary->revertedResidualsFor($index));
+        $reverts = $summary->revertedResidualsFor($index);
 
-            if ($taint->isEmpty()) {
+        foreach ($references as [$table, $key, $name, $reached]) {
+            // Only what survives the body, part by part, as for properties. A
+            // form id that the callee passes through absint() on its way to an
+            // included file's `$settings` hands that file an object id, not
+            // the whole request it came from.
+            $value = $reached->mapSets(
+                static fn (TaintSet $kinds): TaintSet => self::throughBody($argumentTaint, $kinds, $reverts),
+            );
+
+            if ($value->isEmpty()) {
                 continue;
             }
 
             if ($this->seedParameterIndex !== null) {
-                $this->recordScopeReference($table, $key, $name, $taint, $arrayKey);
+                $this->recordScopeReference($table, $key, $name, $value);
 
                 continue;
             }
 
+            $taint = $value->flatten();
             $origins = [$name => $this->scopeWriteTrace($op, $argument, $taint, $summary, $table, $name)];
 
             $changed = ($table === 'out'
-                ? $this->scopes->addOutOf($key, [$name => $taint], $origins)
-                : $this->scopes->addInto(
-                    $key,
-                    [$name => $taint],
-                    $origins,
-                    $arrayKey === null ? [] : [$name => [$arrayKey => $taint]],
-                )) || $changed;
+                ? $this->scopes->addOutOf($key, [$name => $value], $origins)
+                : $this->scopes->addInto($key, [$name => $value], $origins)) || $changed;
         }
 
         return $changed;
