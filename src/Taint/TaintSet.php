@@ -31,12 +31,19 @@ final class TaintSet
     public const MAX_PARTS = 62;
 
     /**
-     * @param array<int, int>|null $parts per kind bit, the parts it came from.
-     *                                    A kind with no entry came from every
-     *                                    part. Null when no kind names parts.
+     * @param array<int, int>|null $parts    per kind bit, the parts it came from.
+     *                                       A kind with no entry came from every
+     *                                       part. Null when no kind names parts.
+     * @param array<int, int>|null $elements per kind bit, the elements of a
+     *                                       collection a loop is over that it came
+     *                                       from: see {@see fromElement()}. A kind
+     *                                       with no entry came from anywhere.
      */
-    private function __construct(private readonly int $mask, private readonly ?array $parts = null)
-    {
+    private function __construct(
+        private readonly int $mask,
+        private readonly ?array $parts = null,
+        private readonly ?array $elements = null,
+    ) {
     }
 
     public static function empty(): self
@@ -98,23 +105,19 @@ final class TaintSet
     {
         $mask = $this->mask | $other->mask;
 
-        if ($this->parts === null && $other->parts === null) {
+        if (
+            $this->parts === null && $other->parts === null
+            && $this->elements === null && $other->elements === null
+        ) {
             return new self($mask);
         }
 
-        // Per kind, the parts either side has it from.
-        $parts = [];
-
-        for ($bits = $mask; $bits !== 0; $bits &= $bits - 1) {
-            $bit = $bits & -$bits;
-            $from = $this->partsOfBit($bit) | $other->partsOfBit($bit);
-
-            if ($from !== self::EVERY_PART) {
-                $parts[$bit] = $from;
-            }
-        }
-
-        return new self($mask, $parts === [] ? null : $parts);
+        // Per kind, the parts and the elements either side has it from.
+        return new self(
+            $mask,
+            self::merged($mask, $this->parts, $this->mask, $other->parts, $other->mask),
+            self::merged($mask, $this->elements, $this->mask, $other->elements, $other->mask),
+        );
     }
 
     /**
@@ -169,7 +172,9 @@ final class TaintSet
     {
         // Every construction lists the kinds in ascending bit order, so two
         // sets with the same kinds from the same parts hold identical maps.
-        return $this->mask === $other->mask && $this->parts === $other->parts;
+        return $this->mask === $other->mask
+            && $this->parts === $other->parts
+            && $this->elements === $other->elements;
     }
 
     /**
@@ -192,15 +197,23 @@ final class TaintSet
             return false;
         }
 
-        if ($this->parts === null && $other->parts === null) {
+        if (
+            $this->parts === null && $other->parts === null
+            && $this->elements === null && $other->elements === null
+        ) {
             return true;
         }
 
         for ($bits = $this->mask; $bits !== 0; $bits &= $bits - 1) {
             $bit = $bits & -$bits;
-            $mine = $this->partsOfBit($bit);
 
-            if (($mine & ~$other->partsOfBit($bit)) !== 0) {
+            if (($this->partsOfBit($bit) & ~$other->partsOfBit($bit)) !== 0) {
+                return false;
+            }
+
+            $mine = self::bitsOf($this->elements, $this->mask, $bit);
+
+            if (($mine & ~self::bitsOf($other->elements, $other->mask, $bit)) !== 0) {
                 return false;
             }
         }
@@ -223,7 +236,7 @@ final class TaintSet
             $parts[$bits & -$bits] = 1 << $part;
         }
 
-        return new self($this->mask, $parts === [] ? null : $parts);
+        return new self($this->mask, $parts === [] ? null : $parts, $this->elements);
     }
 
     /**
@@ -274,6 +287,60 @@ final class TaintSet
     }
 
     /**
+     * The kinds part `$part` brought, each named as from that part alone: a
+     * kind every part brought is left out, since no one part accounts for it.
+     */
+    public function onlyPart(int $part): self
+    {
+        if ($this->parts === null) {
+            return self::empty();
+        }
+
+        $bit = 1 << $part;
+        $mask = 0;
+        $parts = [];
+
+        foreach ($this->parts as $kind => $from) {
+            if (($from & $bit) !== 0) {
+                $mask |= $kind;
+                $parts[$kind] = $bit;
+            }
+        }
+
+        return $mask === 0 ? self::empty() : new self($mask, $parts, self::restricted($this->elements, $mask));
+    }
+
+    /**
+     * The kinds some part other than `$part` brought, each named as from those
+     * parts: what is left once part `$part`'s share is taken away. A kind every
+     * part brought stays.
+     */
+    public function exceptPart(int $part): self
+    {
+        if ($this->parts === null) {
+            return $this;
+        }
+
+        $bit = 1 << $part;
+        $mask = $this->mask;
+        $parts = [];
+
+        foreach ($this->parts as $kind => $from) {
+            $left = $from & ~$bit;
+
+            if ($left === 0) {
+                $mask &= ~$kind;
+
+                continue;
+            }
+
+            $parts[$kind] = $left;
+        }
+
+        return new self($mask, $parts === [] ? null : $parts, self::restricted($this->elements, $mask));
+    }
+
+    /**
      * Whether any kind names the parts it came from.
      */
     public function namesParts(): bool
@@ -282,11 +349,93 @@ final class TaintSet
     }
 
     /**
-     * The same kinds, named as coming from every part.
+     * The same kinds, named as coming from every part and from anywhere in a
+     * loop: what crosses from one function to another.
      */
     public function withoutParts(): self
     {
-        return $this->parts === null ? $this : new self($this->mask);
+        return $this->parts === null && $this->elements === null ? $this : new self($this->mask);
+    }
+
+    /**
+     * The same kinds, each from element `$element` of the collection a loop
+     * is over: a loop value, so a write under the loop's key can put each
+     * element's kinds back under that element's key. The parts are kept.
+     */
+    public function fromElement(int $element): self
+    {
+        if ($element < 0 || $element >= self::MAX_PARTS) {
+            throw new InvalidArgumentException(sprintf('Element %d is out of range.', $element));
+        }
+
+        $elements = [];
+
+        for ($bits = $this->mask; $bits !== 0; $bits &= $bits - 1) {
+            $elements[$bits & -$bits] = 1 << $element;
+        }
+
+        return new self($this->mask, $this->parts, $elements === [] ? null : $elements);
+    }
+
+    /**
+     * The kinds that came from element `$element` and from no other place,
+     * with their parts and no elements.
+     */
+    public function forElement(int $element): self
+    {
+        if ($this->elements === null) {
+            return self::empty();
+        }
+
+        $mask = 0;
+
+        foreach ($this->elements as $bit => $from) {
+            if (($from & (1 << $element)) !== 0) {
+                $mask |= $bit;
+            }
+        }
+
+        return (new self($this->mask, $this->parts))->keeping($mask);
+    }
+
+    /**
+     * The kinds that came from somewhere other than the elements `$elements`
+     * names: from anywhere, or from an element of some other loop. What a
+     * write under one loop's key cannot put under an element's key.
+     */
+    public function beyondElements(int $elements): self
+    {
+        if ($this->elements === null) {
+            return $this;
+        }
+
+        $mask = $this->mask;
+
+        foreach ($this->elements as $bit => $from) {
+            if (($from & ~$elements) === 0) {
+                $mask &= ~$bit;
+            }
+        }
+
+        return (new self($this->mask, $this->parts))->keeping($mask);
+    }
+
+    /**
+     * The same kinds from the same parts, naming no loop elements: what is
+     * stored where another run reads it. A loop's element numbers mean
+     * something only in the run that handed them out.
+     */
+    public function withoutElements(): self
+    {
+        return $this->elements === null ? $this : new self($this->mask, $this->parts);
+    }
+
+    /**
+     * Whether any kind names the elements it came from.
+     */
+    public function namesElements(): bool
+    {
+        return $this->elements !== null;
     }
 
     private static function bitCount(int $mask): int
@@ -302,11 +451,52 @@ final class TaintSet
 
     private function partsOfBit(int $bit): int
     {
-        if (($this->mask & $bit) === 0) {
+        return self::bitsOf($this->parts, $this->mask, $bit);
+    }
+
+    /**
+     * The bits `$map` names for the kind `$bit` of a set holding `$mask`:
+     * every bit for a kind it holds with no entry, and none for a kind it
+     * does not hold.
+     *
+     * @param array<int, int>|null $map
+     */
+    private static function bitsOf(?array $map, int $mask, int $bit): int
+    {
+        if (($mask & $bit) === 0) {
             return 0;
         }
 
-        return $this->parts[$bit] ?? self::EVERY_PART;
+        return $map[$bit] ?? self::EVERY_PART;
+    }
+
+    /**
+     * Per kind in `$mask`, the bits either side names for it. An entry that
+     * names every bit is left out, as a kind with no entry names every bit.
+     *
+     * @param array<int, int>|null $mine
+     * @param array<int, int>|null $theirs
+     *
+     * @return array<int, int>|null
+     */
+    private static function merged(int $mask, ?array $mine, int $mineMask, ?array $theirs, int $theirsMask): ?array
+    {
+        if ($mine === null && $theirs === null) {
+            return null;
+        }
+
+        $merged = [];
+
+        for ($bits = $mask; $bits !== 0; $bits &= $bits - 1) {
+            $bit = $bits & -$bits;
+            $from = self::bitsOf($mine, $mineMask, $bit) | self::bitsOf($theirs, $theirsMask, $bit);
+
+            if ($from !== self::EVERY_PART) {
+                $merged[$bit] = $from;
+            }
+        }
+
+        return $merged === [] ? null : $merged;
     }
 
     /**
@@ -314,19 +504,33 @@ final class TaintSet
      */
     private function keeping(int $mask): self
     {
-        if ($this->parts === null) {
+        if ($this->parts === null && $this->elements === null) {
             return new self($mask);
         }
 
-        $parts = [];
+        return new self($mask, self::restricted($this->parts, $mask), self::restricted($this->elements, $mask));
+    }
 
-        foreach ($this->parts as $bit => $from) {
+    /**
+     * @param array<int, int>|null $map
+     *
+     * @return array<int, int>|null
+     */
+    private static function restricted(?array $map, int $mask): ?array
+    {
+        if ($map === null) {
+            return null;
+        }
+
+        $kept = [];
+
+        foreach ($map as $bit => $from) {
             if (($mask & $bit) !== 0) {
-                $parts[$bit] = $from;
+                $kept[$bit] = $from;
             }
         }
 
-        return new self($mask, $parts === [] ? null : $parts);
+        return $kept === [] ? null : $kept;
     }
 
     public function count(): int

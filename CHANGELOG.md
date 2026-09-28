@@ -154,6 +154,17 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A loop that rebuilds an array key by key merged its elements.
+  `foreach ( $raw as $k => $v ) { $out[ $k ] = trim( $v ); }` made a request
+  value under `name` taint `$out['mode']`, and so did a function that rebuilds
+  its parameter the same way, such as elFinder's `convEnc()`. Each element now
+  stays under its own key. What came from elsewhere, a value from another loop
+  or from outside the loop, still goes under every key.
+- A type check folded an array's elements together. After
+  `is_array( $settings )`, `$settings['id']` read what `'label'` held. The
+  checked value keeps its elements apart, and one proved not to be an array
+  keeps only its own taint.
+
 - A function's summary treated each parameter as one value. So a helper that
   escapes each field's `value` and prints its `desc` as it is reported a
   caller's stored value as printed raw, and one that prints an array's keys

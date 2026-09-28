@@ -62,6 +62,7 @@ final class SummaryExtractor
         $paramToReturnKeyed = [];
         $paramToReturnKeys = [];
         $revertedResiduals = [];
+        $paramToReturnEach = [];
         $imprecise = $parameterCount > $analysed;
 
         $parts = $this->parameterParts[$context->key] ??= ParameterParts::of($context->func);
@@ -89,8 +90,15 @@ final class SummaryExtractor
                 $paramToReturnContainer[$index] = $result->returnContainer;
             }
 
-            if ($result->returnKeyed !== []) {
-                $keyed = $result->returnKeyed;
+            $keyed = $result->returnKeyed;
+
+            // What comes back under the key it had: see Shape::EACH.
+            if (isset($keyed[Shape::EACH])) {
+                $paramToReturnEach[$index] = $keyed[Shape::EACH];
+                unset($keyed[Shape::EACH]);
+            }
+
+            if ($keyed !== []) {
                 ksort($keyed);
                 $paramToReturnKeyed[$index] = $keyed;
             }
@@ -167,6 +175,7 @@ final class SummaryExtractor
                 static fn (int $index): bool => $index < $analysed,
                 ARRAY_FILTER_USE_KEY,
             ),
+            $paramToReturnEach,
         );
     }
 

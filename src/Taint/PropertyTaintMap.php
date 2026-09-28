@@ -216,6 +216,10 @@ final class PropertyTaintMap
             return false;
         }
 
+        // Another run reads this, and a loop's element numbers are the
+        // writing run's own: see TaintSet::withoutElements().
+        $taint = $taint->withoutElements();
+
         $this->track($class, $property);
 
         if ($taint->isEmpty()) {

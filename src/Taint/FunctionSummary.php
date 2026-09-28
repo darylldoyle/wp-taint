@@ -183,7 +183,22 @@ final class FunctionSummary
          * @var array<int, list<list<int|string>>>
          */
         public readonly array $parameterParts = [],
+        /**
+         * Kinds each parameter's elements bring back under their own keys in
+         * the returned array, for a function that rebuilds the parameter key
+         * by key: `foreach ( $in as $k => $v ) { $out[ $k ] = f( $v ); }`. A
+         * caller puts each element of its argument back under that element's
+         * key rather than under every key. See {@see Shape::EACH}.
+         *
+         * @var array<int, TaintSet>
+         */
+        public readonly array $paramToReturnEach = [],
     ) {
+    }
+
+    public function returnEachFor(int $parameterIndex): TaintSet
+    {
+        return $this->paramToReturnEach[$parameterIndex] ?? TaintSet::empty();
     }
 
     /**
@@ -335,6 +350,8 @@ final class FunctionSummary
             $sets($this->revertedResiduals),
             $sets($this->paramToReturnKeys),
             $this->introducesKeysOrNull,
+            [],
+            $sets($this->paramToReturnEach),
         );
     }
 
@@ -559,6 +576,7 @@ final class FunctionSummary
             self::mergeSets($this->paramToReturnKeys, $other->paramToReturnKeys),
             $this->introducesKeys()->union($other->introducesKeys()),
             $this->parameterParts,
+            self::mergeSets($this->paramToReturnEach, $other->paramToReturnEach),
         );
     }
 
@@ -811,7 +829,10 @@ final class FunctionSummary
             return false;
         }
 
-        if (! self::setsEqual($this->revertedResiduals, $other->revertedResiduals)) {
+        if (
+            ! self::setsEqual($this->revertedResiduals, $other->revertedResiduals)
+            || ! self::setsEqual($this->paramToReturnEach, $other->paramToReturnEach)
+        ) {
             return false;
         }
 

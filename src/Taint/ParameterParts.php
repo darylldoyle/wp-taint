@@ -236,7 +236,8 @@ final class ParameterParts
             $op = OperandHelper::definingOp($operand);
 
             return match (true) {
-                $op instanceof Op\Expr\Assign => $this->pathOf($op->expr, $hops + 1),
+                $op instanceof Op\Expr\Assign,
+                $op instanceof Op\Expr\Assertion => $this->pathOf($op->expr, $hops + 1),
                 $op instanceof Op\Expr\ArrayDimFetch => $this->stepDown(
                     $this->pathOf($op->var, $hops + 1),
                     $op->dim === null ? null : self::keyStep($op->dim),

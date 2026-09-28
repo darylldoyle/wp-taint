@@ -82,6 +82,60 @@ final class AssertionNarrowing
     }
 
     /**
+     * Does this assertion prove the value is not an array on this branch?
+     *
+     * `if ( is_array( $var ) ) { … } else { return $var; }` returns a value
+     * that holds no elements, whatever the elements of the array it might
+     * have been. A value that could be an array or a string keeps its own
+     * taint, which is where a string holds what it carries, and loses only
+     * what it held as an array.
+     */
+    public static function provesNotArray(Op\Expr\Assertion $op): bool
+    {
+        if ($op->result === $op->expr) {
+            return false;
+        }
+
+        return self::provesType($op->assertion, true, ['array']);
+    }
+
+    /**
+     * Whether the assertion says the value is none of `$types`: a type
+     * assertion under an odd number of negations. `$positive` is whether an
+     * even number has been seen so far.
+     *
+     * @param list<string> $types
+     */
+    private static function provesType(Assertion $assertion, bool $positive, array $types): bool
+    {
+        if ($assertion instanceof NegatedAssertion) {
+            $inner = $assertion->value;
+
+            if (! is_array($inner)) {
+                return false;
+            }
+
+            $values = array_values($inner);
+
+            if (count($values) !== 1) {
+                return false;
+            }
+
+            return self::provesType($values[0], ! $positive, $types);
+        }
+
+        if ($positive || ! $assertion instanceof TypeAssertion) {
+            return false;
+        }
+
+        $value = $assertion->value;
+
+        return $value instanceof Operand\Literal
+            && is_string($value->value)
+            && in_array(strtolower($value->value), $types, true);
+    }
+
+    /**
      * @param bool $positive whether an even number of negations has been seen
      */
     private static function provesHarmless(Assertion $assertion, bool $positive): bool

@@ -210,6 +210,11 @@ echo acme_attributes( array( 'title' => $_GET['t'] ) );   // not reported
 echo acme_attributes( array( $_GET['k'] => 'v' ) );       // reported
 ```
 
+A loop that rebuilds an array under its own key, `$out[ $k ] = f( $v )`, keeps
+each element under that key, and so does a function that rebuilds its parameter
+that way. It follows the key through copies. A key built from the loop's key,
+`$out[ $k . '_x' ]`, is a computed key, as before.
+
 A parameter keeps up to 61 parts. Past that, and for a part the function reads
 in a way this does not follow, the parameter's own taint stands for it, which is
 what every part inherits. So does a callback `array_map()` and its relatives
