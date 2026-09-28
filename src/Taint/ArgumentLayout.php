@@ -96,8 +96,12 @@ final class ArgumentLayout
 
         if (! $literal instanceof Op\Expr\Array_ || ! self::keysAreLiteral($literal)) {
             $laid->everyRemaining($array);
+            $spread = $laid->onto($target->notPositional());
 
-            return $laid->onto($target->notPositional());
+            // Each parameter gets one of the array's values, and a key only
+            // reaches a variadic parameter, which collects named arguments
+            // under their names.
+            return self::variadicAt($parameters) === null ? $spread->itemsOnly() : $spread;
         }
 
         foreach ($literal->values as $index => $value) {

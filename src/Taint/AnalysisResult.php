@@ -93,6 +93,11 @@ final class AnalysisResult
          * undone. See {@see FunctionSummary::$revertedResiduals}.
          */
         public readonly ?TaintSet $revertedResiduals = null,
+        /**
+         * What the returned array's keys carry. See
+         * {@see FunctionSummary::$paramToReturnKeys}.
+         */
+        public readonly ?TaintSet $returnKeys = null,
     ) {
     }
 }

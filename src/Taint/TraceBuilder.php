@@ -95,8 +95,7 @@ final class TraceBuilder
         // A value whose taint is all in its elements has no provenance of
         // its own. The write into the elements says where it came from.
         $provenance = $this->state->provenanceOf($current)
-            ?? $this->state->partProvenanceOf($current, null)
-            ?? $this->elementProvenance($current, $kind, $keys);
+            ?? $this->partProvenance($current, $kind, $keys);
 
         if ($provenance === null) {
             return $this->endedBadly($walked, $longest);
@@ -140,6 +139,40 @@ final class TraceBuilder
         }
 
         return null;
+    }
+
+    /**
+     * The write behind the part of an array that holds the kind: the elements
+     * under computed keys, one under a literal key, or the keys. Following a
+     * part that does not hold it named the wrong source: a key of unknown
+     * origin was traced to the request data in the element beside it. A kind
+     * no part holds by name, one derived from another, follows the elements
+     * under computed keys as before.
+     *
+     * @param list<array-key>|null $keys
+     */
+    private function partProvenance(Operand $operand, TaintKind $kind, ?array $keys): ?Provenance
+    {
+        $rest = $this->state->shapeOf($operand)->restPart();
+
+        if ($rest->flatten()->has($kind)) {
+            return $rest->provenance();
+        }
+
+        return $this->elementProvenance($operand, $kind, $keys)
+            ?? $this->keyProvenance($operand, $kind)
+            ?? $rest->provenance();
+    }
+
+    /**
+     * The write that made one of an array's keys carry the kind, for a value
+     * whose taint is all in its keys.
+     */
+    private function keyProvenance(Operand $operand, TaintKind $kind): ?Provenance
+    {
+        $shape = $this->state->shapeOf($operand);
+
+        return $shape->keysTaint()->has($kind) ? $shape->keysProvenance() : null;
     }
 
     /**

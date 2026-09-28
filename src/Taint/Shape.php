@@ -39,10 +39,10 @@ final class Shape
     /**
      * How many levels of elements a value keeps below itself.
      *
-     * One level is what the per-key slots it replaces kept: an element holds
-     * a flat set, so `$a['x']['y']` reads everything under `'x'`.
+     * Four covers 99% of the array literals in the plugin corpus. Without a
+     * limit, `$node = array( 'child' => $node )` in a loop would grow forever.
      */
-    public const DEPTH = 1;
+    public const DEPTH = 4;
 
     private static ?self $empty = null;
 
@@ -57,6 +57,7 @@ final class Shape
         private readonly array $elements,
         private readonly ?self $rest,
         private readonly ?Provenance $provenance = null,
+        private readonly ?Provenance $keysProvenance = null,
     ) {
     }
 
@@ -72,6 +73,37 @@ final class Shape
     public static function of(TaintSet $own, ?Provenance $provenance = null): self
     {
         return $own->isEmpty() ? self::empty() : new self($own, TaintSet::empty(), [], null, $provenance);
+    }
+
+    /**
+     * An array whose keys carry `$keys`: what a write under a computed key
+     * used as the key.
+     */
+    public static function keys(TaintSet $keys, ?Provenance $provenance = null): self
+    {
+        return $keys->isEmpty()
+            ? self::empty()
+            : new self(TaintSet::empty(), $keys, [], null, null, $provenance);
+    }
+
+    /**
+     * A value whose own taint is `$own` and whose parts are those of
+     * `$structure`, which keeps the writes behind them.
+     */
+    public static function node(TaintSet $own, self $structure, ?Provenance $provenance = null): self
+    {
+        if ($structure->elements === [] && $structure->rest === null && $structure->keys->isEmpty()) {
+            return self::of($own, $provenance);
+        }
+
+        return new self(
+            $own,
+            $structure->keys,
+            $structure->elements,
+            $structure->rest,
+            $provenance,
+            $structure->keysProvenance,
+        );
     }
 
     /**
@@ -101,13 +133,22 @@ final class Shape
         return $this->own;
     }
 
-    public function keys(): TaintSet
+    public function keysTaint(): TaintSet
     {
         return $this->keys;
     }
 
     /**
-     * The write behind this part's own taint.
+     * The write that made a key carry its taint.
+     */
+    public function keysProvenance(): ?Provenance
+    {
+        return $this->keysProvenance;
+    }
+
+    /**
+     * The write behind this part's taint. A part with no taint of its own
+     * names the write that put its parts there.
      */
     public function provenance(): ?Provenance
     {
@@ -116,7 +157,7 @@ final class Shape
 
     /**
      * This shape with `$provenance` as the write behind every part that
-     * carries taint and names no write of its own.
+     * carries taint, itself or below it, and names no write of its own.
      */
     public function withProvenance(Provenance $provenance): self
     {
@@ -135,7 +176,8 @@ final class Shape
             $this->keys,
             $elements,
             $this->rest?->withProvenance($provenance),
-            $this->provenance ?? ($this->own->isEmpty() ? null : $provenance),
+            $this->provenance ?? ($this->flatten()->isEmpty() ? null : $provenance),
+            $this->keysProvenance ?? ($this->keys->isEmpty() ? null : $provenance),
         );
     }
 
@@ -155,6 +197,34 @@ final class Shape
     public function restPart(): self
     {
         return $this->rest ?? self::empty();
+    }
+
+    /**
+     * This shape's parts without its own taint: what a value read out of it
+     * holds below itself.
+     */
+    public function structure(): self
+    {
+        if ($this->elements === [] && $this->rest === null && $this->keys->isEmpty()) {
+            return self::empty();
+        }
+
+        return new self(TaintSet::empty(), $this->keys, $this->elements, $this->rest, null, $this->keysProvenance);
+    }
+
+    /**
+     * What a read under a computed key can see: every element and the rest,
+     * joined.
+     */
+    public function anyElement(): self
+    {
+        $any = $this->restPart();
+
+        foreach ($this->elements as $element) {
+            $any = $any->join($element);
+        }
+
+        return $any;
     }
 
     public function isEmpty(): bool
@@ -214,6 +284,38 @@ final class Shape
         return array_map(static fn (self $element): TaintSet => $element->flatten(), $this->elements);
     }
 
+    /**
+     * This shape with `$kinds` taken out of every part. A part left with no
+     * taint goes.
+     */
+    public function without(TaintSet $kinds): self
+    {
+        if (! $this->flatten()->hasAny($kinds)) {
+            return $this;
+        }
+
+        $elements = [];
+
+        foreach ($this->elements as $key => $element) {
+            $kept = $element->without($kinds);
+
+            if (! $kept->isEmpty()) {
+                $elements[$key] = $kept;
+            }
+        }
+
+        $rest = $this->rest?->without($kinds);
+
+        return new self(
+            $this->own->without($kinds),
+            $this->keys->without($kinds),
+            $elements,
+            $rest === null || $rest->isEmpty() ? null : $rest,
+            $this->provenance,
+            $this->keysProvenance,
+        );
+    }
+
     public function join(self $other): self
     {
         if ($other === $this || $other->isEmpty()) {
@@ -244,11 +346,15 @@ final class Shape
         };
 
         // A part keeps the write behind it until another write adds to its
-        // taint. The trace then follows the newer write, as the per-key slots
-        // did.
-        $provenance = $other->own->isSubsetOf($this->own)
+        // taint, anywhere below it. The trace then follows the newer write,
+        // as the per-key slots did.
+        $provenance = $other->flatten()->isSubsetOf($this->flatten())
             ? $this->provenance ?? $other->provenance
             : $other->provenance ?? $this->provenance;
+
+        $keysProvenance = $other->keys->isSubsetOf($this->keys)
+            ? $this->keysProvenance ?? $other->keysProvenance
+            : $other->keysProvenance ?? $this->keysProvenance;
 
         return new self(
             $this->own->union($other->own),
@@ -256,6 +362,7 @@ final class Shape
             $elements,
             $rest,
             $provenance,
+            $keysProvenance,
         );
     }
 
@@ -322,7 +429,14 @@ final class Shape
             $elements[$key] = $element->cut($levels - 1);
         }
 
-        return new self($this->own, $this->keys, $elements, $this->rest?->cut($levels - 1), $this->provenance);
+        return new self(
+            $this->own,
+            $this->keys,
+            $elements,
+            $this->rest?->cut($levels - 1),
+            $this->provenance,
+            $this->keysProvenance,
+        );
     }
 
     /**

@@ -169,6 +169,25 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   voided. The escaping ledger now stays out of the store on both routes, as it
   did for a direct write.
 
+- A computed key's taint went nowhere. `$seen[ $_POST['name'] ] = true` made a
+  key of request data, and a `foreach` over `$seen` or `array_keys( $seen )`
+  read clean keys. The key's taint now lands on the array's keys. It travels
+  with the array through a copy, an element or property write, a pass-through
+  that keeps keys and a function's return.
+- A reference shared only an array's elements under computed keys. After
+  `$d = &$c`, a write to `$d['j']` never reached `$c['j']`. A reference now
+  shares the whole array.
+- A callback that `array_map()`, `usort()`, `uasort()` or
+  `call_user_func_array()` runs was handed an array's keys along with its
+  values. PHP hands it the values only, so a key's taint no longer reaches it.
+  The catalogue's new `values_only` key marks a dispatcher that does this.
+- An array nested in an array lost its own elements. A literal flattened each
+  value it held, a read folded the element's parts into one set, and a join
+  flattened everything. So `$a['x']['z']` read what `'y'` beside it was given,
+  and an array built in an `if` lost its keys after it. Arrays now keep four
+  levels of elements through a literal, a read, a join, an assignment and a
+  copy.
+
 - A promoted constructor parameter, `__construct( private string $name )`,
   never wrote its property, so a value handed to the constructor did not reach
   the methods that read `$this->name`. The parameter is now lowered to a

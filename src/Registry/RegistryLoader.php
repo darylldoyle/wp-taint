@@ -51,6 +51,7 @@ final class RegistryLoader
     private const DISPATCHER_KEYS = [
         'function', 'class', 'method', 'static_method',
         'callable', 'mode', 'argument_start', 'returns', 'hook', 'note', 'hook_modifiers', 'parameters',
+        'values_only',
     ];
 
     private const BYREF_KEYS = [
@@ -509,6 +510,7 @@ final class RegistryLoader
                 $this->optionalString($file, $context . ' note', $entry['note'] ?? null),
                 $this->modifierSeparator($file, $context . ' hook_modifiers', $entry['hook_modifiers'] ?? null),
                 $this->parameterSources($file, $context . ' parameters', $entry['parameters'] ?? null),
+                $this->boolValue($file, $context . ' values_only', $entry['values_only'] ?? false),
             ));
         }
     }

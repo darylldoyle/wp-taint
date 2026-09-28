@@ -75,6 +75,14 @@ final class CallTarget
          * @var array<int, list<Operand>>
          */
         public readonly array $moreArguments = [],
+        /**
+         * Each argument stands for the items of an array, and never for its
+         * keys. `array_map( $cb, $items )` hands `$cb` one value at a time, and
+         * `call_user_func_array( $cb, $args )` hands it the values of `$args`,
+         * so a key that carries taint reaches neither. See
+         * {@see \Enshrined\WpTaint\Registry\Dispatcher::$valuesOnly}.
+         */
+        public readonly bool $itemsOnly = false,
     ) {
     }
 
@@ -98,6 +106,7 @@ final class CallTarget
             $this->viaHook,
             $this->positional,
             $this->moreArguments,
+            $this->itemsOnly,
         );
     }
 
@@ -118,6 +127,7 @@ final class CallTarget
             true,
             $this->positional,
             $this->moreArguments,
+            $this->itemsOnly,
         );
     }
 
@@ -213,6 +223,7 @@ final class CallTarget
             $this->viaHook,
             $this->positional,
             $this->moreArguments,
+            $this->itemsOnly,
         );
     }
 
@@ -257,6 +268,29 @@ final class CallTarget
             $this->viaHook,
             false,
             $this->moreArguments,
+            $this->itemsOnly,
+        );
+    }
+
+    /**
+     * The same callee, handed the items of each argument rather than the
+     * array. See {@see $itemsOnly}.
+     */
+    public function itemsOnly(): self
+    {
+        return new self(
+            $this->arguments,
+            $this->matcher,
+            $this->userFunctionKey,
+            $this->displayName,
+            $this->dynamic,
+            $this->resultMode,
+            $this->candidates,
+            $this->passesByValue,
+            $this->viaHook,
+            $this->positional,
+            $this->moreArguments,
+            true,
         );
     }
 }
