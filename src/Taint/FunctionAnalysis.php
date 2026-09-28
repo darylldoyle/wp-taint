@@ -54,6 +54,13 @@ final class FunctionAnalysis
     private const MAX_ASSIGNMENT_HOPS = 16;
 
     /**
+     * The keys each computed key can hold, by operand: see namedKeys().
+     *
+     * @var array<int, non-empty-list<int|string>|null>
+     */
+    private array $namedKeys = [];
+
+    /**
      * The stored value each property read last put on its result, by op, so a
      * pass that finds it unchanged does not copy it again.
      *
@@ -1750,6 +1757,7 @@ final class FunctionAnalysis
                 return $this->writeUnderLoopKeys($op, $target, $taint, $numbers) || $keyed;
             }
 
+
             // A computed key can land anywhere, so it goes to the whole-array
             // slot — which is what every element write did before.
             //
@@ -1842,7 +1850,14 @@ final class FunctionAnalysis
         }
 
         if ($key !== null) {
-            return $this->transferKeyedRead($op, $key);
+            return $this->transferKeyedRead($op, [$key]);
+        }
+
+        // A key the resolver names every value of reads only those elements.
+        $named = $op->dim === null ? null : $this->namedKeys($op->dim);
+
+        if ($named !== null) {
+            return $this->transferKeyedRead($op, $named);
         }
 
         return $this->transferContainerRead(
@@ -2060,20 +2075,29 @@ final class FunctionAnalysis
     }
 
     /**
-     * `$context['title']` — a read that names one constant key.
+     * `$context['title']` — a read that names one constant key, or a few the
+     * key could be.
      *
-     * Sees what was written to that key, plus whatever went in under a computed
-     * key, because a computed write could have been this one. What it does not
-     * see is another key's taint, which is the whole point.
+     * Sees what was written to those keys, plus whatever went in under a
+     * computed key, because a computed write could have been this one. What
+     * it does not see is another key's taint, which is the whole point.
+     *
+     * @param non-empty-list<int|string> $keys
      */
-    private function transferKeyedRead(Op\Expr\ArrayDimFetch $op, string|int $key): bool
+    private function transferKeyedRead(Op\Expr\ArrayDimFetch $op, array $keys): bool
     {
         // The element under the key, and the rest, since a write under a
         // computed key could have landed on this one. The value read out keeps
         // their parts as its own shape, so `$a['x']['y']` reads only what
         // `'y'` was given.
         $shape = $this->state->shapeOf($op->var);
-        $element = $shape->elementAt($key);
+        $element = Shape::empty();
+
+        foreach ($keys as $each) {
+            $element = $element->join($shape->elementAt($each));
+        }
+
+        $key = $keys[0];
         $rest = $shape->restPart();
         $fallback = $rest->own()->union($this->state->taintOf($op->var));
         $taint = $element->own()->union($fallback);
@@ -2081,7 +2105,9 @@ final class FunctionAnalysis
         $read = new Provenance(
             TraceVerb::Propagate,
             $op,
-            sprintf("Read out of %s['%s'].", OperandHelper::describe($op->var), $key),
+            count($keys) === 1
+                ? sprintf("Read out of %s['%s'].", OperandHelper::describe($op->var), $key)
+                : sprintf('Read out of %s under %s.', OperandHelper::describe($op->var), self::describeKeys($keys)),
             [$op->var],
         );
         $changed = $this->state->addShape($op->result, $element->join($rest)->structure(), $read);
@@ -2094,7 +2120,9 @@ final class FunctionAnalysis
         // element: its write, or the call whose return put it there. The
         // array's own provenance says nothing about it, and following that
         // left a returned element's trace at "read out of" with no source.
-        $written = $fallback->isEmpty() ? $this->state->partProvenanceOf($op->var, $key) : null;
+        $written = $fallback->isEmpty() && count($keys) === 1
+            ? $this->state->partProvenanceOf($op->var, $key)
+            : null;
 
         return $this->state->set($op->result, $taint, $written ?? $read) || $changed;
     }
@@ -2373,6 +2401,50 @@ final class FunctionAnalysis
         }
 
         return $this->state->addShape($target->var, Shape::rest(Shape::of($rest)), $provenance) || $changed;
+    }
+
+    /**
+     * The keys a computed key can hold, when the resolver names every one of
+     * them: a constant, a join of literals, a `foreach` over a literal array.
+     * Null when it cannot. Found once per operand, since it depends on the
+     * code and not on the taint.
+     *
+     * @return non-empty-list<int|string>|null
+     */
+    private function namedKeys(Operand $dim): ?array
+    {
+        $id = spl_object_id($dim);
+
+        if (array_key_exists($id, $this->namedKeys)) {
+            return $this->namedKeys[$id];
+        }
+
+        $literal = OperandHelper::literalKey($dim);
+
+        if ($literal !== null) {
+            return $this->namedKeys[$id] = [$literal];
+        }
+
+        $keys = [];
+
+        // As PHP stores them: `'1'` is `1`.
+        foreach ($this->resolver->values()->keyStrings($dim) as $string) {
+            $keys[array_key_first([$string => true])] = true;
+        }
+
+        return $this->namedKeys[$id] = $keys === [] ? null : array_keys($keys);
+    }
+
+    /**
+     * `'path'`, or `one of 'path', 'tmpPath'`, for a trace.
+     *
+     * @param list<int|string> $keys
+     */
+    private static function describeKeys(array $keys): string
+    {
+        $quoted = array_map(static fn (int|string $key): string => "'" . $key . "'", $keys);
+
+        return count($quoted) === 1 ? $quoted[0] : 'one of ' . implode(', ', $quoted);
     }
 
     /**

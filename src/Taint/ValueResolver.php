@@ -76,6 +76,12 @@ final class ValueResolver
     private const MAX_VALUES = 12;
 
     /**
+     * Whether a `foreach` over a literal array names what it visits. Only an
+     * element key asks: see {@see keyStrings()}.
+     */
+    private bool $loops = false;
+
+    /**
      * Every constant string this operand can hold.
      *
      * @return list<string> empty when any of its values cannot be pinned down
@@ -97,6 +103,28 @@ final class ValueResolver
     public function knownStrings(Operand $operand, int $depth = 0): array
     {
         return $this->resolve($operand, $depth, true);
+    }
+
+    /**
+     * Every constant string an element key can hold, through a `foreach` over
+     * a literal array as well: `foreach ( array( 'path', 'tmpPath' ) as $k )`
+     * names `$k`'s two values. Only a key asks, since there the answer only
+     * narrows what an element read sees. A hook name or an include path that
+     * resolves through a loop connects more code, which adds findings, and
+     * that is a change of its own.
+     *
+     * @return list<string> empty when any of its values cannot be pinned down
+     */
+    public function keyStrings(Operand $operand): array
+    {
+        $previous = $this->loops;
+        $this->loops = true;
+
+        try {
+            return $this->resolve($operand, 0, false);
+        } finally {
+            $this->loops = $previous;
+        }
     }
 
     /**
@@ -131,6 +159,12 @@ final class ValueResolver
             $definition instanceof Op\Expr\MethodCall,
             $definition instanceof Op\Expr\StaticCall => $this->fromConstantReturn($definition, $depth, $partial),
             $definition instanceof Op\Phi => $this->fromPhi($definition, $depth, $partial),
+            $definition instanceof Op\Iterator\Value => $this->loops
+                ? $this->fromIteratedArray($definition, $depth)
+                : [],
+            $definition instanceof Op\Iterator\Key => $this->loops
+                ? $this->fromIteratedKeys($definition, $depth)
+                : [],
             $definition instanceof Op\Expr\ConcatList => $this->fromParts($definition->list, $depth, $partial),
             $definition instanceof Op\Expr\BinaryOp\Concat => $this->fromParts(
                 [$definition->left, $definition->right],
@@ -650,6 +684,143 @@ final class ValueResolver
         }
 
         return $values;
+    }
+
+    /**
+     * The values a `foreach` over a literal array visits.
+     *
+     *     foreach ( array( 'path', 'tmbPath', 'tmpPath' ) as $key ) {
+     *
+     * `$key` holds one of those three and nothing else, as long as nothing
+     * writes into the array: see {@see literalArray()}.
+     *
+     * @return list<string>
+     */
+    private function fromIteratedArray(Op\Iterator\Value $op, int $depth): array
+    {
+        $array = $op->byRef ? null : $this->literalArray($op->var);
+
+        return $array === null ? [] : $this->allOf($array->values, $depth);
+    }
+
+    /**
+     * The keys a `foreach` over a literal array visits: see
+     * {@see fromIteratedArray()}. A list's keys are its positions.
+     *
+     * @return list<string>
+     */
+    private function fromIteratedKeys(Op\Iterator\Key $op, int $depth): array
+    {
+        $array = $this->literalArray($op->var);
+
+        if ($array === null) {
+            return [];
+        }
+
+        // A list's keys are its positions. A literal that mixes the two
+        // numbers its unkeyed items after the highest integer key, which
+        // this does not follow.
+        $named = array_filter(
+            $array->keys,
+            static fn (mixed $key): bool => $key !== null && ! $key instanceof Operand\NullOperand,
+        );
+
+        if ($named === []) {
+            return array_map(static fn (int $position): string => (string) $position, array_keys($array->keys));
+        }
+
+        return count($named) === count($array->keys) ? $this->allOf($array->keys, $depth) : [];
+    }
+
+    /**
+     * Every string each of `$operands` can hold, or nothing when one of them
+     * will not fold.
+     *
+     * @param array<array-key, mixed> $operands
+     *
+     * @return list<string>
+     */
+    private function allOf(array $operands, int $depth): array
+    {
+        $values = [];
+
+        foreach ($operands as $operand) {
+            if (! $operand instanceof Operand) {
+                return [];
+            }
+
+            $literal = $operand instanceof Operand\Literal && is_int($operand->value)
+                ? [(string) $operand->value]
+                : $this->resolve($operand, $depth + 1, false);
+
+            if ($literal === []) {
+                return [];
+            }
+
+            foreach ($literal as $value) {
+                if (! in_array($value, $values, true)) {
+                    $values[] = $value;
+                }
+            }
+
+            if (count($values) > self::MAX_VALUES) {
+                return [];
+            }
+        }
+
+        return $values;
+    }
+
+    /**
+     * The array literal `$operand` holds, through copies, when nothing can
+     * have changed its elements since: no element write, no loop by
+     * reference, and no call it is handed to, since a call can take it by
+     * reference.
+     */
+    private function literalArray(Operand $operand): ?Op\Expr\Array_
+    {
+        for ($hops = 0; $hops <= self::MAX_DEPTH; $hops++) {
+            if (self::mayBeChanged($operand)) {
+                return null;
+            }
+
+            $definition = OperandHelper::definingOp($operand);
+
+            // An element bound by reference changes when its variable does.
+            if ($definition instanceof Op\Expr\Array_) {
+                return in_array(true, $definition->byRef, true) ? null : $definition;
+            }
+
+            if (! $definition instanceof Op\Expr\Assign) {
+                return null;
+            }
+
+            $operand = $definition->expr;
+        }
+
+        return null;
+    }
+
+    private static function mayBeChanged(Operand $operand): bool
+    {
+        foreach ($operand->usages as $usage) {
+            $reads = match (true) {
+                $usage instanceof Op\Iterator\Reset,
+                $usage instanceof Op\Iterator\Valid,
+                $usage instanceof Op\Iterator\Key => true,
+                $usage instanceof Op\Iterator\Value => ! $usage->byRef,
+                $usage instanceof Op\Expr\Assign => $usage->expr === $operand,
+                $usage instanceof Op\Expr\ArrayDimFetch => $usage->var === $operand
+                    && ! OperandHelper::isWrittenElsewhere($usage->result, $usage),
+                default => false,
+            };
+
+            if (! $reads) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
