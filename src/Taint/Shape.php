@@ -431,6 +431,45 @@ final class Shape
     }
 
     /**
+     * This shape as {@see mapSets()} maps it, except that each element under
+     * an OTHERS key goes to `$others`, which says what goes there instead:
+     * the elements it stood for, each under its own key. See {@see others()}.
+     *
+     * @param \Closure(TaintSet): TaintSet                   $map
+     * @param \Closure(string, self): array<array-key, self> $others
+     */
+    public function mapSetsAndOthers(\Closure $map, \Closure $others): self
+    {
+        if ($this->isEmpty()) {
+            return $this;
+        }
+
+        $elements = [];
+
+        foreach ($this->elements as $key => $element) {
+            $placed = is_string($key) && str_starts_with($key, self::OTHERS)
+                ? $others($key, $element)
+                : [$key => $element->mapSetsAndOthers($map, $others)];
+
+            foreach ($placed as $at => $value) {
+                if (! $value->isEmpty()) {
+                    $elements[$at] = isset($elements[$at]) ? $elements[$at]->join($value) : $value;
+                }
+            }
+        }
+
+        $rest = $this->rest?->mapSetsAndOthers($map, $others);
+        $own = $map($this->own);
+        $keys = $map($this->keys);
+
+        if ($own->isEmpty() && $keys->isEmpty() && $elements === [] && ($rest === null || $rest->isEmpty())) {
+            return self::empty();
+        }
+
+        return new self($own, $keys, $elements, $rest === null || $rest->isEmpty() ? null : $rest);
+    }
+
+    /**
      * This shape without the element under `$key`.
      */
     public function withoutElement(int|string $key): self

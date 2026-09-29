@@ -100,8 +100,8 @@ final class ParameterParts
 
         $byIndex = [];
 
-        foreach ($parts as $index => $paths) {
-            $list = array_values($paths);
+        foreach ($indexes as $index) {
+            $list = array_values($parts[$index] ?? []);
             usort(
                 $list,
                 static fn (array $a, array $b): int => [count($a), self::describe($a)]
@@ -116,9 +116,13 @@ final class ParameterParts
     }
 
     /**
-     * `$parts` with an {@see OTHERS} part under each node that a part names a
-     * literal key of, shallowest first, while there is room. Every part the
-     * body reads keeps its number.
+     * `$parts` with an {@see OTHERS} part under the parameter itself and under
+     * each node that a part names a literal key of, shallowest first, while
+     * there is room. Every part the body reads keeps its number.
+     *
+     * The one under the parameter is there even when the body names no key,
+     * so `function acme_id( $a ) { return $a; }` hands each element back
+     * under its own key.
      *
      * @param list<list<int|string>> $parts
      *
@@ -126,7 +130,7 @@ final class ParameterParts
      */
     private static function withOthers(array $parts): array
     {
-        $nodes = [];
+        $nodes = [self::describe([]) => []];
 
         foreach ($parts as $path) {
             $last = $path === [] ? null : $path[count($path) - 1];

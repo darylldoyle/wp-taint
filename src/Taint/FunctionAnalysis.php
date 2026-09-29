@@ -4322,6 +4322,7 @@ final class FunctionAnalysis
         int $index,
         Operand $argument,
         TaintSet $argumentTaint,
+        ?Shape $others = null,
     ): bool {
         $changed = false;
 
@@ -4331,9 +4332,7 @@ final class FunctionAnalysis
             // Only what survives the body, part by part. The kinds were
             // recorded by the probe run, whose seed carried every kind: what
             // reached the property is what the body let through.
-            $value = $reached->mapSets(
-                static fn (TaintSet $kinds): TaintSet => self::throughBody($argumentTaint, $kinds, $reverts),
-            );
+            $value = self::mappedBack($reached, $argumentTaint, $reverts, $others);
 
             // The escaping ledger stays out of an option, as it does for a
             // write in this body: see recordOptionWrite(). throughBody()
@@ -4436,6 +4435,7 @@ final class FunctionAnalysis
         int $index,
         Operand $argument,
         TaintSet $argumentTaint,
+        ?Shape $others = null,
     ): bool {
         $references = $summary->scopesFor($index);
 
@@ -4452,9 +4452,7 @@ final class FunctionAnalysis
             // form id that the callee passes through absint() on its way to an
             // included file's `$settings` hands that file an object id, not
             // the whole request it came from.
-            $value = $reached->mapSets(
-                static fn (TaintSet $kinds): TaintSet => self::throughBody($argumentTaint, $kinds, $reverts),
-            );
+            $value = self::mappedBack($reached, $argumentTaint, $reverts, $others);
 
             if ($value->isEmpty()) {
                 continue;
@@ -5673,9 +5671,13 @@ final class FunctionAnalysis
 
             // A callee summarised part by part gets each part of the argument
             // through the record of that part: see argumentPieces().
-            foreach ($this->argumentPieces($call, $summary, $index, $argument) as [$record, $piece]) {
+            foreach ($this->argumentPieces($call, $summary, $index, $argument) as [$record, $piece, $part]) {
                 // A guarded argument hands the callee what the guard admits.
                 $argumentTaint = self::guarded($piece, $proof);
+
+                // The piece of an `[others]` part is the elements it stood
+                // for, which come back each under its own key.
+                $others = $proof === null ? $this->othersNode($summary, $index, $part, $argument) : null;
 
                 if ($argumentTaint->isEmpty()) {
                     continue;
@@ -5696,9 +5698,7 @@ final class FunctionAnalysis
 
                 // What the argument put into the returned array's elements and
                 // keys, as for a property: the kinds that got through the body.
-                $into = $record->returnShapeFor($index)->mapSets(
-                    static fn (TaintSet $kinds): TaintSet => self::throughBody($argumentTaint, $kinds, $reverts),
-                );
+                $into = self::mappedBack($record->returnShapeFor($index), $argumentTaint, $reverts, $others);
                 $structure = $structure->join($into);
 
                 if (! $returned->isEmpty() || ! $into->isEmpty()) {
@@ -5716,11 +5716,11 @@ final class FunctionAnalysis
                 }
 
                 $this->reportSummarySinks($op, $call, $record, $index, $argument, $argumentTaint);
-                $changed = $this->applySummaryProperties($op, $record, $index, $argument, $argumentTaint)
+                $changed = $this->applySummaryProperties($op, $record, $index, $argument, $argumentTaint, $others)
                     || $changed;
                 $changed = $this->applySummaryCaptures($op, $record, $index, $argument, $argumentTaint)
                     || $changed;
-                $changed = $this->applySummaryScopes($op, $record, $index, $argument, $argumentTaint)
+                $changed = $this->applySummaryScopes($op, $record, $index, $argument, $argumentTaint, $others)
                     || $changed;
             }
 
@@ -5832,6 +5832,73 @@ final class FunctionAnalysis
     }
 
     /**
+     * What a summary's shape brings back from one piece of an argument: each
+     * node's kinds through the body. For the piece of an `[others]` part,
+     * `$others` is the node of the argument the part sits under, and each of
+     * its elements the part stood for comes back under its own key rather
+     * than as one set with the others. See {@see Shape::others()}.
+     */
+    private static function mappedBack(
+        Shape $reached,
+        TaintSet $argumentTaint,
+        ?TaintSet $reverts,
+        ?Shape $others,
+    ): Shape {
+        $map = static fn (TaintSet $kinds): TaintSet => self::throughBody($argumentTaint, $kinds, $reverts);
+
+        if ($others === null) {
+            return $reached->mapSets($map);
+        }
+
+        $back = static function (string $key, Shape $element) use ($others, $reverts): array {
+            $kinds = $element->flatten();
+            $leftOut = Shape::leftOutBy($key) ?? [];
+            $placed = [];
+
+            foreach ($others->elements() as $at => $value) {
+                if (isset($leftOut[$at])) {
+                    continue;
+                }
+
+                // An element of the argument that stands for others itself
+                // stands, back here, for the keys both leave out.
+                if (Shape::isStandIn($at)) {
+                    $at = Shape::others(array_keys($leftOut + (Shape::leftOutBy($at) ?? [])));
+                }
+
+                $placed[$at] = $value->mapSets(
+                    static fn (TaintSet $set): TaintSet => self::throughBody($set, $kinds, $reverts),
+                );
+            }
+
+            return $placed;
+        };
+
+        return $reached->mapSetsAndOthers($map, $back)->cut(Shape::DEPTH);
+    }
+
+    /**
+     * The node of the argument an `[others]` part sits under, or null for any
+     * other part.
+     */
+    private function othersNode(FunctionSummary $summary, int $index, ?int $part, Operand $argument): ?Shape
+    {
+        $path = $part === null || $part === 0 ? null : ($summary->partsFor($index)[$part - 1] ?? null);
+
+        if ($path === null || $path === [] || $path[count($path) - 1] !== ParameterParts::OTHERS) {
+            return null;
+        }
+
+        $node = $this->state->shapeOf($argument);
+
+        foreach (array_slice($path, 0, -1) as $step) {
+            $node = $step === ParameterParts::ANY ? $node->anyElement() : $node->elementAt($step);
+        }
+
+        return $node;
+    }
+
+    /**
      * What a call hands one parameter, split by the parts the callee reads it
      * through, each piece with the summary as its part sees it.
      *
@@ -5855,7 +5922,8 @@ final class FunctionAnalysis
      * sent an element of the argument to the part a key of the parameter's
      * value would go to.
      *
-     * @return list<array{FunctionSummary, TaintSet}>
+     * @return list<array{FunctionSummary, TaintSet, int|null}> each piece's record, taint and part, or null
+     *                                                             for a whole argument
      */
     private function argumentPieces(CallTarget $call, FunctionSummary $summary, int $index, Operand $argument): array
     {
@@ -5863,7 +5931,7 @@ final class FunctionAnalysis
         $parts = $summary->partsFor($index);
 
         if ($parts === [] || $whole->isEmpty() || ! $call->positional) {
-            return [[$summary->withoutParts(), $whole]];
+            return [[$summary->withoutParts(), $whole, null]];
         }
 
         // What the parameter receives besides its argument, array_reduce()'s
@@ -5881,7 +5949,7 @@ final class FunctionAnalysis
 
         foreach ($pieces as $part => $taint) {
             if (! $taint->isEmpty()) {
-                $split[] = [$summary->forPart($index, $part), $taint];
+                $split[] = [$summary->forPart($index, $part), $taint, $part];
             }
         }
 

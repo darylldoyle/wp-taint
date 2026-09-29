@@ -123,3 +123,44 @@ it('still reaches every read an unnamed key could be', function (): void {
             'wp.xss.unescaped-output@21',
         ]);
 });
+
+it('hands each element the callee never names back under its own key', function (): void {
+    expect(unnamedElementFindings(<<<'PHP'
+        function acme_pick( $args ) {
+            echo $args['title'];
+            return $args;
+        }
+        function acme_id( $a ) {
+            return $a;
+        }
+        function acme_show() {
+            $out = acme_pick( array( 'title' => 'Hello', 't' => $_GET['t'], 'm' => 'x' ) );
+            echo $out['m'];
+            echo $out['t'];
+            $same = acme_id( array( 't' => $_GET['t'], 'm' => 'x' ) );
+            echo $same['m'];
+            echo $same['t'];
+        }
+        PHP))->toBe(['wp.xss.unescaped-output@12', 'wp.xss.unescaped-output@15']);
+});
+
+it('keeps each element apart in a property a constructor stores whole', function (): void {
+    expect(unnamedElementFindings(<<<'PHP'
+        class Acme_Box {
+            private $opts;
+            public function __construct( $opts ) {
+                if ( isset( $opts['mode'] ) ) {
+                    $this->opts = $opts;
+                }
+            }
+            public function show() {
+                echo $this->opts['name'];
+                echo $this->opts['size'];
+            }
+        }
+        function acme_box() {
+            $box = new Acme_Box( array( 'mode' => 'grid', 'name' => $_GET['n'], 'size' => 'big' ) );
+            $box->show();
+        }
+        PHP))->toBe(['wp.xss.unescaped-output@10']);
+});
