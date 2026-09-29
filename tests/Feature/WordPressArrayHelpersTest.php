@@ -23,10 +23,7 @@ it('keeps each key apart through wp_parse_args()', function (): void {
         PHP))->toBe(['wp.xss.unescaped-output@5']);
 });
 
-it('hands a caller\'s value through wp_parse_args() in the callee', function (): void {
-    // The callee hands its parameter on to wp_parse_args(), so it receives
-    // every element, and 'label' reports too. See "Array element taint is
-    // per-key" in KNOWN_LIMITATIONS.md.
+it('hands a caller\'s value through wp_parse_args() in the callee, under its own key', function (): void {
     expect(wordpressArrayHelperFindings(<<<'PHP'
         function acme_box( $args ) {
             $args = wp_parse_args( $args, array( 'title' => '', 'label' => 'Box' ) );
@@ -36,7 +33,54 @@ it('hands a caller\'s value through wp_parse_args() in the callee', function ():
         function acme_page() {
             acme_box( array( 'title' => $_GET['t'] ) );
         }
-        PHP))->toBe(['wp.xss.unescaped-output@4', 'wp.xss.unescaped-output@5']);
+        PHP))->toBe(['wp.xss.unescaped-output@5']);
+});
+
+it('does not print a key the callee only compares', function (): void {
+    // Custom Post Type UI's select input: the selected value picks an option,
+    // and only the options are printed.
+    expect(wordpressArrayHelperFindings(<<<'PHP'
+        function acme_select( $args ) {
+            $args = wp_parse_args( $args, array( 'options' => array(), 'selected' => '' ) );
+            foreach ( $args['options'] as $option ) {
+                $on = $args['selected'] === $option ? ' selected' : '';
+                echo '<option' . $on . '>' . $option . '</option>';
+            }
+        }
+        function acme_page() {
+            acme_select( array( 'options' => array( 'a', 'b' ), 'selected' => $_GET['s'] ) );
+            acme_select( array( 'options' => array( $_GET['o'] ), 'selected' => 'a' ) );
+        }
+        PHP))->toBe(['wp.xss.unescaped-output@6']);
+});
+
+it('still reads a query string the callee parses', function (): void {
+    expect(wordpressArrayHelperFindings(<<<'PHP'
+        function acme_box( $args ) {
+            $args = wp_parse_args( $args, array( 'title' => '' ) );
+            echo $args['title'];
+        }
+        function acme_page() {
+            acme_box( $_GET['q'] );
+        }
+        PHP))->toBe(['wp.xss.unescaped-output@4']);
+});
+
+it('follows a parameter into array_merge() under its own keys', function (): void {
+    expect(wordpressArrayHelperFindings(<<<'PHP'
+        function acme_box( $args ) {
+            $args = array_merge( array( 'title' => '', 'label' => 'Box' ), $args );
+            echo $args['label'];
+            echo $args['title'];
+            foreach ( $args as $value ) {
+                echo $value;
+            }
+        }
+        function acme_page() {
+            acme_box( array( 'title' => $_GET['t'] ) );
+            acme_box( array( 'extra' => $_GET['e'] ) );
+        }
+        PHP))->toBe(['wp.xss.unescaped-output@5', 'wp.xss.unescaped-output@7']);
 });
 
 it('reads a query string wp_parse_args() parses as the text it was', function (): void {

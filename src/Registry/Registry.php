@@ -345,6 +345,26 @@ final class Registry
     }
 
     /**
+     * The functions whose result keeps its input's keys, by lower-case name,
+     * with the arguments it takes its elements from: `wp_parse_args()`,
+     * `array_merge()`. See {@see Propagator::$keepsKeys}.
+     *
+     * @return array<string, ArgumentSelector>
+     */
+    public function keyKeepers(): array
+    {
+        $keepers = [];
+
+        foreach ($this->propagators as $propagator) {
+            if ($propagator->keepsKeys && $propagator->matcher->kind === MatcherKind::Func) {
+                $keepers[strtolower($propagator->matcher->name)] = $propagator->arguments;
+            }
+        }
+
+        return $keepers;
+    }
+
+    /**
      * @return array<string, list<Sink>>
      */
     public function sinks(): array

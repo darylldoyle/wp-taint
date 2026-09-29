@@ -167,9 +167,11 @@ $parts = acme_describe( $field );
 echo $parts['tip'];       // not reported: nothing reads $field['value']
 ```
 
-A callee that uses the parameter any other way receives every element. That
-includes passing it on to another function, returning it, iterating it, or
-reading it with a computed key. So does a call written with `...$args`, and a
+A function whose result keeps its input's keys counts as a copy, so a callee
+that reads `wp_parse_args( $args, $defaults )['title']` or the same through
+`array_merge()` receives only `'title'`. A callee that uses the parameter any
+other way receives every element. That includes passing it on to another
+function, returning it, iterating it, or reading it with a computed key. So does a call written with `...$args`, and a
 callback run by `array_map()`, by `call_user_func_array()` with an array not
 written in the call, or by their relatives. None of those hands the parameter
 one argument whose keys are the ones written. Type checks, `count()`, `isset()`, `empty()` and
@@ -203,9 +205,7 @@ slot, still whole. `array_values()` puts every element there. `reset()`,
 its parts, and `array_column()` returns each row's element under the column
 key, with each row's index column as the keys. WordPress's `wp_parse_args()`
 keeps each key as `array_merge()` does, and `wp_list_pluck()` reads one field
-of each row as `array_column()` does. A callee that hands its parameter to
-either one still receives every element of it, as it would for any other
-function. The elements fold into one set
+of each row as `array_column()` does. The elements fold into one set
 in three cases:
 
 - a function that builds something else, `implode( ',', $row )`

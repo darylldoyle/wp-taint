@@ -6,6 +6,7 @@ namespace Enshrined\WpTaint\Taint;
 
 use Enshrined\WpTaint\Cfg\IncludeGraph;
 use Enshrined\WpTaint\Hooks\RestRouteTable;
+use Enshrined\WpTaint\Registry\ArgumentSelector;
 use Enshrined\WpTaint\Registry\Registry;
 
 /**
@@ -53,6 +54,17 @@ final class IntraproceduralAnalyzer
          */
         private readonly ?AdministratorReach $administrators = null,
     ) {
+    }
+
+    /**
+     * The functions whose result keeps its input's keys: see
+     * {@see Registry::keyKeepers()}.
+     *
+     * @return array<string, ArgumentSelector>
+     */
+    public function keyKeepers(): array
+    {
+        return $this->registry->keyKeepers();
     }
 
     /**
