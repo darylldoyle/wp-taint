@@ -11,7 +11,7 @@ namespace Enshrined\WpTaint\Taint;
  * exponential: each function is analysed once per parameter, and every call
  * site instantiates the result rather than re-walking the body.
  *
- * @phpstan-type PropertyReference array{0: string|null, 1: string, 2: TaintSet}
+ * @phpstan-type PropertyReference array{0: string|null, 1: string, 2: Shape}
  * @phpstan-type CaptureReference array{0: string, 1: string, 2: TaintSet}
  * @phpstan-type ScopeReference array{0: string, 1: string, 2: string, 3: Shape}
  */
@@ -57,15 +57,15 @@ final class FunctionSummary
          */
         public readonly bool $returnAnchored = false,
         /**
-         * Properties each parameter is written into, and the kinds that reach
-         * them.
+         * Properties each parameter is written into, and what reaches them:
+         * a shape, so an array written whole keeps its elements apart.
          *
          * The write counterpart to {@see $paramToSink}. A probe run's property
          * map is sealed — its seed is a question, not something the code does —
          * so the flow into `$this->file` is recorded here and applied at the
          * call site with the taint the caller actually passed, less whatever
-         * the body clears on the way. `$this->v = esc_html( $x )` stores no
-         * HTML taint, whatever the caller hands in as `$x`.
+         * the body clears on the way, part by part. `$this->v = esc_html( $x )`
+         * stores no HTML taint, whatever the caller hands in as `$x`.
          *
          * @var array<int, list<PropertyReference>>
          */
@@ -263,7 +263,11 @@ final class FunctionSummary
 
         foreach ($this->paramToProperty as $index => $references) {
             $paramToProperty[$index] = array_map(
-                static fn (array $reference): array => [$reference[0], $reference[1], $set($index, $reference[2])],
+                static fn (array $reference): array => [
+                    $reference[0],
+                    $reference[1],
+                    $reference[2]->mapSets(static fn (TaintSet $kinds): TaintSet => $set($index, $kinds)),
+                ],
                 $references,
             );
         }
@@ -583,8 +587,8 @@ final class FunctionSummary
     }
 
     /**
-     * Two bodies' property references, one per property, with the kinds of
-     * both. The captures and scopes below merge the same way.
+     * Two bodies' property references, one per property, with what both
+     * carry. The captures and scopes below merge the same way.
      *
      * @param array<int, list<PropertyReference>> $mine
      * @param array<int, list<PropertyReference>> $theirs
@@ -600,8 +604,8 @@ final class FunctionSummary
 
             foreach ([...($mine[$index] ?? []), ...($theirs[$index] ?? [])] as $reference) {
                 $id = self::propertyKey($reference);
-                $kinds = ($merged[$id][2] ?? TaintSet::empty())->union($reference[2]);
-                $merged[$id] = [$reference[0], $reference[1], $kinds];
+                $value = ($merged[$id][2] ?? Shape::empty())->join($reference[2]);
+                $merged[$id] = [$reference[0], $reference[1], $value];
             }
 
             ksort($merged);
@@ -699,6 +703,55 @@ final class FunctionSummary
         }
 
         return true;
+    }
+
+    /**
+     * The same properties reached, each by the same value.
+     *
+     * @param array<int, list<PropertyReference>> $mine
+     * @param array<int, list<PropertyReference>> $theirs
+     */
+    private static function propertiesEqual(array $mine, array $theirs): bool
+    {
+        if (array_keys($mine) !== array_keys($theirs)) {
+            return false;
+        }
+
+        foreach ($mine as $index => $references) {
+            $a = self::valuesByProperty($references);
+            $b = self::valuesByProperty($theirs[$index] ?? []);
+
+            if (array_keys($a) !== array_keys($b)) {
+                return false;
+            }
+
+            foreach ($a as $id => $value) {
+                if (! $value->equals($b[$id] ?? Shape::empty())) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @param list<PropertyReference> $references
+     *
+     * @return array<string, Shape> sorted by property
+     */
+    private static function valuesByProperty(array $references): array
+    {
+        $result = [];
+
+        foreach ($references as $reference) {
+            $id = self::propertyKey($reference);
+            $result[$id] = ($result[$id] ?? Shape::empty())->join($reference[2]);
+        }
+
+        ksort($result);
+
+        return $result;
     }
 
     /**
@@ -867,13 +920,7 @@ final class FunctionSummary
         // writes are still being discovered is not settled. The captures and
         // shared scopes likewise, and the kinds reaching each of the three.
         if (
-            ! self::referencesEqual(
-                $this->paramToProperty,
-                $other->paramToProperty,
-                self::propertyKey(...),
-                /** @param PropertyReference $reference */
-                static fn (array $reference): TaintSet => $reference[2],
-            )
+            ! self::propertiesEqual($this->paramToProperty, $other->paramToProperty)
             || ! self::referencesEqual(
                 $this->paramToCapture,
                 $other->paramToCapture,

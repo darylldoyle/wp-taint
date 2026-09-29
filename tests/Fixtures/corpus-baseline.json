@@ -28,10 +28,10 @@
     },
     "cookie-law-info": {
         "version": "3.5.5",
-        "findings": 6,
+        "findings": 10,
         "bySeverity": {
             "critical": 1,
-            "high": 5
+            "high": 9
         },
         "warnings": 0,
         "parseFailures": 0

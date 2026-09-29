@@ -154,6 +154,11 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A property held one set of taint, and an array written into it whole stored
+  none of its elements. `$this->opts = array( 'name' => $_GET['n'] )` left the
+  property clean, so a read of `$this->opts['name']` in another method was
+  missed. A property now keeps its value's elements under their keys, to four
+  levels, and a read of one element sees only what that element was given.
 - A variable that crosses into another scope was one set. An included
   template reading `$settings['mode']` took what `'title'` held, and so did a
   closure reading a captured array. A template's `$args` kept one level of

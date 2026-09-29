@@ -48,8 +48,8 @@ final class AnalysisResult
          * goes nowhere — this records that it happened, and the caller applies
          * the taint it actually passed.
          *
-         * @var list<array{0: string|null, 1: string, 2: TaintSet}> class name
-         *     (null when unresolved), property, and the kinds that reached it
+         * @var list<array{0: string|null, 1: string, 2: Shape}> class name
+         *     (null when unresolved), property, and what reached it
          */
         public readonly array $propertiesReached = [],
         /**

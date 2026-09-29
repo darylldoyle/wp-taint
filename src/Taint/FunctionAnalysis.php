@@ -54,10 +54,26 @@ final class FunctionAnalysis
     private const MAX_ASSIGNMENT_HOPS = 16;
 
     /**
-     * Properties the seeded parameter reached, keyed to deduplicate, with the
-     * kinds that reached each.
+     * The stored value each property read last put on its result, by op, so a
+     * pass that finds it unchanged does not copy it again.
      *
-     * @var array<string, array{0: string|null, 1: string, 2: TaintSet}>
+     * @var array<int, Shape>
+     */
+    private array $propertyReads = [];
+
+    /**
+     * Each property's value across its class hierarchy, with the values it
+     * was joined from, so an unchanged hierarchy hands back the same shape.
+     *
+     * @var array<string, array{list<Shape>, Shape}>
+     */
+    private array $storedValues = [];
+
+    /**
+     * Properties the seeded parameter reached, keyed to deduplicate, with
+     * what reached each.
+     *
+     * @var array<string, array{0: string|null, 1: string, 2: Shape}>
      */
     private array $propertiesReached = [];
 
@@ -362,7 +378,11 @@ final class FunctionAnalysis
         // TaintSet::withoutElements().
         $plain = static fn (?TaintSet $taint): ?TaintSet => $taint?->withoutElements();
         $properties = array_map(
-            static fn (array $reference): array => [$reference[0], $reference[1], $reference[2]->withoutElements()],
+            static fn (array $reference): array => [
+                $reference[0],
+                $reference[1],
+                $reference[2]->mapSets(static fn (TaintSet $taint): TaintSet => $taint->withoutElements()),
+            ],
             array_values($this->propertiesReached),
         );
         $captures = array_map(
@@ -1558,7 +1578,14 @@ final class FunctionAnalysis
             $changed = $this->state->addShape($op->result, $kept, $provenance) || $changed;
         }
 
-        return $this->propagateIndirectWrite($op, $taint->union($container)->union($keys)) || $changed;
+        // A property keeps the whole value, its elements under their keys, so
+        // a read of one element sees only what that element was given. A
+        // guard vouches for a scalar, so what it lets through is one set.
+        $written = $proof === null
+            ? Shape::node($taint, $shape)
+            : Shape::of($taint->union($container));
+
+        return $this->propagateIndirectWrite($op, $taint->union($container)->union($keys), $written) || $changed;
     }
 
     /**
@@ -1629,9 +1656,15 @@ final class FunctionAnalysis
      * `$arr['k'] = $v` and `$obj->p = $v` both assign to the *result temporary
      * of a fetch*, not to the base operand, and a later read produces a fresh
      * temporary with no SSA link back. Both therefore need explicit handling.
+     *
+     * `$taint` is what an element write stores, and `$value` the whole value
+     * a property write stores.
      */
-    private function propagateIndirectWrite(Op\Expr\Assign|Op\Expr\AssignRef $op, TaintSet $taint): bool
-    {
+    private function propagateIndirectWrite(
+        Op\Expr\Assign|Op\Expr\AssignRef $op,
+        TaintSet $taint,
+        Shape $value,
+    ): bool {
         $target = OperandHelper::definingOp($op->var);
 
         // Record *every* property write, tainted or not. "We watched this
@@ -1654,9 +1687,7 @@ final class FunctionAnalysis
                 // are the ones the body lets through to the property, plus any
                 // its own sources add. The caller publishes the first of
                 // those only: see applySummaryProperties().
-                if (! $taint->isEmpty()) {
-                    $this->recordPropertyReference($owner, $property, $taint);
-                }
+                $this->recordPropertyReference($owner, $property, $value);
 
                 // Whether the written value carried a literal fragment, so a
                 // read elsewhere can tell `$this->option_name` holding
@@ -1674,6 +1705,10 @@ final class FunctionAnalysis
             && $target->dim !== null
             && OperandHelper::literalKey($target->dim) === null
             && $this->recordKeyTaint($op, $target);
+
+        if ($target instanceof Op\Expr\PropertyFetch || $target instanceof Op\Expr\StaticPropertyFetch) {
+            return $this->writeProperty($op, $target, $value);
+        }
 
         if ($taint->isEmpty()) {
             return $keyed;
@@ -1738,28 +1773,39 @@ final class FunctionAnalysis
             ) || $keyed;
         }
 
-        if ($target instanceof Op\Expr\PropertyFetch || $target instanceof Op\Expr\StaticPropertyFetch) {
-            $property = OperandHelper::literalString($target->name);
+        return false;
+    }
 
-            if ($property === null) {
-                $this->imprecise = true;
-
-                return false;
-            }
-
-            $owner = $target instanceof Op\Expr\PropertyFetch
-                ? $this->propertyOwnerClass($target)
-                : $this->staticOwnerClass($target);
-
-            return $this->properties->add(
-                $owner,
-                $property,
-                $taint,
-                $this->writeTrace($op, $property, $taint),
-            );
+    /**
+     * A write of the whole value `$value` into a property.
+     */
+    private function writeProperty(
+        Op\Expr\Assign|Op\Expr\AssignRef $op,
+        Op\Expr\PropertyFetch|Op\Expr\StaticPropertyFetch $target,
+        Shape $value,
+    ): bool {
+        if ($value->isEmpty()) {
+            return false;
         }
 
-        return false;
+        $property = OperandHelper::literalString($target->name);
+
+        if ($property === null) {
+            $this->imprecise = true;
+
+            return false;
+        }
+
+        $owner = $target instanceof Op\Expr\PropertyFetch
+            ? $this->propertyOwnerClass($target)
+            : $this->staticOwnerClass($target);
+
+        return $this->properties->add(
+            $owner,
+            $property,
+            $value,
+            $this->writeTrace($op, $property, $value->flatten()),
+        );
     }
 
     private function transferArrayDimFetch(Op\Expr\ArrayDimFetch $op): bool
@@ -2439,24 +2485,52 @@ final class FunctionAnalysis
             return $this->state->set($op->result, TaintSet::empty());
         }
 
-        $stored = $this->storedPropertyTaint($owner, $property);
-        $taint = $stored->union($this->state->taintOf($op->var));
+        $stored = $this->storedPropertyValue($owner, $property);
+        $taint = $stored->own()->union($this->state->taintOf($op->var));
 
-        if ($taint->isEmpty()) {
+        if ($taint->isEmpty() && $stored->isEmpty()) {
             return $this->state->set($op->result, $taint);
         }
 
-        return $this->state->set(
-            $op->result,
-            $taint,
-            new Provenance(
-                TraceVerb::Propagate,
-                $op,
-                sprintf('Read from property $%s.', $property),
-                [$op->var],
-                prefix: $this->storedPropertyOrigin($owner, $property),
+        return $this->readProperty($op, $owner, $property, $taint, $stored, [$op->var]);
+    }
+
+    /**
+     * Put a property's value on the fetch that reads it: its own taint, and
+     * its elements under their keys.
+     *
+     * @param list<Operand> $from
+     */
+    private function readProperty(
+        Op\Expr\PropertyFetch|Op\Expr\StaticPropertyFetch $op,
+        ?string $owner,
+        string $property,
+        TaintSet $taint,
+        Shape $stored,
+        array $from,
+    ): bool {
+        $provenance = new Provenance(
+            TraceVerb::Propagate,
+            $op,
+            sprintf(
+                $op instanceof Op\Expr\PropertyFetch ? 'Read from property $%s.' : 'Read from static property $%s.',
+                $property,
             ),
+            $from,
+            prefix: $this->storedPropertyOrigin($owner, $property),
         );
+
+        $changed = $this->state->set($op->result, $taint, $taint->isEmpty() ? null : $provenance);
+        $id = spl_object_id($op);
+
+        // Elements only ever grow, so a value this read already put on its
+        // result adds nothing when it comes back unchanged.
+        if (($this->propertyReads[$id] ?? null) !== $stored) {
+            $changed = $this->state->addShape($op->result, $stored->structure(), $provenance) || $changed;
+            $this->propertyReads[$id] = $stored;
+        }
+
+        return $changed;
     }
 
     /**
@@ -2469,19 +2543,34 @@ final class FunctionAnalysis
      * disappears — `$this->value = $_GET['x']` in a base-class constructor,
      * echoed by a subclass method, was invisible under flat keys.
      */
-    private function storedPropertyTaint(?string $owner, string $property): TaintSet
+    private function storedPropertyValue(?string $owner, string $property): Shape
     {
         if ($owner === null) {
-            return $this->properties->get(null, $property);
+            return $this->properties->valueOf(null, $property);
         }
 
-        $taint = TaintSet::empty();
+        $values = [];
 
         foreach ($this->functions->classHierarchy()->lookupOrder($owner) as $candidate) {
-            $taint = $taint->union($this->properties->get($candidate, $property));
+            $values[] = $this->properties->valueOf($candidate, $property);
         }
 
-        return $taint;
+        $key = strtolower($owner) . '::' . $property;
+        $memo = $this->storedValues[$key] ?? null;
+
+        if ($memo !== null && $memo[0] === $values) {
+            return $memo[1];
+        }
+
+        $value = Shape::empty();
+
+        foreach ($values as $each) {
+            $value = $value->join($each);
+        }
+
+        $this->storedValues[$key] = [$values, $value];
+
+        return $value;
     }
 
     /**
@@ -2520,22 +2609,13 @@ final class FunctionAnalysis
         // slot, so `Child::$option` and `Base::$option` are the same storage —
         // the union across the hierarchy applies exactly as it does to
         // instance properties.
-        $taint = $this->storedPropertyTaint($owner, $property);
+        $stored = $this->storedPropertyValue($owner, $property);
 
-        if ($taint->isEmpty()) {
-            return $this->state->set($op->result, $taint);
+        if ($stored->isEmpty()) {
+            return $this->state->set($op->result, TaintSet::empty());
         }
 
-        return $this->state->set(
-            $op->result,
-            $taint,
-            new Provenance(
-                TraceVerb::Propagate,
-                $op,
-                sprintf('Read from static property $%s.', $property),
-                prefix: $this->storedPropertyOrigin($owner, $property),
-            ),
-        );
+        return $this->readProperty($op, $owner, $property, $stored->own(), $stored, []);
     }
 
     /**
@@ -4112,20 +4192,24 @@ final class FunctionAnalysis
     ): bool {
         $changed = false;
 
-        foreach ($summary->propertiesFor($index) as [$class, $property, $kinds]) {
-            // Only what survives the body. The kinds were recorded by the
-            // probe run, whose seed carried every kind: what reached the
-            // property is what the body let through.
-            $taint = self::throughBody($argumentTaint, $kinds, $summary->revertedResidualsFor($index));
+        $reverts = $summary->revertedResidualsFor($index);
+
+        foreach ($summary->propertiesFor($index) as [$class, $property, $reached]) {
+            // Only what survives the body, part by part. The kinds were
+            // recorded by the probe run, whose seed carried every kind: what
+            // reached the property is what the body let through.
+            $value = $reached->mapSets(
+                static fn (TaintSet $kinds): TaintSet => self::throughBody($argumentTaint, $kinds, $reverts),
+            );
 
             // The escaping ledger stays out of an option, as it does for a
             // write in this body: see recordOptionWrite(). throughBody()
             // hands `escaped` back alongside `html`.
             if ($class === self::OPTION_STORE) {
-                $taint = $taint->without(TaintSet::of(TaintKind::Escaped, TaintKind::EscapeVoided));
+                $value = $value->without(TaintSet::of(TaintKind::Escaped, TaintKind::EscapeVoided));
             }
 
-            if ($taint->isEmpty()) {
+            if ($value->isEmpty()) {
                 continue;
             }
 
@@ -4140,8 +4224,8 @@ final class FunctionAnalysis
             $changed = $this->properties->add(
                 $class,
                 $property,
-                $taint,
-                $this->propertyWriteTrace($op, $argument, $taint, $summary, $property, $class),
+                $value,
+                $this->propertyWriteTrace($op, $argument, $value->flatten(), $summary, $property, $class),
             ) || $changed;
 
             // The anchor is the caller's to settle. Inside the callee the value
@@ -4484,15 +4568,14 @@ final class FunctionAnalysis
 
         $changed = false;
 
+        // An option is one set: a read hands back the whole value.
         foreach ($names as $name) {
-            if (! $taint->isEmpty()) {
-                $this->recordPropertyReference(self::OPTION_STORE, $name, $taint);
-            }
+            $this->recordPropertyReference(self::OPTION_STORE, $name, Shape::of($taint));
 
             $changed = $this->properties->add(
                 self::OPTION_STORE,
                 $name,
-                $taint,
+                Shape::of($taint),
                 $this->optionWriteTrace($op, $value, $taint, $name),
             ) || $changed;
         }
@@ -6429,15 +6512,15 @@ final class FunctionAnalysis
      * records once — a growing list would make the summary compare unequal to
      * itself and the interprocedural fixed point would never settle.
      */
-    private function recordPropertyReference(?string $class, string $property, TaintSet $taint): void
+    private function recordPropertyReference(?string $class, string $property, Shape $value): void
     {
-        if ($this->seedParameterIndex === null) {
+        if ($this->seedParameterIndex === null || $value->isEmpty()) {
             return;
         }
 
         $id = strtolower($class ?? '?') . '::' . $property;
-        $kinds = ($this->propertiesReached[$id][2] ?? TaintSet::empty())->union($taint);
-        $this->propertiesReached[$id] = [$class, $property, $kinds];
+        $joined = ($this->propertiesReached[$id][2] ?? Shape::empty())->join($value);
+        $this->propertiesReached[$id] = [$class, $property, $joined];
     }
 
     /**
