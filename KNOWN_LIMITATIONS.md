@@ -212,13 +212,18 @@ in three cases:
 
 **Direction:** over-reports where the elements fold.
 
-**A parameter handed back as it came loses its keys.** A summary knows the
-parts a function reads its parameter through, and nothing stands for an element
-the body never names. So `function acme_id( $a ) { return $a; }` hands back
-`array( 't' => $_GET['t'], 'm' => 'x' )` with `'m'` tainted, and so does a
-function that adds an element and returns the rest, or includes a file that
-reads the parameter. **Direction:**
-over-reports.
+**An element the body never names travels with the others the body does not
+name.** A summary knows the parts a function reads its parameter through. Under
+each node it reads by literal key, one more part stands for every key it does
+not name there. A caller's element under such a key reaches a loop, a computed
+read, a flatten and a read under any other key, and comes back in what the
+function returns. It does not reach a read of a key the body names. Those
+elements come back as one set, though. So
+`function acme_pick( $a ) { echo $a['title']; return $a; }` hands back
+`array( 'title' => 'x', 't' => $_GET['t'], 'm' => 'x' )` with `'title'` clean
+and `'m'` tainted. A function that names no key, `function acme_id( $a ) {
+return $a; }`, hands everything back as one set, and so does one that includes
+a file that reads the parameter. **Direction:** over-reports.
 
 **A key carries its collection's own taint and what the code used as a key.**
 A `foreach` key over `$_GET` is request data. After `$rows[ $_GET['k'] ] = 1`,

@@ -33,6 +33,11 @@ use PHPCfg\Operand;
  * parameter, by operand, to {@see Shape::DEPTH} steps. A write into an element
  * of a parameter reads nothing of it.
  *
+ * Under each node the body reads by literal key, {@see OTHERS} stands for
+ * every literal key it does not name there. A caller's element under such a
+ * key goes to that part rather than the node's, so it cannot reach the reads
+ * of the keys the body does name. See {@see Shape::others()}.
+ *
  * This only picks which parts get a number of their own. The numbers then
  * travel with the taint, so a read this misses still sees the parts it touches
  * by dataflow, and at worst the parameter's own number, part 0, which covers
@@ -45,6 +50,9 @@ final class ParameterParts
 
     /** The keys: a `foreach` key, or `array_keys()`. */
     public const KEYS = '#keys';
+
+    /** Every literal key the body does not name under this node. */
+    public const OTHERS = '#others';
 
     /** How far a value is followed back through assignments and joins. */
     private const MAX_HOPS = 32;
@@ -99,12 +107,79 @@ final class ParameterParts
                 static fn (array $a, array $b): int => [count($a), self::describe($a)]
                     <=> [count($b), self::describe($b)],
             );
-            $byIndex[$index] = array_slice($list, 0, TaintSet::MAX_PARTS - 1);
+            $byIndex[$index] = self::withOthers(array_slice($list, 0, TaintSet::MAX_PARTS - 1));
         }
 
         ksort($byIndex);
 
         return $byIndex;
+    }
+
+    /**
+     * `$parts` with an {@see OTHERS} part under each node that a part names a
+     * literal key of, shallowest first, while there is room. Every part the
+     * body reads keeps its number.
+     *
+     * @param list<list<int|string>> $parts
+     *
+     * @return list<list<int|string>>
+     */
+    private static function withOthers(array $parts): array
+    {
+        $nodes = [];
+
+        foreach ($parts as $path) {
+            $last = $path === [] ? null : $path[count($path) - 1];
+
+            if ($last !== null && $last !== self::ANY && $last !== self::KEYS) {
+                $node = array_slice($path, 0, -1);
+                $nodes[self::describe($node)] = $node;
+            }
+        }
+
+        $nodes = array_values($nodes);
+        usort(
+            $nodes,
+            static fn (array $a, array $b): int => [count($a), self::describe($a)] <=> [count($b), self::describe($b)],
+        );
+
+        foreach ($nodes as $node) {
+            if (count($parts) >= TaintSet::MAX_PARTS - 1) {
+                break;
+            }
+
+            $parts[] = [...$node, self::OTHERS];
+        }
+
+        return $parts;
+    }
+
+    /**
+     * The literal keys a part names directly under `$node`.
+     *
+     * @param list<list<int|string>> $parts
+     * @param list<int|string>       $node
+     *
+     * @return list<int|string>
+     */
+    public static function namedUnder(array $parts, array $node): array
+    {
+        $depth = count($node);
+        $named = [];
+
+        foreach ($parts as $path) {
+            if (count($path) !== $depth + 1 || array_slice($path, 0, $depth) !== $node) {
+                continue;
+            }
+
+            $step = $path[$depth] ?? self::ANY;
+
+            if ($step !== self::ANY && $step !== self::KEYS && $step !== self::OTHERS) {
+                $named[] = $step;
+            }
+        }
+
+        return $named;
     }
 
     /**
@@ -120,6 +195,7 @@ final class ParameterParts
             $text .= match (true) {
                 $step === self::ANY => '[*]',
                 $step === self::KEYS => '#keys',
+                $step === self::OTHERS => '[others]',
                 is_int($step) => '[' . $step . ']',
                 default => "['" . $step . "']",
             };
@@ -184,12 +260,13 @@ final class ParameterParts
 
     /**
      * A literal key as a step: the key as PHP stores it, so `'1'` is `1`. A
-     * key spelt like one of the two special steps is read as any element,
-     * which covers every literal key, so it can never be taken for the keys.
+     * key spelt like one of the special steps is read as any element, which
+     * covers every literal key, so it can never be taken for the keys or for
+     * the keys the body does not name.
      */
     public static function step(int|string $key): int|string
     {
-        if ($key === self::ANY || $key === self::KEYS) {
+        if ($key === self::ANY || $key === self::KEYS || $key === self::OTHERS) {
             return self::ANY;
         }
 

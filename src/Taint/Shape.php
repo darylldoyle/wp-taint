@@ -54,9 +54,24 @@ final class Shape
      */
     public const EACH = "\0\0each";
 
+    /**
+     * The start of the key of an element standing for every literal key but
+     * the ones it names: see {@see others()}.
+     */
+    public const OTHERS = "\0\0others";
+
     private static ?self $empty = null;
 
     private ?TaintSet $flat = null;
+
+    /**
+     * Each element standing for others, under EACH or an OTHERS key, with the
+     * literal keys it leaves out as the keys of a set. Found on the first
+     * read under a literal key.
+     *
+     * @var list<array{self, array<array-key, true>}>|null
+     */
+    private ?array $standIns = null;
 
     /**
      * @param array<array-key, self> $elements none of them empty
@@ -203,11 +218,90 @@ final class Shape
     {
         $element = $this->elements[$key] ?? self::empty();
 
-        if ($key === self::EACH || ! isset($this->elements[self::EACH])) {
+        if ($this->elements === [] || self::isStandIn($key)) {
             return $element;
         }
 
-        return $element->join($this->elements[self::EACH]);
+        foreach ($this->standIns() as [$standIn, $named]) {
+            if (! isset($named[$key])) {
+                $element = $element->join($standIn);
+            }
+        }
+
+        return $element;
+    }
+
+    /**
+     * The key of an element standing for every literal key but `$named`.
+     *
+     * A probe seeds one under each node of its parameter whose elements the
+     * body reads by literal key. A caller's element under a key the body
+     * never names then goes to it, and reaches only what could read that
+     * key: a computed read, a loop, a flatten, a read under a key outside
+     * `$named`. A read under one of `$named` does not see it, so an element
+     * the body never reads cannot reach the ones it does.
+     *
+     * @param list<int|string> $named
+     */
+    public static function others(array $named): string
+    {
+        return self::OTHERS . json_encode($named, JSON_THROW_ON_ERROR);
+    }
+
+    /**
+     * Whether `$key` names no element of its own but stands for others:
+     * {@see EACH}, or a key {@see others()} made.
+     *
+     * @phpstan-assert-if-true string $key
+     */
+    public static function isStandIn(int|string $key): bool
+    {
+        return is_string($key) && str_starts_with($key, "\0\0");
+    }
+
+    /**
+     * The literal keys an element standing for others leaves out, as the
+     * keys of a set: none for {@see EACH}, which stands for every key. Null
+     * for any other key.
+     *
+     * @return array<array-key, true>|null
+     */
+    public static function leftOutBy(int|string $key): ?array
+    {
+        if ($key === self::EACH) {
+            return [];
+        }
+
+        if (! is_string($key) || ! str_starts_with($key, self::OTHERS)) {
+            return null;
+        }
+
+        /** @var list<int|string> $named */
+        $named = json_decode(substr($key, strlen(self::OTHERS)), true, 2, JSON_THROW_ON_ERROR);
+
+        return array_fill_keys($named, true);
+    }
+
+    /**
+     * @return list<array{self, array<array-key, true>}>
+     */
+    private function standIns(): array
+    {
+        if ($this->standIns !== null) {
+            return $this->standIns;
+        }
+
+        $standIns = [];
+
+        foreach ($this->elements as $key => $element) {
+            $leftOut = self::isStandIn($key) ? self::leftOutBy($key) : null;
+
+            if ($leftOut !== null) {
+                $standIns[] = [$element, $leftOut];
+            }
+        }
+
+        return $this->standIns = $standIns;
     }
 
     public function restPart(): self

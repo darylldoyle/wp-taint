@@ -945,26 +945,36 @@ final class FunctionAnalysis
         $this->state->set($param->result, $seed->fromPart(0), $provenance);
 
         foreach ($this->seedParts as $position => $path) {
-            $part = self::shapeAtPart($path, $seed->fromPart($position + 1));
+            $part = self::shapeAtPart($path, $seed->fromPart($position + 1), $this->seedParts);
             $this->state->addShape($param->result, $part, $provenance);
         }
     }
 
     /**
      * A shape holding `$taint` at `$path` and nothing else: under each literal
-     * key in turn, under any element for {@see ParameterParts::ANY}, and in the
-     * keys for a path that ends in {@see ParameterParts::KEYS}.
+     * key in turn, under any element for {@see ParameterParts::ANY}, under the
+     * element standing for the keys no part names for
+     * {@see ParameterParts::OTHERS}, and in the keys for a path that ends in
+     * {@see ParameterParts::KEYS}.
      *
-     * @param list<int|string> $path
+     * @param list<int|string>       $path
+     * @param list<list<int|string>> $parts every part of the parameter
      */
-    private static function shapeAtPart(array $path, TaintSet $taint): Shape
+    private static function shapeAtPart(array $path, TaintSet $taint, array $parts): Shape
     {
         $last = $path === [] ? null : $path[count($path) - 1];
         $shape = $last === ParameterParts::KEYS ? Shape::keys($taint) : Shape::of($taint);
         $steps = $last === ParameterParts::KEYS ? array_slice($path, 0, -1) : $path;
 
-        foreach (array_reverse($steps) as $step) {
-            $shape = $step === ParameterParts::ANY ? Shape::rest($shape) : Shape::element($step, $shape);
+        foreach (array_reverse($steps, true) as $at => $step) {
+            $shape = match ($step) {
+                ParameterParts::ANY => Shape::rest($shape),
+                ParameterParts::OTHERS => Shape::element(
+                    Shape::others(ParameterParts::namedUnder($parts, array_slice($steps, 0, $at))),
+                    $shape,
+                ),
+                default => Shape::element($step, $shape),
+            };
         }
 
         return $shape;
@@ -2349,15 +2359,18 @@ final class FunctionAnalysis
     }
 
     /**
-     * The part of the seeded parameter a loop over it reads each element
-     * through, when `$dim` is that loop's key: `[*]`.
+     * The parts of the seeded parameter a loop over it reads each element
+     * through, when `$dim` is that loop's key: `[*]`, and `[others]` when the
+     * body names some of its keys.
      *
      * The parameter's elements are its callers', so the probe cannot name
-     * their keys. But what part `[*]` brings to a write under the loop's key
+     * their keys. But what those parts bring to a write under the loop's key
      * is each element coming back under the key it had, and the summary says
      * so: see {@see Shape::EACH}.
+     *
+     * @return non-empty-list<int>|null
      */
-    private function eachPart(Operand $dim): ?int
+    private function eachPart(Operand $dim): ?array
     {
         $collection = self::loopKeyCollection($dim);
 
@@ -2365,25 +2378,32 @@ final class FunctionAnalysis
             return null;
         }
 
+        $any = null;
+        $parts = [];
+
         foreach ($this->seedParts as $position => $path) {
             if ($path === [ParameterParts::ANY]) {
-                return $position + 1;
+                $any = $position + 1;
+            } elseif ($path === [ParameterParts::OTHERS]) {
+                $parts[] = $position + 1;
             }
         }
 
-        return null;
+        return $any === null ? null : [$any, ...$parts];
     }
 
     /**
      * Write `$taint` under the key of a loop over the seeded parameter: what
-     * part `$part` brought under {@see Shape::EACH}, and the rest under a
+     * `$parts` brought under {@see Shape::EACH}, and the rest under a
      * computed key.
+     *
+     * @param non-empty-list<int> $parts
      */
     private function writeEachElement(
         Op\Expr\Assign|Op\Expr\AssignRef $op,
         Op\Expr\ArrayDimFetch $target,
         TaintSet $taint,
-        int $part,
+        array $parts,
     ): bool {
         $provenance = new Provenance(
             TraceVerb::Propagate,
@@ -2391,10 +2411,16 @@ final class FunctionAnalysis
             sprintf('Written into %s under the key it came from.', OperandHelper::describe($target->var)),
             [$op->expr],
         );
-        $each = $taint->onlyPart($part);
+        $each = TaintSet::empty();
+        $rest = $taint;
+
+        foreach ($parts as $part) {
+            $each = $each->union($taint->onlyPart($part));
+            $rest = $rest->exceptPart($part);
+        }
+
         $changed = ! $each->isEmpty()
             && $this->state->addShape($target->var, Shape::element(Shape::EACH, Shape::of($each)), $provenance);
-        $rest = $taint->exceptPart($part);
 
         if ($rest->isEmpty()) {
             return $changed;
@@ -5821,8 +5847,12 @@ final class FunctionAnalysis
      * hands the stored value to part `[*]['value']` only, and nothing to the
      * part that prints `desc` raw.
      *
-     * A callee with no parts, or a call that hands it the items of an array,
-     * gets the whole argument, as before.
+     * A callee with no parts gets the whole argument. So does a call that is
+     * not positional: `f( ...$args )`, `array_walk()` or
+     * `call_user_func_array()` hands the parameter a value inside the
+     * argument, a level below the paths the parts name, and a split there
+     * sent an element of the argument to the part a key of the parameter's
+     * value would go to.
      *
      * @return list<array{FunctionSummary, TaintSet}>
      */
@@ -5831,7 +5861,7 @@ final class FunctionAnalysis
         $whole = $this->argumentTaint($call, $summary, $index, $argument);
         $parts = $summary->partsFor($index);
 
-        if ($parts === [] || $whole->isEmpty() || $call->itemsOnly) {
+        if ($parts === [] || $whole->isEmpty() || ! $call->positional) {
             return [[$summary->withoutParts(), $whole]];
         }
 
@@ -5843,7 +5873,7 @@ final class FunctionAnalysis
             $pieces[0] = $pieces[0]->union($this->state->effectiveTaintOf($more));
         }
 
-        $keys = $call->positional ? $summary->keysReadFrom($index) : null;
+        $keys = $summary->keysReadFrom($index);
         self::splitByParts($this->state->shapeOf($argument), [], $parts, $keys, $pieces);
 
         $split = [];
@@ -5884,6 +5914,15 @@ final class FunctionAnalysis
         }
 
         foreach ($node->elements() as $key => $element) {
+            // An element standing for other keys could be under any of them.
+            if (Shape::isStandIn($key)) {
+                foreach (self::standInSteps($key, $path, $parts, $keys) as $step) {
+                    self::splitByParts($element, [...$path, $step], $parts, $keys, $pieces);
+                }
+
+                continue;
+            }
+
             // An element the callee never reads cannot reach anything.
             if ($path === [] && $keys !== null && ! in_array($key, $keys, true)) {
                 continue;
@@ -5897,6 +5936,73 @@ final class FunctionAnalysis
         if (! $rest->isEmpty()) {
             self::splitByParts($rest, [...$path, ParameterParts::ANY], $parts, $keys, $pieces);
         }
+    }
+
+    /**
+     * The steps an element standing for other keys, at `$path` in the
+     * argument, could take into the parameter: each key a part names there
+     * that the element does not leave out, and a key no part names, when the
+     * callee could read one. The element's own key is never a part's step,
+     * so it stands for that last one.
+     *
+     * @param list<int|string>       $path
+     * @param list<list<int|string>> $parts
+     * @param list<array-key>|null   $keys  the only literal keys the callee reads at the top: see splitByParts()
+     *
+     * @return list<int|string>
+     */
+    private static function standInSteps(string $key, array $path, array $parts, ?array $keys): array
+    {
+        $leftOut = Shape::leftOutBy($key) ?? [];
+        $named = $path === [] && $keys !== null ? $keys : self::namedBelow($path, $parts);
+        $steps = [];
+
+        foreach ($named as $name) {
+            if (! isset($leftOut[$name])) {
+                $steps[] = ParameterParts::step($name);
+            }
+        }
+
+        if ($path !== [] || $keys === null) {
+            $steps[] = $key;
+        }
+
+        return $steps;
+    }
+
+    /**
+     * The literal keys a part names directly below a node at `$path`, through
+     * parts whose steps above cover `$path`.
+     *
+     * @param list<int|string>       $path
+     * @param list<list<int|string>> $parts
+     *
+     * @return list<array-key>
+     */
+    private static function namedBelow(array $path, array $parts): array
+    {
+        $depth = count($path);
+        $named = [];
+
+        foreach ($parts as $part) {
+            $last = count($part) === $depth + 1 ? ($part[$depth] ?? ParameterParts::ANY) : ParameterParts::ANY;
+
+            if (in_array($last, [ParameterParts::ANY, ParameterParts::KEYS, ParameterParts::OTHERS], true)) {
+                continue;
+            }
+
+            foreach ($path as $i => $at) {
+                $step = $part[$i] ?? null;
+
+                if ($step !== $at && ($step !== ParameterParts::ANY || $at === ParameterParts::KEYS)) {
+                    continue 2;
+                }
+            }
+
+            $named[$last] = true;
+        }
+
+        return array_keys($named);
     }
 
     /**
@@ -5930,6 +6036,20 @@ final class FunctionAnalysis
                 }
 
                 if ($step === ParameterParts::ANY && $at !== ParameterParts::KEYS) {
+                    continue;
+                }
+
+                // A literal key no part names under this node. It covers the
+                // key as closely as a named one would.
+                if (
+                    $step === ParameterParts::OTHERS
+                    && $at !== null
+                    && $at !== ParameterParts::ANY
+                    && $at !== ParameterParts::KEYS
+                    && ! in_array($at, ParameterParts::namedUnder($parts, array_slice($part, 0, $i)), true)
+                ) {
+                    $literals++;
+
                     continue;
                 }
 
