@@ -96,6 +96,7 @@ badge:
 | --- | --- |
 | [An authorization check behind a genuinely unresolvable call](#permission_callback-is-checked-for-what-it-reaches-and-stays-quiet-when-unsure) | Misses |
 | [A nonce alone satisfies the AJAX rule](#a-nonce-satisfies-the-ajax-rule-but-not-the-admin-post-one) | Misses |
+| [A missing nonce stopped by something other than `isset()` or `empty()`](#a-bypassable-nonce-check-is-judged-by-what-a-missing-nonce-does) | Over-reports |
 | [An option name anchored out of sight](#an-option-name-assembled-out-of-sight-is-assumed-to-be-anchored) | Misses |
 | [An allowlist gate on an option name](#an-option-name-assembled-out-of-sight-is-assumed-to-be-anchored) | Over-reports |
 | [`register_rest_route()` options built conditionally](#register_rest_route-options-are-folded-not-traced) | Neither |
@@ -1720,6 +1721,27 @@ rule accepts either, which is not, it is the pragmatic floor, because AJAX
 handlers overwhelmingly guard with `check_ajax_referer()` alone and demanding a
 capability as well would bury the real findings under every plugin in the
 corpus.
+
+### A bypassable nonce check is judged by what a missing nonce does
+
+`wp.csrf.bypassable-nonce-check` looks for `isset( $n ) && ! wp_verify_nonce( $n )`.
+A request with no nonce makes that test false, so the denial it guards never
+runs. The rule reports it unless the missing nonce is stopped anyway, and it
+checks two places:
+
+- The condition around the test. `! isset( $n ) || ( isset( $n ) && … )` is
+  true when the nonce is missing, the same as for a wrong nonce.
+- An earlier branch in the same function. It must be certainly taken when the
+  nonce is missing, and end in `return`, `exit`, `throw` or a WordPress function
+  that never returns.
+
+It knows only that `isset()` of the nonce is false and `empty()` of it is true.
+Everything else is unknown. So a missing nonce stopped any other way is still
+reported: by `array_key_exists()`, by `'' === $n`, by a helper that dies, by a
+branch that ends in an `if` and `else` that both return, or by a check in the
+caller. `break` and `continue` do not count as stopping, because the work after
+the loop still runs. Nor does a `throw` inside a `try`, because the `catch` can
+take it and the work after the `try` still runs.
 
 ### Object authorization is a scope check, not proof the check is right
 

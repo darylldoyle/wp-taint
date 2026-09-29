@@ -164,6 +164,17 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   counts, since `trim()` removes either. A summary also kept one reference per
   sink and rule, so a second kind reported at the same sink was lost. It now
   keeps one per kind.
+- `wp.csrf.bypassable-nonce-check` reported a nonce check that stops a
+  request with no nonce anyway (issue 8). The rule saw
+  `isset( $n ) && ! wp_verify_nonce( $n )` and stopped there. It did not look
+  at `! isset( $n ) || …` around it, which makes the whole test true when the
+  nonce is missing. It now asks what the request without the nonce does, and
+  stays quiet in two cases. In the first, the whole condition then takes the
+  same value as for a wrong nonce. In the second, an earlier branch of the
+  same function is certainly taken and ends in `return`, `exit`, `throw` or
+  `wp_die()`. `isset()` and `empty()` of the nonce are the only tests it
+  reads. A check that is still skipped, such as `… || ! current_user_can()`,
+  is still reported.
 - A helper that returns its argument as it came dropped two markers the
   argument carried. An escaped value filtered and then passed through
   `function acme_id( $v ) { return $v; }` lost its escape-voided finding, and
