@@ -139,7 +139,11 @@ sees only what went into it.
 
 A read counts its key as constant when every value the key can hold is known:
 a literal, a class or global constant, a join of those, or a `foreach` over a
-literal list that nothing writes into. Such a read sees only those elements, so
+literal list that nothing writes into. A private property declared as a
+literal array counts as that literal when nothing in the scan writes a
+property of its name and no other class declares one, so WooCommerce's
+`foreach ( $this->sql_filters[ $type ] as $subset )` visits only the clause
+types listed for `$type`. Such a read sees only those elements, so
 `$o[ $k ]` inside `foreach ( array( 'path', 'tmpPath' ) as $k )` reads `'path'`
 and `'tmpPath'` and nothing else. A write under such a key still goes under a
 computed key, and an item of a list literal still sits under any index.

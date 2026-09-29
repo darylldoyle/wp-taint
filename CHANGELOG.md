@@ -9,6 +9,12 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A private property declared as a literal array is read as that literal
+  when nothing in the scan writes a property of its name. WooCommerce's report
+  queries build a filtered where clause from
+  `foreach ( $this->sql_filters[ $type ] as $subset )`, and that loop now
+  visits only `'where'` and `'where_time'`, so a request's order-by clause
+  no longer reaches it.
 - A call that passes a fixed string as a key gets its own summary of the
   function, with that key known. `$config->get( 'mode' )`, whose body reads
   `$this->values[ $key ]`, hands back only `'mode'`, and

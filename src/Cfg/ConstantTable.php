@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Cfg;
 
+use PHPCfg\Operand;
+
 /**
  * Constants declared anywhere in the scan, and the strings they hold.
  *
@@ -42,6 +44,19 @@ final class ConstantTable
      * @var array<string, true>
      */
     private array $unresolved = [];
+
+    /**
+     * Private properties declared with a literal array, by name, or false
+     * once two declarations share the name.
+     *
+     * @var array<string, Operand|false>
+     */
+    private array $fixedProperties = [];
+
+    /** @var array<string, true> property names code writes */
+    private array $writtenProperties = [];
+
+    private bool $anyPropertyWritten = false;
 
     /**
      * How many distinct values to keep before treating a name as unresolvable.
@@ -84,6 +99,46 @@ final class ConstantTable
      * lowers the one and keeps the other. `::` cannot be part of a global
      * constant's name, so the two never collide.
      */
+    /**
+     * A private property whose declared value is a literal array: see
+     * {@see fixedPropertyDefault()}.
+     */
+    public function declareFixedProperty(string $name, Operand $default): void
+    {
+        $known = $this->fixedProperties[$name] ?? null;
+        $this->fixedProperties[$name] = $known === null || $known === $default ? $default : false;
+    }
+
+    /**
+     * Code writes a property of this name, or of a name it cannot read.
+     */
+    public function markPropertyWritten(?string $name): void
+    {
+        if ($name === null) {
+            $this->anyPropertyWritten = true;
+
+            return;
+        }
+
+        $this->writtenProperties[$name] = true;
+    }
+
+    /**
+     * The declared literal array of the one private property with this name,
+     * when nothing in the scan writes a property of that name. Its value is
+     * then the declaration's, wherever it is read.
+     */
+    public function fixedPropertyDefault(string $name): ?Operand
+    {
+        if ($this->anyPropertyWritten || isset($this->writtenProperties[$name])) {
+            return null;
+        }
+
+        $default = $this->fixedProperties[$name] ?? null;
+
+        return $default instanceof Operand ? $default : null;
+    }
+
     public function defineClassConstant(string $class, string $name, ?string $value): void
     {
         $this->define(self::classKey($class, $name), $value);

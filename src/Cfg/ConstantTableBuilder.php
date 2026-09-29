@@ -288,6 +288,34 @@ final class ConstantTableBuilder
 
     private function collect(ConstantTable $table, ValueResolver $resolver, mixed $op, ?string $class = null): void
     {
+        // A private property declared as a literal array, and every write to a
+        // property of any name, so a read can tell whether the declaration is
+        // still its value. See ConstantTable::fixedPropertyDefault().
+        if ($op instanceof Op\Stmt\Property) {
+            $name = OperandHelper::literalString($op->name);
+
+            if (
+                $class !== null
+                && $name !== null
+                && $op->isPrivate()
+                && ! $op->static
+                && $op->defaultVar !== null
+                && OperandHelper::definingOp($op->defaultVar) instanceof Op\Expr\Array_
+            ) {
+                $table->declareFixedProperty($name, $op->defaultVar);
+            }
+
+            return;
+        }
+
+        if ($op instanceof Op\Expr\PropertyFetch) {
+            if (self::mayChange($op->result, 0)) {
+                $table->markPropertyWritten(OperandHelper::literalString($op->name));
+            }
+
+            return;
+        }
+
         // `const NAME = 'value';` — php-cfg gives it its own terminal, with the
         // name already resolved. Inside a class body it is the class's, and
         // its name is the bare one: recorded as a global, `class A { const
@@ -334,6 +362,41 @@ final class ConstantTableBuilder
         }
 
         $table->define($name, self::single($resolver->strings($arguments[1])));
+    }
+
+    /**
+     * Whether a property fetch's result is used in any way that could change
+     * the property: written, bound by reference, unset, handed to a call, or
+     * the base of an element write. A read, a copy, a loop over it and a
+     * read of one of its elements leave it as it is.
+     */
+    private static function mayChange(Operand $operand, int $depth): bool
+    {
+        if ($depth > 8) {
+            return true;
+        }
+
+        foreach ($operand->usages as $usage) {
+            $reads = match (true) {
+                $usage instanceof Op\Iterator\Reset,
+                $usage instanceof Op\Iterator\Valid,
+                $usage instanceof Op\Iterator\Key,
+                $usage instanceof Op\Expr\Isset_,
+                $usage instanceof Op\Expr\Empty_ => true,
+                $usage instanceof Op\Iterator\Value => ! $usage->byRef,
+                $usage instanceof Op\Expr\Assign => $usage->expr === $operand && $usage->var !== $operand,
+                $usage instanceof Op\Expr\ArrayDimFetch => $usage->var === $operand
+                    && ! OperandHelper::isWrittenElsewhere($usage->result, $usage)
+                    && ! self::mayChange($usage->result, $depth + 1),
+                default => false,
+            };
+
+            if (! $reads) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
