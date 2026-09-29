@@ -238,6 +238,20 @@ keeps_residuals = true
 keeps_keys = true
 args = [0, 1]
 
+# The caller's values over the defaults, key by key, as array_merge() puts
+# them. A query string in $args parses into keys, which carry its text.
+[[propagators]]
+function = "wp_parse_args"
+keeps_residuals = true
+keeps_keys = true
+args = [0, 1]
+
+# Each row's field, as array_column() reads it: see the engine's column read.
+[[propagators]]
+function = "wp_list_pluck"
+keeps_residuals = true
+args = [0]
+
 [[propagators]]
 function = "apply_filters"
 keeps_residuals = true
@@ -1512,7 +1526,7 @@ message = "This value reaches output unescaped, and nothing in the scan says whe
 id = "wp.output.csv-injection"
 title = "Exported value can be a spreadsheet formula"
 description = "A user-supplied value is written into CSV without neutralising a leading =, +, - or @. Excel and Sheets execute those cells as formulas when the file is opened, so an exported field becomes code running on whoever reviews the export (CWE-1236)."
-remediation = "Prefix a value beginning with =, +, - or @ with an apostrophe, tab or space before writing the cell. HTML escapers do nothing here: esc_html() leaves a formula exactly as it found it."
+remediation = "Prefix a value beginning with =, +, - or @ with an apostrophe before writing the cell, and write the file with an empty escape character, fputcsv( $handle, $row, ',', '\"', '' ), so a quote in the value cannot end its cell early. HTML escapers do nothing here: esc_html() leaves a formula exactly as it found it."
 cwe = "CWE-1236"
 message = "This value is written into CSV without neutralising a leading formula character."
 

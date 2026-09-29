@@ -72,6 +72,12 @@ final class Shape
 
     private ?TaintSet $flat = null;
 
+    /** This shape's parts without its own taint, found once: see structure(). */
+    private ?self $structureOnce = null;
+
+    /** Every element and the rest joined, found once: see anyElement(). */
+    private ?self $anyOnce = null;
+
     /**
      * Each element standing for others, under EACH or an OTHERS key, with the
      * literal keys it leaves out as the keys of a set. Found on the first
@@ -327,7 +333,14 @@ final class Shape
             return self::empty();
         }
 
-        return new self(TaintSet::empty(), $this->keys, $this->elements, $this->rest, null, $this->keysProvenance);
+        return $this->structureOnce ??= new self(
+            TaintSet::empty(),
+            $this->keys,
+            $this->elements,
+            $this->rest,
+            null,
+            $this->keysProvenance,
+        );
     }
 
     /**
@@ -336,13 +349,17 @@ final class Shape
      */
     public function anyElement(): self
     {
+        if ($this->anyOnce !== null) {
+            return $this->anyOnce;
+        }
+
         $any = $this->restPart();
 
         foreach ($this->elements as $element) {
             $any = $any->join($element);
         }
 
-        return $any;
+        return $this->anyOnce = $any;
     }
 
     public function isEmpty(): bool

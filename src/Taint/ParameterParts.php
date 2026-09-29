@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Taint;
 
+use Enshrined\WpTaint\Registry\ArgumentSelector;
 use PHPCfg\Func;
 use PHPCfg\Op;
 use PHPCfg\Operand;
@@ -33,6 +34,11 @@ use PHPCfg\Operand;
  * parameter, by operand, to {@see Shape::DEPTH} steps. A write into an element
  * of a parameter reads nothing of it.
  *
+ * A function whose result keeps its input's keys is followed too, as a copy
+ * of the argument that is a part: `$args = wp_parse_args( $args, $defaults )`
+ * then `$args['title']` reads the parameter's `title`. Without it the
+ * parameter had no parts, and the caller's whole argument reached every read.
+ *
  * Under each node the body reads by literal key, {@see OTHERS} stands for
  * every literal key it does not name there. A caller's element under such a
  * key goes to that part rather than the node's, so it cannot reach the reads
@@ -61,17 +67,22 @@ final class ParameterParts
     private array $visiting = [];
 
     /**
-     * @param array<int, int> $indexes a parameter operand's object id => its index
+     * @param array<int, int>                 $indexes    a parameter operand's object id => its index
+     * @param array<string, ArgumentSelector> $keyKeepers see {@see of()}
      */
-    private function __construct(private readonly array $indexes)
+    private function __construct(private readonly array $indexes, private readonly array $keyKeepers)
     {
     }
 
     /**
+     * @param array<string, ArgumentSelector> $keyKeepers the functions whose result keeps its input's keys, by
+     *                                                    lower-case name, with the arguments it takes its
+     *                                                    elements from
+     *
      * @return array<int, list<list<int|string>>> parameter index => its parts, shortest first; part
      *                                            `n + 1` is the one at position `n`
      */
-    public static function of(Func $func): array
+    public static function of(Func $func, array $keyKeepers = []): array
     {
         $indexes = [];
 
@@ -85,7 +96,7 @@ final class ParameterParts
             return [];
         }
 
-        $finder = new self($indexes);
+        $finder = new self($indexes, $keyKeepers);
 
         /** @var array<int, array<string, list<int|string>>> $parts */
         $parts = [];
@@ -330,7 +341,9 @@ final class ParameterParts
                     $op->dim === null ? null : self::keyStep($op->dim),
                 ),
                 $op instanceof Op\Iterator\Value => $this->stepDown($this->pathOf($op->var, $hops + 1), self::ANY),
-                $op instanceof Op\Phi => $this->agreed($op, $hops),
+                $op instanceof Op\Phi => $this->agreed($op->vars, $hops),
+                $op instanceof Op\Expr\FuncCall,
+                $op instanceof Op\Expr\NsFuncCall => $this->agreed($this->keptFrom($op), $hops),
                 default => null,
             };
         } finally {
@@ -353,17 +366,43 @@ final class ParameterParts
     }
 
     /**
+     * The arguments a call's result takes its elements from, when the call
+     * keeps its input's keys. None for any other call.
+     *
+     * @return list<mixed>
+     */
+    private function keptFrom(Op\Expr\FuncCall|Op\Expr\NsFuncCall $call): array
+    {
+        $name = OperandHelper::literalString($call->name);
+        $selector = $name === null ? null : ($this->keyKeepers[strtolower(ltrim($name, '\\'))] ?? null);
+
+        if ($selector === null) {
+            return [];
+        }
+
+        return array_values(array_filter(
+            $call->args,
+            static fn (int $index): bool => $selector->contains($index),
+            ARRAY_FILTER_USE_KEY,
+        ));
+    }
+
+    /**
      * The part a join is, when every input that is a part agrees on which.
      * An input that is no part adds nothing a part could carry, so it is left
-     * out, as a literal default is: `$x = $flag ? $p['a'] : ''`.
+     * out, as a literal default is: `$x = $flag ? $p['a'] : ''`. A call that
+     * keeps its input's keys is read the same way, over the arguments it takes
+     * its elements from: `wp_parse_args( $args, array( 'title' => '' ) )`.
+     *
+     * @param array<mixed> $vars
      *
      * @return array{int, list<int|string>}|null
      */
-    private function agreed(Op\Phi $phi, int $hops): ?array
+    private function agreed(array $vars, int $hops): ?array
     {
         $found = null;
 
-        foreach ($phi->vars as $var) {
+        foreach ($vars as $var) {
             if (! $var instanceof Operand) {
                 continue;
             }

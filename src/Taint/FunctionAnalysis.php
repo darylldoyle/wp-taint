@@ -167,6 +167,15 @@ final class FunctionAnalysis
     /** The block being walked, so a sink can ask what guarded the path to it. */
     private ?Block $currentBlock = null;
 
+    /**
+     * The variables that can change out of sight: see referencedNames().
+     *
+     * @var array<string, true>|null
+     */
+    private ?array $referencedNames = null;
+
+    private bool $referencedNamesFound = false;
+
     /** The call currently being reported on, for sink strategies that need it. */
     private ?CallTarget $sinkCall = null;
 
@@ -1245,7 +1254,12 @@ final class FunctionAnalysis
         // here cannot start a fight. Pushing back the other
         // way would, because an ordinary assignment to the loop variable owns
         // that operand and would reset it every pass.
-        return $this->state->addShape($collection, Shape::rest(Shape::of($held)), $provenance);
+        //
+        // Each item goes back with its own parts. As one set, a row rewritten
+        // through `foreach ( $rows as &$row ) { $row['data'] = … }` put every
+        // value it held under every key of every row: a later `$row['data']`
+        // read the row's `'table'` and `'format'` as well.
+        return $this->state->addShape($collection, Shape::rest($this->state->valueShapeOf($value)), $provenance);
     }
 
     /**
@@ -1861,6 +1875,12 @@ final class FunctionAnalysis
             return $this->state->set($op->result, TaintSet::empty());
         }
 
+        $overwrite = $key === null ? null : $this->overwriteBefore($op, $key);
+
+        if ($overwrite !== null && $key !== null) {
+            return $this->transferOverwrittenRead($op, $key, $overwrite);
+        }
+
         if ($key !== null) {
             return $this->transferKeyedRead($op, [$key]);
         }
@@ -1877,6 +1897,235 @@ final class FunctionAnalysis
             $op->var,
             sprintf('Read out of %s.', OperandHelper::describe($op->var)),
         );
+    }
+
+    /**
+     * The write that last set this element, earlier in the same block, when
+     * nothing between could have changed it.
+     *
+     * php-cfg keeps one operand for an array however many of its elements are
+     * written, so a write under a key joins the element it replaces:
+     *
+     * ```php
+     * $args['include'] = implode( ',', wp_parse_id_list( $args['include'] ) );
+     * $include         = 'AND webhook_id IN (' . $args['include'] . ')';
+     * ```
+     *
+     * read the request's list, which the first line had replaced with ids.
+     * Within one block the ops run in order, so the read sees exactly what
+     * the write left. Anything between that touches the array, other than a
+     * read or write under a different literal key, ends the search: a write
+     * under a computed key, a push that could land on an integer key, a call
+     * the array is handed to, an `unset()`. So does an array that can change
+     * without its operand in sight: one a reference, a `global`, a `static` or
+     * a by-reference capture binds. See {@see referencedNames()}.
+     */
+    private function overwriteBefore(Op\Expr\ArrayDimFetch $read, int|string $key): ?Op\Expr\Assign
+    {
+        $block = $this->currentBlock;
+        $array = $read->var;
+
+        $name = OperandHelper::variableName($array);
+        $referenced = $this->referencedNames();
+
+        if ($block === null || $name === 'GLOBALS' || $referenced === null || isset($referenced[$name ?? ''])) {
+            return null;
+        }
+
+        $children = array_values($block->children);
+        $at = self::positionOf($read, $children);
+
+        if ($at === null) {
+            return null;
+        }
+
+        // Back from the read, nearest first.
+        foreach (array_reverse(array_slice($children, 0, $at, true), true) as $index => $op) {
+            if (! in_array($op, $array->usages, true)) {
+                continue;
+            }
+
+            if (! $op instanceof Op\Expr\ArrayDimFetch || $op->var !== $array) {
+                return null;
+            }
+
+            if ($op->dim === null) {
+                // A push takes the next integer key, which could be this one.
+                if (is_int($key)) {
+                    return null;
+                }
+
+                continue;
+            }
+
+            $written = OperandHelper::literalKey($op->dim);
+
+            if ($written === null) {
+                return null;
+            }
+
+            if ($written !== $key) {
+                continue;
+            }
+
+            // The same element: the write that set it, or a read of it or a
+            // write below it, which ends the search.
+            foreach ($op->result->ops as $writer) {
+                if ($writer instanceof Op\Expr\Assign && $writer->var === $op->result) {
+                    $position = self::positionOf($writer, $children);
+
+                    return $position !== null && $position > $index && $position < $at ? $writer : null;
+                }
+            }
+
+            return null;
+        }
+
+        return null;
+    }
+
+    /**
+     * @param list<Op> $ops
+     */
+    private static function positionOf(Op $op, array $ops): ?int
+    {
+        foreach ($ops as $position => $each) {
+            if ($each === $op) {
+                return $position;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The variables in this function that can change without an op on their
+     * operand, by name, or null when any of them can: see
+     * {@see overwriteBefore()}.
+     *
+     * A reference binds the variables on both sides, a `global` or `static`
+     * the one it names, a by-reference loop its collection and value, and a
+     * closure the variables it captures by reference. Only an include,
+     * `eval`, `extract()`, `parse_str()` or a variable variable can change a
+     * variable the code never names, so only those give up on every one.
+     *
+     * @return array<string, true>|null
+     */
+    private function referencedNames(): ?array
+    {
+        if ($this->referencedNamesFound) {
+            return $this->referencedNames;
+        }
+
+        $this->referencedNamesFound = true;
+        $names = [];
+
+        foreach ($this->context->func->params as $param) {
+            if ($param->byRef) {
+                $names[] = OperandHelper::variableName($param->result);
+            }
+        }
+
+        foreach ($this->blocks as $block) {
+            foreach ($block->children as $op) {
+                if (
+                    $op instanceof Op\Expr\Include_
+                    || $op instanceof Op\Expr\Eval_
+                    || $op instanceof Op\Expr\VarVar
+                ) {
+                    return $this->referencedNames = null;
+                }
+
+                if ($op instanceof Op\Expr\FuncCall || $op instanceof Op\Expr\NsFuncCall) {
+                    $name = OperandHelper::literalString($op->name);
+
+                    if ($name !== null && in_array(strtolower(ltrim($name, '\\')), ['extract', 'parse_str'], true)) {
+                        return $this->referencedNames = null;
+                    }
+                }
+
+                if ($op instanceof Op\Expr\AssignRef) {
+                    $names[] = self::baseName($op->var);
+                    $names[] = self::baseName($op->expr);
+                }
+
+                if ($op instanceof Op\Terminal\GlobalVar || $op instanceof Op\Terminal\StaticVar) {
+                    $names[] = OperandHelper::variableName($op->var) ?? OperandHelper::literalString($op->var);
+                }
+
+                if ($op instanceof Op\Iterator\Value && $op->byRef) {
+                    $names[] = self::baseName($op->var);
+                    $names[] = OperandHelper::variableName($op->result);
+                }
+
+                if ($op instanceof Op\Expr\Closure) {
+                    foreach ($op->useVars as $use) {
+                        if ($use instanceof Operand\BoundVariable && $use->byRef) {
+                            $names[] = OperandHelper::literalString($use->name);
+                        }
+                    }
+                }
+            }
+        }
+
+        $this->referencedNames = [];
+
+        foreach ($names as $name) {
+            if ($name !== null) {
+                $this->referencedNames[$name] = true;
+            }
+        }
+
+        return $this->referencedNames;
+    }
+
+    /**
+     * The variable an operand is, or the one it is an element or property
+     * of: `$args` for `$args['k']['j']`.
+     */
+    private static function baseName(Operand $operand): ?string
+    {
+        for ($hops = 0; $hops < Shape::DEPTH + 2; $hops++) {
+            $name = OperandHelper::variableName($operand);
+
+            if ($name !== null) {
+                return $name;
+            }
+
+            $definition = OperandHelper::definingOp($operand);
+
+            if (! $definition instanceof Op\Expr\ArrayDimFetch && ! $definition instanceof Op\Expr\PropertyFetch) {
+                return null;
+            }
+
+            $operand = $definition->var;
+        }
+
+        return null;
+    }
+
+    /**
+     * A read of an element the same block wrote earlier: what the write left.
+     */
+    private function transferOverwrittenRead(Op\Expr\ArrayDimFetch $op, int|string $key, Op\Expr\Assign $write): bool
+    {
+        $value = $write->expr;
+        $proof = $this->proofFor($value, $this->currentBlock);
+        $taint = self::guarded($this->state->taintOf($value), $proof);
+        $provenance = new Provenance(
+            TraceVerb::Propagate,
+            $op,
+            sprintf(
+                "Read out of %s['%s'], as the write on line %d left it.",
+                OperandHelper::describe($op->var),
+                $key,
+                $write->getLine(),
+            ),
+            [$value],
+        );
+        $changed = $proof === null && $this->state->addShape($op->result, $this->state->shapeOf($value), $provenance);
+
+        return $this->state->set($op->result, $taint, $taint->isEmpty() ? null : $provenance) || $changed;
     }
 
     /**
@@ -2851,7 +3100,8 @@ final class FunctionAnalysis
 
     /**
      * What a function that can undo escaping leaves of a value: its escaped
-     * SQL residuals as raw `sql` again.
+     * SQL residuals as raw `sql` again, and a formula behind an apostrophe as
+     * a formula, since `substr( $v, 1 )` takes the apostrophe off.
      *
      * A probe run notes that it happened to SQL-carrying data, so the summary
      * can say a caller's escaped argument may come back unescaped. See
@@ -2859,9 +3109,9 @@ final class FunctionAnalysis
      */
     private function undoneEscaping(TaintSet $taint): TaintSet
     {
-        $this->noteReverted(self::sqlResiduals(), $taint);
+        $this->noteReverted(self::residuals(), $taint);
 
-        return self::unescapedSql($taint);
+        return self::unescaped($taint);
     }
 
     /**
@@ -2876,13 +3126,32 @@ final class FunctionAnalysis
             return;
         }
 
-        $sql = $residuals->intersect(self::sqlResiduals());
-
-        if ($sql->isEmpty() || ! $taint->has(TaintKind::Sql) || ! $taint->has(TaintKind::Seed)) {
+        if (! $taint->has(TaintKind::Seed)) {
             return;
         }
 
-        $this->revertedResiduals = ($this->revertedResiduals ?? TaintSet::empty())->union($sql);
+        $noted = $taint->has(TaintKind::Sql) ? $residuals->intersect(self::sqlResiduals()) : TaintSet::empty();
+
+        if ($taint->has(TaintKind::Csv) && $residuals->has(TaintKind::CsvPrefixed)) {
+            $noted = $noted->with(TaintKind::CsvPrefixed);
+        }
+
+        if ($noted->isEmpty()) {
+            return;
+        }
+
+        $this->revertedResiduals = ($this->revertedResiduals ?? TaintSet::empty())->union($noted);
+    }
+
+    /**
+     * Every kind an escaper leaves that a later function can undo.
+     */
+    private static function residuals(): TaintSet
+    {
+        /** @var TaintSet|null $residuals */
+        static $residuals = null;
+
+        return $residuals ??= self::sqlResiduals()->with(TaintKind::CsvPrefixed);
     }
 
     private static function sqlResiduals(): TaintSet
@@ -2894,17 +3163,20 @@ final class FunctionAnalysis
     }
 
     /**
-     * An escaped SQL value's residuals turned back into `sql`.
+     * An escaped SQL value's residuals turned back into `sql`, and
+     * `csv_prefixed` back into `csv`.
      */
-    private static function unescapedSql(TaintSet $taint): TaintSet
+    private static function unescaped(TaintSet $taint): TaintSet
     {
         $residuals = self::sqlResiduals();
 
-        if ($taint->intersect($residuals)->isEmpty()) {
-            return $taint;
+        if (! $taint->intersect($residuals)->isEmpty()) {
+            $taint = $taint->without($residuals)->with(TaintKind::Sql);
         }
 
-        return $taint->without($residuals)->with(TaintKind::Sql);
+        return $taint->has(TaintKind::CsvPrefixed)
+            ? $taint->without(TaintSet::of(TaintKind::CsvPrefixed))->with(TaintKind::Csv)
+            : $taint;
     }
 
     /**
@@ -3112,7 +3384,9 @@ final class FunctionAnalysis
             ? null
             : new Provenance(TraceVerb::Propagate, $op, $description, $inputs, imprecise: $imprecise);
 
-        $changed = $this->writeResult($op->result, $taint, $provenance);
+        // A result that keeps its inputs' keys keeps each element's markers
+        // with the element, so the call's own `escaped` is only theirs.
+        $changed = $this->writeResult($op->result, $taint, $provenance, $keepsKeys ? $inputs : []);
 
         if ($provenance === null) {
             return $changed;
@@ -3379,6 +3653,84 @@ final class FunctionAnalysis
     private function keysOf(Operand $array): TaintSet
     {
         return $this->state->taintOf($array)->union($this->state->shapeOf($array)->keysTaint());
+    }
+
+    /**
+     * What an array holds as values, at any depth, and not its keys.
+     */
+    private function valuesOf(Operand $array): TaintSet
+    {
+        return $this->state->taintOf($array)->union($this->state->shapeOf($array)->anyElement()->flatten());
+    }
+
+    /**
+     * `array_flip()`, `array_combine()`, `array_fill_keys()` and
+     * `array_count_values()`: the first array's values become the result's
+     * keys.
+     *
+     * ```php
+     * $ids = array_fill_keys( $_GET['ids'], true );
+     * foreach ( $ids as $id => $on ) { echo $id; }   // the request's values
+     * ```
+     *
+     * A plain propagator put everything into the result's value, so a
+     * `foreach` key or `array_keys()` read nothing. `array_flip()` also makes
+     * the keys the values. `array_combine()` takes its values from the second
+     * array, each with what it holds below itself, `array_fill_keys()` puts
+     * the second argument under every key, and `array_count_values()` counts.
+     * Null when an argument is missing, for the plain reading.
+     */
+    private function transferValuesToKeys(Op\Expr $op, CallTarget $call, Matcher $matcher, string $description): ?bool
+    {
+        $first = $call->argument(0);
+        $second = $call->argument(1);
+        $name = $matcher->key();
+
+        $oneArgument = in_array($name, ['function:array_flip', 'function:array_count_values'], true);
+
+        if ($first === null || (! $oneArgument && $second === null)) {
+            return null;
+        }
+
+        $keys = $this->valuesOf($first);
+        $own = TaintSet::empty();
+
+        if ($name === 'function:array_flip') {
+            $values = Shape::of($this->keysOf($first));
+        } elseif ($name === 'function:array_count_values') {
+            // Each value is a count, an integer the input cannot choose.
+            $values = Shape::empty();
+        } elseif ($name === 'function:array_combine' && $second !== null) {
+            $own = $this->state->taintOf($second);
+            $values = $this->state->shapeOf($second)->anyElement();
+        } else {
+            $values = $second === null
+                ? Shape::empty()
+                : Shape::node($this->state->taintOf($second), $this->state->shapeOf($second)->structure());
+        }
+
+        $provenance = new Provenance(
+            TraceVerb::Propagate,
+            $op,
+            sprintf(
+                $name === 'function:array_flip'
+                    ? '%s makes the values the keys, and the keys the values.'
+                    : '%s makes the first array\'s values the keys.',
+                $matcher->describe(),
+            ),
+            array_values(array_filter([$first, $second])),
+        );
+        $changed = $this->writeResult($op->result, $own, $own->isEmpty() ? null : $provenance);
+
+        if (! $keys->isEmpty()) {
+            $changed = $this->state->addShape($op->result, Shape::keys($keys, $provenance), $provenance) || $changed;
+        }
+
+        if (! $values->isEmpty()) {
+            $changed = $this->state->addShape($op->result, Shape::rest($values), $provenance) || $changed;
+        }
+
+        return $changed;
     }
 
     private function transferPassThrough(Op\Expr $op, Operand $input, string $description): bool
@@ -3716,9 +4068,17 @@ final class FunctionAnalysis
         return implode("\n", $lines);
     }
 
-    private function writeResult(Operand $result, TaintSet $taint, ?Provenance $provenance = null): bool
-    {
-        $voided = $this->voidEscaping($taint);
+    /**
+     * @param list<Operand|null> $keptInputs arguments whose elements the result keeps under their own keys: see
+     *                                       {@see voidEscaping()}
+     */
+    private function writeResult(
+        Operand $result,
+        TaintSet $taint,
+        ?Provenance $provenance = null,
+        array $keptInputs = [],
+    ): bool {
+        $voided = $this->voidEscaping($taint, $keptInputs);
 
         // Say where. A step describing the propagation is the wrong answer to
         // "filtered where?", and it was the only one in the trace. The prefix
@@ -4166,6 +4526,7 @@ final class FunctionAnalysis
             $incoming,
             $sanitizer->clearsBy === null ? null : ($proof->clears ?? TaintSet::empty()),
             $proof->sqlQuotedOnly ?? false,
+            $proof->csvPrefixOnly ?? false,
         );
 
         // Remember that this value has been escaped, so that a filter standing
@@ -4524,15 +4885,23 @@ final class FunctionAnalysis
      */
     private static function residualsThrough(TaintSet $argument, TaintSet $reached, ?TaintSet $reverts): TaintSet
     {
+        $through = TaintSet::empty();
         $residuals = $argument->intersect(self::sqlResiduals());
 
-        if ($residuals->isEmpty() || ! $reached->has(TaintKind::Sql)) {
-            return TaintSet::empty();
+        if (! $residuals->isEmpty() && $reached->has(TaintKind::Sql)) {
+            $through = $reverts !== null && ! $reverts->intersect(self::sqlResiduals())->isEmpty()
+                ? TaintSet::of(TaintKind::Sql)
+                : $residuals;
         }
 
-        return $reverts !== null && ! $reverts->intersect(self::sqlResiduals())->isEmpty()
-            ? TaintSet::of(TaintKind::Sql)
-            : $residuals;
+        // A formula behind an apostrophe rides with `csv` the same way.
+        if ($argument->has(TaintKind::CsvPrefixed) && $reached->has(TaintKind::Csv)) {
+            $through = $through->with(
+                $reverts !== null && $reverts->has(TaintKind::CsvPrefixed) ? TaintKind::Csv : TaintKind::CsvPrefixed,
+            );
+        }
+
+        return $through;
     }
 
     /**
@@ -4546,11 +4915,12 @@ final class FunctionAnalysis
      */
     private static function madeFrom(TaintSet $argument, TaintSet $reached): TaintSet
     {
-        if (! $argument->has(TaintKind::Sql)) {
-            return TaintSet::empty();
-        }
+        $made = $argument->has(TaintKind::Sql) ? $reached->intersect(self::sqlResiduals()) : TaintSet::empty();
 
-        return $reached->intersect(self::sqlResiduals());
+        // `function acme_cell( $v ) { return preg_replace( '/^([=+\-@])/', "'$1", $v ); }`
+        return $argument->has(TaintKind::Csv) && $reached->has(TaintKind::CsvPrefixed)
+            ? $made->with(TaintKind::CsvPrefixed)
+            : $made;
     }
 
     /**
@@ -5098,7 +5468,22 @@ final class FunctionAnalysis
         // reads and returns. See {@see CallTarget::$positional}.
         $plain = $call->positional && $this->resultMode === CallResultMode::Value;
 
-        if ($plain && $matcher->key() === 'function:array_column') {
+        $movesValuesToKeys = [
+            'function:array_flip',
+            'function:array_combine',
+            'function:array_fill_keys',
+            'function:array_count_values',
+        ];
+
+        if ($plain && in_array($matcher->key(), $movesValuesToKeys, true)) {
+            $moved = $this->transferValuesToKeys($op, $call, $matcher, $description);
+
+            if ($moved !== null) {
+                return $moved;
+            }
+        }
+
+        if ($plain && in_array($matcher->key(), ['function:array_column', 'function:wp_list_pluck'], true)) {
             $column = $this->transferColumn($op, $call, $description);
 
             if ($column !== null) {
@@ -5165,10 +5550,11 @@ final class FunctionAnalysis
     }
 
     /**
-     * `array_column( $rows, 'title', 'id' )`: each row's element under the
-     * column key, under a computed key, with each row's index column as the
-     * keys. A column key the resolver cannot name reads any element of each
-     * row, and a null column hands back the rows whole. The column and index
+     * `array_column( $rows, 'title', 'id' )`, and WordPress's
+     * `wp_list_pluck()`, which takes the same arguments: each row's element
+     * under the column key, under a computed key, with each row's index
+     * column as the keys. A column key the resolver cannot name reads any
+     * element of each row, and a null column hands back the rows whole. The column and index
      * arguments only pick elements, as a key does in a read.
      *
      * Null when a guard vouched for the rows, which reads them as one set.
@@ -6426,6 +6812,13 @@ final class FunctionAnalysis
                         $reference->sinkIdentity,
                         $reference->functionDisplayName,
                     ),
+                    TaintKind::CsvPrefixed => sprintf(
+                        'Reaches %s inside %s behind an apostrophe. The writer keeps a backslash as its escape '
+                            . 'character, so a quote after one ends the cell early and starts a cell the apostrophe '
+                            . 'does not cover. Pass an empty escape character.',
+                        $reference->sinkIdentity,
+                        $reference->functionDisplayName,
+                    ),
                     default => sprintf(
                         'Reaches %s inside %s with %s taint intact.',
                         $reference->sinkIdentity,
@@ -6549,8 +6942,15 @@ final class FunctionAnalysis
      * Applied in writeResult() rather than in one of the role branches because
      * a dispatcher can also be a propagator or resolve to callees, and all of
      * those paths end here.
+     *
+     * An argument whose elements the result keeps under their own keys lends
+     * the result its own taint only. Each element keeps its own `escaped`,
+     * so `apply_filters( 'x', array( 'a' => esc_html( $v ), 'n' => 12 ) )`
+     * voids `'a'` and leaves `'n'`, which nobody escaped, to the other rules.
+     *
+     * @param list<Operand|null> $keptInputs
      */
-    private function voidEscaping(TaintSet $taint): TaintSet
+    private function voidEscaping(TaintSet $taint, array $keptInputs = []): TaintSet
     {
         if ($this->voidingCall === null) {
             return $taint;
@@ -6567,7 +6967,16 @@ final class FunctionAnalysis
         // `echo get_option( 'x' )` reports twice — once as unescaped output,
         // which is the real finding, and once as voided escaping, which adds
         // nothing to it.
-        $incoming = $this->state->unionOf($this->voidingCall->arguments);
+        $incoming = TaintSet::empty();
+
+        foreach ($this->voidingCall->arguments as $argument) {
+            $incoming = $incoming->union(
+                in_array($argument, $keptInputs, true)
+                    ? $this->state->taintOf($argument)
+                    : $this->state->effectiveTaintOf($argument),
+            );
+        }
+
         $voided = $taint->union(TaintSet::of(TaintKind::EscapeVoided));
 
         return $incoming->has(TaintKind::Escaped)
@@ -6628,12 +7037,16 @@ final class FunctionAnalysis
      * `unserialize_allows_objects`: a call that already forbids classes cannot
      * run a POP chain, and reporting it would tell people to do the thing they
      * have done.
+     *
+     * `csv_escapable`: a writer that doubles every quote keeps each value in
+     * its own cell, so an apostrophe in front of it covers all of it.
      */
     private function sinkApplies(Sink $sink, Operand $operand): bool
     {
         return match ($sink->appliesBy) {
             Sink::UNANCHORED => ! $this->anchors->has($operand),
             Sink::UNSERIALIZE_ALLOWS_OBJECTS => $this->sinkCall === null || ! $this->forbidsClasses($this->sinkCall),
+            Sink::CSV_ESCAPABLE => $this->sinkCall === null || ! self::escapesEveryQuote($this->sinkCall),
             Sink::ESCAPED_THEN_VOIDED => $this->state->effectiveTaintOf($operand)->has(TaintKind::Escaped),
             // A component whose tags were stripped and whose quotes were not,
             // landing inside a quoted attribute. `html` is excluded so a raw
@@ -6669,6 +7082,21 @@ final class FunctionAnalysis
         $name = OperandHelper::literalString($definition->name);
 
         return $name !== null && strtolower($name) === 'false';
+    }
+
+    /**
+     * Does this `fputcsv()` call pass an empty escape character?
+     *
+     * Read as the fifth argument, written as a literal. PHP's default is a
+     * backslash, and `"\0"` or any other character leaves the same gap for a
+     * value that holds it. A named `escape:` argument is not read, because the
+     * control flow graph keeps arguments by position only, so it reports.
+     */
+    private static function escapesEveryQuote(CallTarget $call): bool
+    {
+        $escape = $call->argument(4);
+
+        return $escape !== null && OperandHelper::literalString($escape) === '';
     }
 
     /**
@@ -6727,6 +7155,10 @@ final class FunctionAnalysis
         if (! $taint->has($sink->kind)) {
             $this->checkQueryShape($sink, $op, $operand, $identity);
 
+            if ($sink->kind === TaintKind::CsvPrefixed && $this->sinkApplies($sink, $operand)) {
+                $this->recordPrefixContext($sink, $op, $operand, $identity);
+            }
+
             return;
         }
 
@@ -6753,6 +7185,7 @@ final class FunctionAnalysis
 
         $this->recordSinkReference($sink, $op, $identity, $taint->partsOf($sink->kind));
         $this->recordQuoteContext($sink, $op, $operand, $identity);
+        $this->recordPrefixContext($sink, $op, $operand, $identity);
 
         if (! $this->collecting || ! $this->collectFindings) {
             return;
@@ -6765,7 +7198,14 @@ final class FunctionAnalysis
             $op,
             $identity,
             $operand,
-            sprintf('Reaches %s with %s taint intact.', $identity, $sink->kind->value),
+            $sink->kind === TaintKind::CsvPrefixed
+                ? sprintf(
+                    'Reaches %s behind an apostrophe, with a backslash as the escape character. A quote after a '
+                        . 'backslash ends the cell early and starts a cell the apostrophe does not cover. Pass an '
+                        . 'empty escape character: fputcsv( $handle, $row, \',\', \'"\', \'\' ).',
+                    $identity,
+                )
+                : sprintf('Reaches %s with %s taint intact.', $identity, $sink->kind->value),
         );
     }
 
@@ -6962,6 +7402,44 @@ final class FunctionAnalysis
                 $this->state->effectiveTaintOf($component)->parts(),
             );
         }
+    }
+
+    /**
+     * Where the seeded parameter reaches a writer that lets a cell end early,
+     * for a caller whose value, or this callee, put an apostrophe in front.
+     *
+     * The probe seeds `csv`. A caller that neutralised its argument passes
+     * `csv_prefixed`, which a reference recorded for `csv` does not match. A
+     * callee that neutralises the parameter itself reaches the sink with
+     * `csv_prefixed`, which the caller's `csv` does not match. So each records
+     * a reference for the other kind as well.
+     */
+    private function recordPrefixContext(Sink $sink, Op $op, Operand $operand, string $identity): void
+    {
+        if ($sink->kind !== TaintKind::CsvPrefixed || $this->seedParameterIndex === null || ! $this->collecting) {
+            return;
+        }
+
+        $taint = $this->guardedEffectiveTaintOf($operand);
+
+        if (! $taint->has(TaintKind::Seed)) {
+            return;
+        }
+
+        [$held, $other] = $taint->has(TaintKind::CsvPrefixed)
+            ? [TaintKind::CsvPrefixed, TaintKind::Csv]
+            : [TaintKind::Csv, TaintKind::CsvPrefixed];
+
+        if (! $taint->has($held)) {
+            return;
+        }
+
+        $this->recordSinkReference(
+            new Sink($sink->matcher, $sink->arguments, $other, $sink->severity, $sink->ruleId),
+            $op,
+            $identity,
+            $taint->partsOf($held),
+        );
     }
 
     /**

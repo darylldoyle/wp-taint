@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Taint;
 
+use Enshrined\WpTaint\Registry\ArgumentSelector;
+
 /**
  * Computes a function's {@see FunctionSummary}.
  *
@@ -35,6 +37,13 @@ final class SummaryExtractor
      */
     private array $parameterParts = [];
 
+    /**
+     * The functions whose result keeps its input's keys, found once.
+     *
+     * @var array<string, ArgumentSelector>|null
+     */
+    private ?array $keyKeepers = null;
+
     public function __construct(
         private readonly IntraproceduralAnalyzer $analyzer,
         private readonly AnalysisOptions $options,
@@ -63,7 +72,10 @@ final class SummaryExtractor
         $paramToReturnEach = [];
         $imprecise = $parameterCount > $analysed;
 
-        $parts = $this->parameterParts[$context->key] ??= ParameterParts::of($context->func);
+        $parts = $this->parameterParts[$context->key] ??= ParameterParts::of(
+            $context->func,
+            $this->keyKeepers ??= $this->analyzer->keyKeepers(),
+        );
 
         for ($index = 0; $index < $analysed; $index++) {
             $result = $this->analyzer->analyze(

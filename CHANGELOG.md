@@ -9,6 +9,19 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `wp_parse_args()` and `wp_list_pluck()` keep each element apart. They
+  returned clean before, as a function the registry does not model does.
+  `wp_parse_args()` keeps each key of the caller's array over the defaults, as
+  `array_merge()` does, and a query string it parses carries its own text into
+  each key. `wp_list_pluck()` reads only the field it names from each row, as
+  `array_column()` does.
+- A function that reads its parameter through `wp_parse_args()`,
+  `array_merge()` or another function that keeps its input's keys reads it key
+  by key. `$args = wp_parse_args( $args, $defaults )` then `$args['title']`
+  reads the parameter's `'title'`. The parameter had no parts before, so a
+  caller's whole argument reached every read. Custom Post Type UI's select
+  input compares the selected value and prints only the options, so the
+  selected value no longer reaches the options it prints.
 - A strict `in_array()` against a list the code built itself is a guard. It
   counted only against a literal array before. WooCommerce's REST settings
   controllers check each setting a request names against the ids of their own
@@ -154,6 +167,54 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A by-reference loop wrote each item back into the collection as one set.
+  After `foreach ( $rows as &$row ) { $row['data'] = … }`, a later
+  `$row['data']` read every value each row held under any key.
+  WooCommerce's order save filters its rows this way, and the stored order
+  values reached the column names its insert helper builds a query from.
+  Each item now goes back with its own parts.
+- `array_flip()`, `array_combine()` and `array_fill_keys()` put what they
+  read into the result's value, so the keys they build carried nothing.
+  `array_fill_keys( $_GET['ids'], true )` and then a `foreach` key or
+  `array_keys()` read clean. The first array's values now become the keys.
+  `array_flip()` also makes the keys the values, so flipping
+  `array( 'a' => $_GET['v'] )` gives values that are only `'a'`.
+  `array_count_values()` makes the values the keys too, and counts them. A
+  count is an integer, so it no longer reports.
+- A write under a literal key joined the element it replaced.
+  `$args['include'] = absint( $args['include'] )` and then
+  `echo $args['include']` reported the request data the first line had
+  replaced. php-cfg keeps one operand for the array, so both values sat in one
+  element. A read later in the same block, with nothing between that could
+  change the element, now sees only what the write left. WooCommerce's
+  webhook search builds `IN (…)` from ids this way.
+- A filter that returned an array spread one element's `escaped` marker to
+  every element. `apply_filters( 'x', array( 'amount' => esc_html( $a ),
+  'size' => 12 ) )['size']` reported as voided escaping, though nobody escaped
+  it. The result keeps its input's keys, and each element now keeps its own
+  marker, so only `'amount'` reports. A value handed to the filter beside the
+  array still counts, because a callback can return it.
+- The CSV formula neutraliser was credited whatever wrote the file. An
+  apostrophe in front of a formula covers the cell's first character, and
+  `fputcsv()`'s default escape character, a backslash, lets a quote in the
+  value end the cell early. What follows is a new cell the apostrophe does not
+  cover. The neutralised value now carries `csv_prefixed`, and `fputcsv()`
+  reports it unless the call passes an empty escape character,
+  `fputcsv( $h, $row, ',', '"', '' )`. A tab or a space in front no longer
+  counts, since `trim()` removes either. A summary also kept one reference per
+  sink and rule, so a second kind reported at the same sink was lost. It now
+  keeps one per kind.
+- `wp.csrf.bypassable-nonce-check` reported a nonce check that stops a
+  request with no nonce anyway (issue 8). The rule saw
+  `isset( $n ) && ! wp_verify_nonce( $n )` and stopped there. It did not look
+  at `! isset( $n ) || …` around it, which makes the whole test true when the
+  nonce is missing. It now asks what the request without the nonce does, and
+  stays quiet in two cases. In the first, the whole condition then takes the
+  same value as for a wrong nonce. In the second, an earlier branch of the
+  same function is certainly taken and ends in `return`, `exit`, `throw` or
+  `wp_die()`. `isset()` and `empty()` of the nonce are the only tests it
+  reads. A check that is still skipped, such as `… || ! current_user_can()`,
+  is still reported.
 - A helper that returns its argument as it came dropped two markers the
   argument carried. An escaped value filtered and then passed through
   `function acme_id( $v ) { return $v; }` lost its escape-voided finding, and

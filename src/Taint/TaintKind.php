@@ -175,6 +175,25 @@ enum TaintKind: string
     case Csv = 'csv';
 
     /**
+     * A formula behind an apostrophe, safe only where no cell can end early.
+     *
+     * The apostrophe {@see self::Csv} asks for covers the cell's first
+     * character. `fputcsv()` with its default escape character, a backslash,
+     * does not double a quote that follows one, so a spreadsheet reads the
+     * quote as the end of the cell:
+     *
+     * ```php
+     * // $v = 'x\\",=HYPERLINK("http://evil")'
+     * fputcsv( $out, array( "'" . $v ) );             // a second cell, starting with =
+     * fputcsv( $out, array( "'" . $v ), ',', '"', '' ); // one cell, and it is text
+     * ```
+     *
+     * So the neutraliser trades `csv` for this, and the sink reports it only
+     * where the writer's escape character is not an empty string.
+     */
+    case CsvPrefixed = 'csv_prefixed';
+
+    /**
      * Where this value came from, nobody here can say.
      *
      * A parameter of a function no caller in the scan reaches; the result of a
@@ -287,6 +306,7 @@ enum TaintKind: string
             self::Storage => 1 << 19,
             self::Authz => 1 << 11,
             self::Seed => 1 << 23,
+            self::CsvPrefixed => 1 << 24,
         };
     }
 
@@ -320,6 +340,7 @@ enum TaintKind: string
             self::SqlUnquoted,
             self::SqlSelfQuoted,
             self::SqlUnticked,
+            self::CsvPrefixed,
             self::Escaped,
             self::EscapeVoided,
             self::Unknown => true,
@@ -372,6 +393,7 @@ enum TaintKind: string
             self::Escaped => 'escaped',
             self::EscapeVoided => 'escaping voided by a filter',
             self::Csv => 'spreadsheet formula',
+            self::CsvPrefixed => 'spreadsheet formula behind an apostrophe',
             self::Unknown => 'unknown provenance',
             self::Storage => 'unsanitised for storage',
             self::Authz => 'authorization',
