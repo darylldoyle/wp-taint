@@ -167,6 +167,14 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `array_flip()`, `array_combine()` and `array_fill_keys()` put what they
+  read into the result's value, so the keys they build carried nothing.
+  `array_fill_keys( $_GET['ids'], true )` and then a `foreach` key or
+  `array_keys()` read clean. The first array's values now become the keys.
+  `array_flip()` also makes the keys the values, so flipping
+  `array( 'a' => $_GET['v'] )` gives values that are only `'a'`.
+  `array_count_values()` makes the values the keys too, and counts them. A
+  count is an integer, so it no longer reports.
 - A write under a literal key joined the element it replaced.
   `$args['include'] = absint( $args['include'] )` and then
   `echo $args['include']` reported the request data the first line had
