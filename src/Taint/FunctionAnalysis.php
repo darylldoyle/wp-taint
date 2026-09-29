@@ -1457,9 +1457,7 @@ final class FunctionAnalysis
         $calls = $this->resolver->resolveAll($op, $this->context, $this->types);
 
         if ($calls !== [] && $op instanceof Op\Expr) {
-            $changed = $this->transferCalls($op, $calls);
-
-            return $this->keepMappedKeys($op) || $changed;
+            return $this->transferCalls($op, $calls);
         }
 
         return match (true) {
@@ -3919,43 +3917,6 @@ final class FunctionAnalysis
         }
 
         return $changed;
-    }
-
-    /**
-     * `array_map( $cb, $items )` with one array keeps its keys, whatever the
-     * callback returns under them. With more than one it numbers them.
-     *
-     * The callback's returns go under a computed key of the result, and the
-     * keys went nowhere: `foreach ( array_map( 'trim', $rows ) as $k => $v )`
-     * read `$k` clean when `$rows` was keyed by request data.
-     */
-    private function keepMappedKeys(Op\Expr $op): bool
-    {
-        if (! ($op instanceof Op\Expr\FuncCall || $op instanceof Op\Expr\NsFuncCall) || count($op->args) !== 2) {
-            return false;
-        }
-
-        $name = OperandHelper::literalString($op->name);
-        $items = $op->args[1] ?? null;
-
-        if ($name === null || strtolower(ltrim($name, '\\')) !== 'array_map' || ! $items instanceof Operand) {
-            return false;
-        }
-
-        $keys = $this->keysOf($items);
-
-        if ($keys->isEmpty()) {
-            return false;
-        }
-
-        $provenance = new Provenance(
-            TraceVerb::Propagate,
-            $op,
-            'array_map() keeps the keys of the one array it maps.',
-            [$items],
-        );
-
-        return $this->state->addShape($op->result, Shape::keys($keys, $provenance), $provenance);
     }
 
     /**

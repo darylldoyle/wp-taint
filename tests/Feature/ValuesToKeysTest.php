@@ -39,10 +39,6 @@ it('carries the values into the keys', function (string $body): void {
         $counts = array_count_values( array( $_GET['x'] ) );
         foreach ( $counts as $value => $n ) { echo $value; }
         PHP],
-    'array_map() over one array keeps its keys' => [<<<'PHP'
-        $rows = array( $_GET['k'] => 'v' );
-        foreach ( array_map( 'strtoupper', $rows ) as $key => $value ) { echo $key; }
-        PHP],
     'array_fill_keys() read by foreach' => [<<<'PHP'
         $ids = array_fill_keys( array( $_GET['k'] ), true );
         foreach ( $ids as $id => $on ) { echo $id; }
