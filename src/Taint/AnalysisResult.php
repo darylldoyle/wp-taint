@@ -88,6 +88,13 @@ final class AnalysisResult
          * undone. See {@see FunctionSummary::$revertedResiduals}.
          */
         public readonly ?TaintSet $revertedResiduals = null,
+        /**
+         * The parameters the function hands on to a callee's key parameter:
+         * see {@see FunctionSummary::$keyParameters}.
+         *
+         * @var list<int>
+         */
+        public readonly array $forwardedKeyParameters = [],
     ) {
     }
 }

@@ -79,8 +79,8 @@ it('still reports what a returned array holds under a computed key', function ()
             $out[ $key ] = $_GET['i'];
             return $out;
         }
-        function acme_show() {
-            $data = acme_by_key( 'x' );
+        function acme_show( $name ) {
+            $data = acme_by_key( $name );
             echo $data['safe']['id'];
         }
         PHP))->toBe(['wp.xss.unescaped-output@9']);

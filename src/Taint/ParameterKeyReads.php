@@ -93,24 +93,36 @@ final class ParameterKeyReads
     }
 
     /**
+     * @param array<int, int|string> $bindings for a summary variant, the literal each bound parameter
+     *                                         holds: a read under it reads that key, as long as the body
+     *                                         never assigns the parameter. See
+     *                                         {@see FunctionSummary::variantKey()}.
+     *
      * @return array<int, list<array-key>> parameter index => the keys it is read through, sorted
      */
-    public function of(Func $func): array
+    public function of(Func $func, array $bindings = []): array
     {
         /** @var array<string, int> $indexes */
         $indexes = [];
+        $bound = [];
 
         foreach (array_values($func->params) as $index => $param) {
             $name = OperandHelper::literalString($param->name);
 
             if ($name !== null && ! $param->variadic) {
                 $indexes[$name] = $index;
+
+                if (isset($bindings[$index])) {
+                    $bound[$name] = $bindings[$index];
+                }
             }
         }
 
         if ($indexes === []) {
             return [];
         }
+
+        $bound = self::unassigned($func, $bound);
 
         /** @var array<string, array<array-key, true>> $keys */
         $keys = [];
@@ -125,7 +137,7 @@ final class ParameterKeyReads
                     return [];
                 }
 
-                foreach ($this->reads($op) as [$name, $key]) {
+                foreach ($this->reads($op, $bound) as [$name, $key]) {
                     if (! isset($keys[$name])) {
                         continue;
                     }
@@ -185,12 +197,45 @@ final class ParameterKeyReads
     }
 
     /**
+     * The bound parameters the body never assigns, which hold their literal
+     * everywhere.
+     *
+     * @param array<string, int|string> $bound
+     *
+     * @return array<string, int|string>
+     */
+    private static function unassigned(Func $func, array $bound): array
+    {
+        if ($bound === []) {
+            return [];
+        }
+
+        foreach (BlockOrder::of($func->cfg) as $block) {
+            foreach ($block->children as $op) {
+                if (! $op instanceof Op\Expr\Assign && ! $op instanceof Op\Expr\AssignRef) {
+                    continue;
+                }
+
+                $name = self::nameOf($op->var);
+
+                if ($name !== null) {
+                    unset($bound[$name]);
+                }
+            }
+        }
+
+        return $bound;
+    }
+
+    /**
      * The parameters this op reads, each with the literal key it reads it
      * through, or null for a read of the whole value.
      *
+     * @param array<string, int|string> $bound the parameters a variant binds, by name
+     *
      * @return list<array{0: string, 1: array-key|null}>
      */
-    private function reads(Op $op): array
+    private function reads(Op $op, array $bound): array
     {
         if ($op instanceof Op\Expr\Param || $op instanceof Op\Expr\Assertion) {
             // Declares the parameter, or narrows its type under a new name.
@@ -202,12 +247,14 @@ final class ParameterKeyReads
             $name = self::nameOf($op->var);
             $appends = $op->dim === null || $op->dim instanceof Operand\NullOperand;
 
+            $key = $appends ? null : self::nameOf($op->dim);
+
             // `$field[] = $x` appends. PHP cannot read with an empty key.
             if ($name !== null && ! $appends) {
-                $reads[] = [$name, OperandHelper::literalKey($op->dim)];
+                $literal = OperandHelper::literalKey($op->dim) ?? ($key === null ? null : $bound[$key] ?? null);
+                $reads[] = [$name, $literal];
             }
 
-            $key = $appends ? null : self::nameOf($op->dim);
 
             if ($key !== null) {
                 $reads[] = [$key, null];

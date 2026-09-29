@@ -69,20 +69,27 @@ final class ParameterParts
     /**
      * @param array<int, int>                 $indexes    a parameter operand's object id => its index
      * @param array<string, ArgumentSelector> $keyKeepers see {@see of()}
+     * @param array<int, int|string>          $bound      a bound parameter's index => the literal it holds
      */
-    private function __construct(private readonly array $indexes, private readonly array $keyKeepers)
-    {
+    private function __construct(
+        private readonly array $indexes,
+        private readonly array $keyKeepers = [],
+        private readonly array $bound = [],
+    ) {
     }
 
     /**
      * @param array<string, ArgumentSelector> $keyKeepers the functions whose result keeps its input's keys, by
      *                                                    lower-case name, with the arguments it takes its
      *                                                    elements from
+     * @param array<int, int|string>          $bindings   for a summary variant, the literal each bound
+     *                                                    parameter holds: a read under it names that key.
+     *                                                    See {@see FunctionSummary::variantKey()}.
      *
      * @return array<int, list<list<int|string>>> parameter index => its parts, shortest first; part
      *                                            `n + 1` is the one at position `n`
      */
-    public static function of(Func $func, array $keyKeepers = []): array
+    public static function of(Func $func, array $keyKeepers = [], array $bindings = []): array
     {
         $indexes = [];
 
@@ -96,7 +103,7 @@ final class ParameterParts
             return [];
         }
 
-        $finder = new self($indexes, $keyKeepers);
+        $finder = new self($indexes, $keyKeepers, $bindings);
 
         /** @var array<int, array<string, list<int|string>>> $parts */
         $parts = [];
@@ -243,7 +250,7 @@ final class ParameterParts
                 return [];
             }
 
-            return $this->below($op->var, self::keyStep($op->dim));
+            return $this->below($op->var, $this->keyStep($op->dim));
         }
 
         if ($op instanceof Op\Iterator\Value) {
@@ -270,13 +277,39 @@ final class ParameterParts
 
     /**
      * The step a read with key `$dim` takes: {@see ANY} for a key computed at
-     * run time, and otherwise {@see step()}.
+     * run time, and otherwise {@see step()}. A parameter a variant binds, or
+     * a copy of it, is the literal it holds.
      */
-    private static function keyStep(Operand $dim): int|string
+    private function keyStep(Operand $dim): int|string
     {
-        $key = OperandHelper::literalKey($dim);
+        $key = OperandHelper::literalKey($dim) ?? $this->boundKey($dim);
 
         return $key === null ? self::ANY : self::step($key);
+    }
+
+    private function boundKey(Operand $dim): int|string|null
+    {
+        if ($this->bound === []) {
+            return null;
+        }
+
+        for ($hops = 0; $hops < self::MAX_HOPS; $hops++) {
+            $index = $this->indexes[spl_object_id($dim)] ?? null;
+
+            if ($index !== null) {
+                return $this->bound[$index] ?? null;
+            }
+
+            $op = OperandHelper::definingOp($dim);
+
+            if (! $op instanceof Op\Expr\Assign) {
+                return null;
+            }
+
+            $dim = $op->expr;
+        }
+
+        return null;
     }
 
     /**
@@ -338,7 +371,7 @@ final class ParameterParts
                 $op instanceof Op\Expr\Assertion => $this->pathOf($op->expr, $hops + 1),
                 $op instanceof Op\Expr\ArrayDimFetch => $this->stepDown(
                     $this->pathOf($op->var, $hops + 1),
-                    $op->dim === null ? null : self::keyStep($op->dim),
+                    $op->dim === null ? null : $this->keyStep($op->dim),
                 ),
                 $op instanceof Op\Iterator\Value => $this->stepDown($this->pathOf($op->var, $hops + 1), self::ANY),
                 $op instanceof Op\Phi => $this->agreed($op->vars, $hops),

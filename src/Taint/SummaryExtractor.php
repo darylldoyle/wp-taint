@@ -44,6 +44,13 @@ final class SummaryExtractor
      */
     private ?array $keyKeepers = null;
 
+    /**
+     * Each function's key parameters, which do not change between rounds.
+     *
+     * @var array<string, list<int>>
+     */
+    private array $keyParameters = [];
+
     public function __construct(
         private readonly IntraproceduralAnalyzer $analyzer,
         private readonly AnalysisOptions $options,
@@ -51,11 +58,16 @@ final class SummaryExtractor
     ) {
     }
 
+    /**
+     * @param array<int, int|string> $keyBindings for a summary variant, the literal each bound parameter
+     *                                            holds: see {@see FunctionSummary::variantKey()}
+     */
     public function extract(
         FunctionContext $context,
         SummaryTable $summaries,
         PropertyTaintMap $properties,
         ScopeTable $scopes,
+        array $keyBindings = [],
     ): FunctionSummary {
         $parameterCount = $context->parameterCount();
         $analysed = min($parameterCount, $this->options->maxSummarisedParameters);
@@ -71,10 +83,14 @@ final class SummaryExtractor
         $revertedResiduals = [];
         $paramToReturnEach = [];
         $imprecise = $parameterCount > $analysed;
+        $forwarded = [];
 
-        $parts = $this->parameterParts[$context->key] ??= ParameterParts::of(
+        // A variant's bound key names the part a read under it takes.
+        $partsKey = $keyBindings === [] ? $context->key : FunctionSummary::variantKey($context->key, $keyBindings);
+        $parts = $this->parameterParts[$partsKey] ??= ParameterParts::of(
             $context->func,
             $this->keyKeepers ??= $this->analyzer->keyKeepers(),
+            $keyBindings,
         );
 
         for ($index = 0; $index < $analysed; $index++) {
@@ -86,9 +102,14 @@ final class SummaryExtractor
                 $index,
                 false,
                 $parts[$index] ?? [],
+                $keyBindings,
             );
 
             $paramToReturn[$index] = $result->returnTaint;
+
+            foreach ($result->forwardedKeyParameters as $key) {
+                $forwarded[$key] = true;
+            }
 
             if ($result->revertedResiduals !== null && ! $result->revertedResiduals->isEmpty()) {
                 $revertedResiduals[$index] = $result->revertedResiduals;
@@ -143,10 +164,10 @@ final class SummaryExtractor
         // What the function returns with no parameter tainted at all: a wrapper
         // around get_option() introduces stored taint regardless of its
         // arguments, and a caller has to know that.
-        $baseline = $this->analyzer->analyze($context, $summaries, $properties, $scopes, null, false);
+        $baseline = $this->analyzer->analyze($context, $summaries, $properties, $scopes, null, false, [], $keyBindings);
 
         return new FunctionSummary(
-            $context->key,
+            $keyBindings === [] ? $context->key : FunctionSummary::variantKey($context->key, $keyBindings),
             $context->displayName,
             $paramToReturn,
             $paramToSink,
@@ -166,7 +187,7 @@ final class SummaryExtractor
             $paramToScope,
             $paramToReturnShape,
             self::withoutEach($baseline->returnShape ?? Shape::empty()),
-            $this->parameterKeys[$context->key] ??= $this->keyReads->of($context->func),
+            $this->parameterKeys[$partsKey] ??= $this->keyReads->of($context->func, $keyBindings),
             $revertedResiduals,
             array_filter(
                 $parts,
@@ -174,6 +195,10 @@ final class SummaryExtractor
                 ARRAY_FILTER_USE_KEY,
             ),
             $paramToReturnEach,
+            self::keyParameters(
+                $this->keyParameters[$context->key] ??= KeyParameters::of($context->func),
+                [...array_keys($forwarded), ...$baseline->forwardedKeyParameters],
+            ),
         );
     }
 
@@ -187,6 +212,23 @@ final class SummaryExtractor
         $each = $shape->elements()[Shape::EACH] ?? null;
 
         return $each === null ? $shape : $shape->withoutElement(Shape::EACH)->join(Shape::rest($each));
+    }
+
+    /**
+     * The parameters a function uses as a key itself, and the ones it hands
+     * on to a callee's key parameter.
+     *
+     * @param list<int> $own
+     * @param list<int> $forwarded
+     *
+     * @return list<int>
+     */
+    private static function keyParameters(array $own, array $forwarded): array
+    {
+        $all = array_values(array_unique([...$own, ...$forwarded]));
+        sort($all);
+
+        return $all;
     }
 
     /**
