@@ -60,6 +60,14 @@ final class Shape
      */
     public const OTHERS = "\0\0others";
 
+    /**
+     * An element standing for what a probe's parameter holds under a computed
+     * key, a list's items among them. A read under any key sees it, as it
+     * would see the computed-key slot, and a caller's items come back in its
+     * place, into that slot: see {@see mapSetsAndOthers()}.
+     */
+    public const ITEMS = "\0\0items";
+
     private static ?self $empty = null;
 
     private ?TaintSet $flat = null;
@@ -274,7 +282,7 @@ final class Shape
      */
     public static function leftOutBy(int|string $key): ?array
     {
-        if ($key === self::EACH) {
+        if ($key === self::EACH || $key === self::ITEMS) {
             return [];
         }
 
@@ -445,6 +453,53 @@ final class Shape
         }
 
         return new self($own, $keys, $elements, $rest === null || $rest->isEmpty() ? null : $rest);
+    }
+
+    /**
+     * This shape as {@see mapSets()} maps it, except that `$others` may take
+     * the place of an element under an OTHERS or ITEMS key: it is handed the
+     * key and the element, and returns what to join into this node instead,
+     * or null to map the element as any other. See {@see others()}.
+     *
+     * @param \Closure(TaintSet): TaintSet  $map
+     * @param \Closure(string, self): ?self $others
+     */
+    public function mapSetsAndOthers(\Closure $map, \Closure $others): self
+    {
+        if ($this->isEmpty()) {
+            return $this;
+        }
+
+        $elements = [];
+        $placed = self::empty();
+
+        foreach ($this->elements as $key => $element) {
+            $instead = $key === self::ITEMS || (is_string($key) && str_starts_with($key, self::OTHERS))
+                ? $others($key, $element)
+                : null;
+
+            if ($instead !== null) {
+                $placed = $placed->join($instead);
+
+                continue;
+            }
+
+            $mapped = $element->mapSetsAndOthers($map, $others);
+
+            if (! $mapped->isEmpty()) {
+                $elements[$key] = $mapped;
+            }
+        }
+
+        $rest = $this->rest?->mapSetsAndOthers($map, $others);
+        $own = $map($this->own);
+        $keys = $map($this->keys);
+
+        if ($own->isEmpty() && $keys->isEmpty() && $elements === [] && ($rest === null || $rest->isEmpty())) {
+            return $placed;
+        }
+
+        return (new self($own, $keys, $elements, $rest === null || $rest->isEmpty() ? null : $rest))->join($placed);
     }
 
     /**

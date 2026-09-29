@@ -242,6 +242,15 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   keys it does not name. It reaches a loop, a computed read, a flatten, a read
   under any other key and what the callee hands back, and not a read under a
   named key.
+- An element a callee never names came back as one set with the others it
+  never names, and a list's items came back folded into the value returned.
+  So `acme_pick( array( 't' => $v, 'm' => 'x' ) )` handed back a tainted
+  `'m'`, and `acme_id( array( array( 'raw' => $v, 'label' => 'x' ) ) )` handed
+  back each item with `'label'` tainted. Each element now comes back under its
+  own key, and each item as an item with what it holds below itself. That holds
+  for a return, a property the callee stores the value in, and an included
+  file's scope. A parameter has both parts even when the body names no key, so
+  a function that returns its argument as it came keeps its elements apart.
 - A call that hands the parameter a value inside its argument,
   `f( ...$args )` or `array_walk()`, split the argument by the parameter's
   parts a level too high. An element could go to a part that does not reach
