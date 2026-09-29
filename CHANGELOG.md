@@ -154,6 +154,12 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A filter that returned an array spread one element's `escaped` marker to
+  every element. `apply_filters( 'x', array( 'amount' => esc_html( $a ),
+  'size' => 12 ) )['size']` reported as voided escaping, though nobody escaped
+  it. The result keeps its input's keys, and each element now keeps its own
+  marker, so only `'amount'` reports. A value handed to the filter beside the
+  array still counts, because a callback can return it.
 - `wp.csrf.bypassable-nonce-check` reported a nonce check that stops a
   request with no nonce anyway (issue 8). The rule saw
   `isset( $n ) && ! wp_verify_nonce( $n )` and stopped there. It did not look
