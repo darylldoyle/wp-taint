@@ -68,11 +68,11 @@
     },
     "wpforms-lite": {
         "version": "2.0.1.1",
-        "findings": 51,
+        "findings": 54,
         "bySeverity": {
             "critical": 4,
             "high": 29,
-            "low": 7,
+            "low": 10,
             "medium": 11
         },
         "warnings": 0,

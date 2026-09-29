@@ -9,6 +9,19 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `wp_parse_args()` and `wp_list_pluck()` keep each element apart. They
+  returned clean before, as a function the registry does not model does.
+  `wp_parse_args()` keeps each key of the caller's array over the defaults, as
+  `array_merge()` does, and a query string it parses carries its own text into
+  each key. `wp_list_pluck()` reads only the field it names from each row, as
+  `array_column()` does.
+- A function that reads its parameter through `wp_parse_args()`,
+  `array_merge()` or another function that keeps its input's keys reads it key
+  by key. `$args = wp_parse_args( $args, $defaults )` then `$args['title']`
+  reads the parameter's `'title'`. The parameter had no parts before, so a
+  caller's whole argument reached every read. Custom Post Type UI's select
+  input compares the selected value and prints only the options, so the
+  selected value no longer reaches the options it prints.
 - A strict `in_array()` against a list the code built itself is a guard. It
   counted only against a literal array before. WooCommerce's REST settings
   controllers check each setting a request names against the ids of their own

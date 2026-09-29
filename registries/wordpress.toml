@@ -238,6 +238,20 @@ keeps_residuals = true
 keeps_keys = true
 args = [0, 1]
 
+# The caller's values over the defaults, key by key, as array_merge() puts
+# them. A query string in $args parses into keys, which carry its text.
+[[propagators]]
+function = "wp_parse_args"
+keeps_residuals = true
+keeps_keys = true
+args = [0, 1]
+
+# Each row's field, as array_column() reads it: see the engine's column read.
+[[propagators]]
+function = "wp_list_pluck"
+keeps_residuals = true
+args = [0]
+
 [[propagators]]
 function = "apply_filters"
 keeps_residuals = true
