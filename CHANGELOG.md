@@ -173,6 +173,11 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A function that builds an array literal per element of its parameter,
+  `$items[ $i ] = array( 'title' => $post->post_title, 'color' => 'red' )`,
+  handed each row back as one set. A caller then read the title's taint under
+  `'color'`, a fixed value. The row now comes back with its fields apart.
+  AIOSEO's email report printed its SEO score's colour and text this way.
 - A write two keys deep into a local array went nowhere.
   `$a['x']['y'] = $_GET['v']` wrote into the temporary `$a['x']` produced,
   and nothing read that temporary again, so `echo $a['x']['y']` was clean. The

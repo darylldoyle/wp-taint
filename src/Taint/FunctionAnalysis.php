@@ -1780,7 +1780,7 @@ final class FunctionAnalysis
                 $each = $target->dim === null ? null : $this->eachPart($target->dim);
 
                 if ($each !== null) {
-                    return $this->writeEachElement($op, $target, $taint, $each) || $keyed || $contained;
+                    return $this->writeEachAndItsParts($op, $target, $written, $each) || $keyed || $contained;
                 }
 
                 $numbers = $target->dim === null ? null : $this->loopKeyNumbers($target->dim);
@@ -2743,6 +2743,42 @@ final class FunctionAnalysis
         }
 
         return $any === null ? null : [$any, ...$parts];
+    }
+
+    /**
+     * A probe's write under the key of a loop over its parameter, when the
+     * value written has parts of its own.
+     *
+     * The record of what comes back under each element's key holds kinds,
+     * not structure. Flattened into it, a row built in the loop,
+     * `$items[ $i ] = array( 'title' => $post->post_title, 'color' => 'red' )`,
+     * came back as one set, and the caller read the title's taint under
+     * `'color'`. So the parts of an array literal go where any write under a
+     * computed key puts them, each under its own key, and only the value's
+     * own taint goes to the record. See {@see writeEachElement()}.
+     *
+     * Only a literal: its keys are the code's, so the row is a new one. Any
+     * other value, `$ret[ $k ] = acme_conv( $v )`, can be the element itself,
+     * and goes back under the element's own key, as before.
+     *
+     * @param non-empty-list<int> $parts
+     */
+    private function writeEachAndItsParts(
+        Op\Expr\Assign|Op\Expr\AssignRef $op,
+        Op\Expr\ArrayDimFetch $target,
+        Shape $written,
+        array $parts,
+    ): bool {
+        $structure = $written->structure();
+
+        if ($structure->isEmpty() || ! OperandHelper::definingOp($op->expr) instanceof Op\Expr\Array_) {
+            return $this->writeEachElement($op, $target, $written->flatten(), $parts);
+        }
+
+        $changed = $this->writeElement($op, $target, $structure);
+        $own = $written->own();
+
+        return (! $own->isEmpty() && $this->writeEachElement($op, $target, $own, $parts)) || $changed;
     }
 
     /**
