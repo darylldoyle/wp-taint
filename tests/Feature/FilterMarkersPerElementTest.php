@@ -58,8 +58,9 @@ it('still voids an escaped value handed to the filter beside the array', functio
     // A callback can return any argument it is given.
     expect(filterMarkerFindings(<<<'PHP'
         function acme_render() {
-            $data = apply_filters( 'acme_data', array( 'n' => 12 ), array( 'a' => esc_html( get_option( 'acme_a' ) ) ) );
+            $extra = array( 'a' => esc_html( get_option( 'acme_a' ) ) );
+            $data  = apply_filters( 'acme_data', array( 'n' => 12 ), $extra );
             echo $data['n'];
         }
-        PHP))->toBe(['wp.xss.escape-voided@4']);
+        PHP))->toBe(['wp.xss.escape-voided@5']);
 });
