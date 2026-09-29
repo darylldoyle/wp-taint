@@ -282,6 +282,22 @@ that the flows it adds are real ones.
 
 **Direction:** under-reports.
 
+**An overwrite replaces the element only for a read in the same block.**
+
+```php
+$args['include'] = absint( $args['include'] );
+echo $args['include'];                  // not reported
+```
+
+php-cfg keeps one operand for an array however many of its elements are
+written, so a write joins the element it replaces. A read later in the same
+block, with nothing between that touches the array other than another literal
+key, sees exactly what the write left. A read after a branch that wrote the key
+on one path still sees both. So does a function with a reference, a `global`
+or `static`, an include, `extract()`, `parse_str()`, a dynamic call or a
+variable variable, since a variable can change there without an op on its
+operand. **Direction:** over-reports.
+
 ### Object properties are per class, not per instance
 
 `Foo::$value` is one slot. Taint written to `$this->value` in any instance of
