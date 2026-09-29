@@ -192,12 +192,25 @@ which loses precision and never taint.
 function that returns the array above hands back `'a'` with `'id'` and
 `'value'` apart, so the caller's `'id'` is clean. So does a callback
 `array_map()` runs, under a computed key of the result, and so does a variable
-an included file, a template's `$args` or a closure's capture reads. A function
-whose result keeps its input's keys, such as `array_filter()` or
-`apply_filters()` on an array, keeps each element under its string key. An
-integer key can be renumbered, so its element joins the whole-array slot, as
-does every element of a function that builds something else,
-`implode( ',', $row )`.
+an included file, a template's `$args` or a closure's capture reads.
+
+**An array function keeps each element whole.** A function whose result keeps
+its input's keys, such as `array_filter()` or `apply_filters()` on an array,
+keeps each element under its string key, with what the element holds below
+itself. An integer key can be renumbered, so its element joins the whole-array
+slot, still whole. `array_values()` puts every element there. `reset()`,
+`end()`, `array_shift()` and the functions like them return one element with
+its parts, and `array_column()` returns each row's element under the column
+key, with each row's index column as the keys. The elements fold into one set
+in three cases:
+
+- a function that builds something else, `implode( ',', $row )`
+- a function that can undo escaping, `wp_unslash()` or `stripslashes_deep()`
+- a function a dispatcher hands an array's items or whose returns it
+  collects, `array_map( 'array_values', $rows )`, where the value it reads is
+  a level below the argument
+
+**Direction:** over-reports where the elements fold.
 
 **A parameter handed back as it came loses its keys.** A summary knows the
 parts a function reads its parameter through, and nothing stands for an element

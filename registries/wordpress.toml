@@ -245,10 +245,11 @@ keeps_keys = true
 args = [1]
 note = "The filtered value always passes through, even when a callback is registered, because the scan cannot know which callbacks are on the hook when it fires. The callbacks themselves are followed through the hook graph; see [[dispatchers]] below."
 
+# The filtered value is the first element of the arguments array.
 [[propagators]]
 function = "apply_filters_ref_array"
 keeps_residuals = true
-keeps_keys = true
+returns_element = true
 args = [1]
 
 

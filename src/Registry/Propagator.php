@@ -22,9 +22,26 @@ final class Propagator
          * `array_merge()`, `apply_filters()` on an array. An element under a
          * string key stays under that key, so `$args['id']` does not take the
          * taint of `$args['value']`. An integer key can be renumbered, so an
-         * element under one joins the whole-array slot.
+         * element under one joins the whole-array slot. Each element keeps
+         * what it holds below itself, so every argument the entry reads must
+         * be an array the result takes its elements from.
          */
         public readonly bool $keepsKeys = false,
+        /**
+         * The result is an array of its input's values under new keys:
+         * `array_values()`. Each value keeps what it holds below itself,
+         * under a computed key, so every argument the entry reads must be an
+         * array the result takes its values from. `array_pad()` is not one:
+         * its pad value is a single value of the result.
+         */
+        public readonly bool $keepsValues = false,
+        /**
+         * The result is one element of its input: `reset()`, `end()`,
+         * `array_shift()`, or the first of the arguments
+         * `apply_filters_ref_array()` takes. It keeps what that element holds
+         * below itself.
+         */
+        public readonly bool $returnsElement = false,
         /**
          * The result keeps an escaped SQL value's residual, `sql_unquoted` or
          * `sql_self_quoted`, because the function cannot undo the escaping:
