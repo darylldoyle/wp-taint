@@ -154,6 +154,18 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A caller's element under a key the callee never names reached the callee's
+  reads of the keys it does name. The element went to the part of the node
+  above it, whose taint every read below the node inherits. So a stored value
+  under a settings field's `'options'` reached the raw echo of its `'desc'`.
+  Under each node the callee reads by literal key, a part now stands for the
+  keys it does not name. It reaches a loop, a computed read, a flatten, a read
+  under any other key and what the callee hands back, and not a read under a
+  named key.
+- A call that hands the parameter a value inside its argument,
+  `f( ...$args )` or `array_walk()`, split the argument by the parameter's
+  parts a level too high. An element could go to a part that does not reach
+  every read of it. Such a call now gets the whole argument.
 - An array function folded what each element held below itself into one set.
   `array_merge( $defaults, $row )['meta']['title']` read all of
   `$row['meta']`, and `reset( $rows )['title']` read every column of every
