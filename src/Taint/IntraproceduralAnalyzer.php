@@ -74,6 +74,9 @@ final class IntraproceduralAnalyzer
      *                                                    summaries are extracted
      * @param list<list<int|string>> $seedParts          the parts of the seeded parameter to seed
      *                                                    apart: see {@see ParameterParts}
+     * @param array<int, int|string> $keyBindings        for a summary variant, the literal each
+     *                                                    bound parameter holds: see
+     *                                                    {@see FunctionSummary::variantKey()}
      */
     public function analyze(
         FunctionContext $context,
@@ -83,11 +86,13 @@ final class IntraproceduralAnalyzer
         ?int $seedParameterIndex = null,
         bool $collectFindings = true,
         array $seedParts = [],
+        array $keyBindings = [],
     ): AnalysisResult {
         // A probe run asks what one parameter reaches; it does not observe the
         // body as written, so nothing it writes belongs in the shared property
-        // map. See PropertyTaintMap::$sealed.
-        $properties = $seedParameterIndex === null ? $properties : $properties->sealed();
+        // map. See PropertyTaintMap::$sealed. Nor does a run of a summary
+        // variant, whose bound key is one caller's, not the body's.
+        $properties = $seedParameterIndex === null && $keyBindings === [] ? $properties : $properties->sealed();
         $receivers = new ReceiverResolver($this->functions->declaredTypes());
 
         return (new FunctionAnalysis(
@@ -112,6 +117,7 @@ final class IntraproceduralAnalyzer
             $this->restRoutes,
             $this->administrators,
             $seedParts,
+            $keyBindings,
         ))->run();
     }
 }

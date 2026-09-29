@@ -54,6 +54,14 @@ final class FunctionAnalysis
     private const MAX_ASSIGNMENT_HOPS = 16;
 
     /**
+     * This function's parameters it hands on to a callee's key parameter,
+     * which makes them key parameters of its own: see variantOf().
+     *
+     * @var array<int, true>
+     */
+    private array $forwardedKeys = [];
+
+    /**
      * The keys each computed key can hold, by operand: see namedKeys().
      *
      * @var array<int, non-empty-list<int|string>|null>
@@ -309,6 +317,14 @@ final class FunctionAnalysis
          * @var list<list<int|string>>
          */
         private readonly array $seedParts = [],
+        /**
+         * In a run of a summary variant, the literal each bound parameter
+         * holds, by index: see {@see FunctionSummary::variantKey()}. Only an
+         * element key reads it.
+         *
+         * @var array<int, int|string>
+         */
+        private readonly array $keyBindings = [],
     ) {
         $this->state = new TaintState();
         $this->restParameters = new RestParameterSanitizer($registry, $summaries);
@@ -435,6 +451,7 @@ final class FunctionAnalysis
             $scopes,
             $this->returnShape->mapSets(static fn (TaintSet $taint): TaintSet => $taint->withoutElements()),
             $plain($this->revertedResiduals),
+            array_keys($this->forwardedKeys),
         );
     }
 
@@ -2788,11 +2805,33 @@ final class FunctionAnalysis
         $keys = [];
 
         // As PHP stores them: `'1'` is `1`.
-        foreach ($this->resolver->values()->keyStrings($dim) as $string) {
+        foreach ($this->resolver->values()->keyStrings($dim, $this->boundOperands()) as $string) {
             $keys[array_key_first([$string => true])] = true;
         }
 
         return $this->namedKeys[$id] = $keys === [] ? null : array_keys($keys);
+    }
+
+    /**
+     * The bound parameters' operands and their literals, for the resolver.
+     *
+     * @return array<int, string>
+     */
+    private function boundOperands(): array
+    {
+        if ($this->keyBindings === []) {
+            return [];
+        }
+
+        $bound = [];
+
+        foreach (array_values($this->context->func->params) as $index => $param) {
+            if (isset($this->keyBindings[$index])) {
+                $bound[spl_object_id($param->result)] = (string) $this->keyBindings[$index];
+            }
+        }
+
+        return $bound;
     }
 
     /**
@@ -6131,6 +6170,7 @@ final class FunctionAnalysis
             $this->imprecise = true;
         }
 
+        $summary = $this->variantOf($call, $key, $summary);
         $result = $summary->introduces();
         $structure = $summary->introducesShape();
         $contributors = [];
@@ -6233,6 +6273,88 @@ final class FunctionAnalysis
         $changed = $this->writeResult($op->result, $result, $provenance) || $changed;
 
         return $this->writeReturnedElements($op->result, $structure, $provenance) || $changed;
+    }
+
+    /**
+     * The summary of `$key` this call applies: the variant with each key
+     * parameter bound to the one literal this call passes it, once a round
+     * has analysed that variant, and the summary itself until then.
+     *
+     *     $query->add_sql_clause( 'where', $sql );
+     *
+     * writes `$sql` under `'where'` alone, where the summary itself writes it
+     * under any key. See {@see KeyParameters}.
+     */
+    private function variantOf(CallTarget $call, string $key, FunctionSummary $summary): FunctionSummary
+    {
+        if ($summary->keyParameters === [] || ! $call->positional) {
+            return $summary;
+        }
+
+        $bindings = [];
+
+        foreach ($summary->keyParameters as $index) {
+            $argument = $call->argument($index);
+
+            if ($argument === null) {
+                continue;
+            }
+
+            $keys = $this->namedKeys($argument);
+
+            if ($keys !== null && count($keys) === 1) {
+                $bindings[$index] = $keys[0];
+
+                continue;
+            }
+
+            // Handed on from this function's own parameter, the key is one
+            // this function's callers can name.
+            $own = $this->parameterIndexOf($argument);
+
+            if ($own !== null) {
+                $this->forwardedKeys[$own] = true;
+            }
+        }
+
+        if ($bindings === []) {
+            return $summary;
+        }
+
+        $variantKey = FunctionSummary::variantKey($key, $bindings);
+        $variant = $this->summaries->get($variantKey);
+
+        if ($variant === null) {
+            $this->summaries->request($variantKey, $key, $bindings);
+
+            return $summary;
+        }
+
+        return $variant;
+    }
+
+    /**
+     * The index of the parameter `$operand` is, or a copy of it is.
+     */
+    private function parameterIndexOf(Operand $operand): ?int
+    {
+        for ($hops = 0; $hops < self::MAX_ASSIGNMENT_HOPS; $hops++) {
+            foreach (array_values($this->context->func->params) as $index => $param) {
+                if ($param->result === $operand) {
+                    return $param->variadic ? null : $index;
+                }
+            }
+
+            $op = OperandHelper::definingOp($operand);
+
+            if (! $op instanceof Op\Expr\Assign) {
+                return null;
+            }
+
+            $operand = $op->expr;
+        }
+
+        return null;
     }
 
     /**
@@ -6668,7 +6790,7 @@ final class FunctionAnalysis
             );
         }
 
-        $context = $this->functions->get($summary->key);
+        $context = $this->functions->get($summary->functionKey());
         $names = array_map(
             static fn (int $index): string => $context === null
                 ? sprintf('parameter %d', $index)

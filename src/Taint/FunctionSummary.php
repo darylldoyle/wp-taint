@@ -166,7 +166,52 @@ final class FunctionSummary
          * @var array<int, TaintSet>
          */
         public readonly array $paramToReturnEach = [],
+        /**
+         * The parameters the function uses as an array key: see
+         * {@see KeyParameters}. A call that passes one of them a literal can
+         * use a variant of this summary with it bound: see
+         * {@see variantKey()}.
+         *
+         * @var list<int>
+         */
+        public readonly array $keyParameters = [],
     ) {
+    }
+
+    /**
+     * The key of a variant of a summary: the function analysed with each
+     * parameter in `$bindings` holding that literal as an array key.
+     *
+     * ```php
+     * $query->add_sql_clause( 'where', $sql );   // add_sql_clause#0=where
+     * ```
+     *
+     * The literal is spelt as hex, since the summary table folds keys to
+     * lower case and two literals differing in case are two keys. A NUL
+     * sets the bindings apart, since no function key holds one.
+     *
+     * @param array<int, int|string> $bindings parameter index => literal
+     */
+    public static function variantKey(string $key, array $bindings): string
+    {
+        ksort($bindings);
+        $parts = [];
+
+        foreach ($bindings as $index => $literal) {
+            $parts[] = $index . '=' . (is_int($literal) ? 'i' : 's') . bin2hex((string) $literal);
+        }
+
+        return $key . "\0" . implode(',', $parts);
+    }
+
+    /**
+     * The function a summary, or a variant of one, belongs to.
+     */
+    public function functionKey(): string
+    {
+        $end = strpos($this->key, "\0");
+
+        return $end === false ? $this->key : substr($this->key, 0, $end);
     }
 
     public function returnEachFor(int $parameterIndex): TaintSet
@@ -323,6 +368,7 @@ final class FunctionSummary
             $sets($this->revertedResiduals),
             [],
             $sets($this->paramToReturnEach),
+            $this->keyParameters,
         );
     }
 
@@ -519,7 +565,24 @@ final class FunctionSummary
             self::mergeSets($this->revertedResiduals, $other->revertedResiduals),
             $this->parameterParts,
             self::mergeSets($this->paramToReturnEach, $other->paramToReturnEach),
+            self::mergeKeyParameters($this->keyParameters, $other->keyParameters),
         );
+    }
+
+    /**
+     * A parameter either body uses as a key.
+     *
+     * @param list<int> $mine
+     * @param list<int> $theirs
+     *
+     * @return list<int>
+     */
+    private static function mergeKeyParameters(array $mine, array $theirs): array
+    {
+        $merged = array_values(array_unique([...$mine, ...$theirs]));
+        sort($merged);
+
+        return $merged;
     }
 
     /**
@@ -948,7 +1011,9 @@ final class FunctionSummary
             }
         }
 
-        if ($this->parameterKeys !== $other->parameterKeys) {
+        // A key parameter a callee's summary adds is a variant this
+        // function's callers may now ask for.
+        if ($this->parameterKeys !== $other->parameterKeys || $this->keyParameters !== $other->keyParameters) {
             return false;
         }
 

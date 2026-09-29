@@ -56,6 +56,13 @@ use Enshrined\WpTaint\Scan\WorkerPool;
  */
 final class InterproceduralResolver
 {
+    /**
+     * How many summary variants one function may have: see
+     * {@see FunctionSummary::variantKey()}. A call past the cap applies the
+     * function's own summary, which is sound and less precise.
+     */
+    private const MAX_VARIANTS = 16;
+
     public function __construct(
         private readonly IntraproceduralAnalyzer $analyzer,
         private readonly SummaryExtractor $extractor,
@@ -111,6 +118,14 @@ final class InterproceduralResolver
         /** @var array<string, list<string>> $readsOf function key => entries its last analysis read */
         $readsOf = [];
 
+        // Summary variants calls asked for, by the function they vary, and
+        // the ones asked for since the last round, which it analyses whatever
+        // else moved.
+        /** @var array<string, array<string, array<int, int|string>>> $variants */
+        $variants = [];
+        /** @var array<string, true> $newVariants */
+        $newVariants = [];
+
         // The fixed point cannot say how many rounds it needs until it stops
         // needing them, so the phase reports a round count rather than a
         // percentage. Real plugins settle in five to eight.
@@ -127,9 +142,13 @@ final class InterproceduralResolver
             $previousScopes = $scopes;
             $roundDirty = $dirty;
             $readers = $this->options->incrementalRounds ? self::readersOf($readsOf) : [];
+            $roundVariants = $variants;
+            $roundNewVariants = $newVariants;
+            $newVariants = [];
 
             /** @var list<array{summaries: list<FunctionSummary>, properties: PropertyTaintMap,
-             *     scopes: ScopeTable, reads: array<string, list<string>>}> $shards */
+             *     scopes: ScopeTable, reads: array<string, list<string>>,
+             *     requests: array<string, array{string, array<int, int|string>}>}> $shards */
             $shards = $pool->run(
                 fn (int $shard, int $shardCount): array => $this->round(
                     $ordered,
@@ -140,6 +159,8 @@ final class InterproceduralResolver
                     $shardCount,
                     $roundDirty,
                     $readers,
+                    $roundVariants,
+                    $roundNewVariants,
                 ),
             );
 
@@ -188,6 +209,20 @@ final class InterproceduralResolver
                 foreach ($shardResult['reads'] as $key => $entries) {
                     $readsOf[$key] = $entries;
                 }
+
+                // A variant a call asked for is analysed next round, next to
+                // the function it varies, up to the cap.
+                foreach ($shardResult['requests'] as $variantKey => [$functionKey, $bindings]) {
+                    $base = strtolower($functionKey);
+
+                    if (isset($variants[$base][$variantKey]) || count($variants[$base] ?? []) >= self::MAX_VARIANTS) {
+                        continue;
+                    }
+
+                    $variants[$base][$variantKey] = $bindings;
+                    $newVariants[$variantKey] = true;
+                    $changed = true;
+                }
             }
 
             // Every function must have a summary once the first round is done.
@@ -232,9 +267,13 @@ final class InterproceduralResolver
      *
      * @param array<string, true>|null        $dirty   the functions to analyse, or null for all of them
      * @param array<string, list<string>>     $readers ReadLog entry => the functions that read it last time
+     * @param array<string, array<string, array<int, int|string>>> $variants    function key => its summary
+     *                                                                           variants and their bindings
+     * @param array<string, true>                                  $newVariants the variants asked for since
+     *                                                                           the last round
      *
      * @return array{summaries: list<FunctionSummary>, properties: PropertyTaintMap, scopes: ScopeTable,
-     *     reads: array<string, list<string>>}
+     *     reads: array<string, list<string>>, requests: array<string, array{string, array<int, int|string>}>}
      */
     private function round(
         array $ordered,
@@ -245,6 +284,8 @@ final class InterproceduralResolver
         int $shardCount,
         ?array $dirty = null,
         array $readers = [],
+        array $variants = [],
+        array $newVariants = [],
     ): array {
         // A private copy, so a worker's property writes stay in that worker
         // until the parent merges them.
@@ -300,12 +341,18 @@ final class InterproceduralResolver
             // Sliced by position in the whole order, then filtered, so a
             // function stays with the same worker every round and a chain is
             // not scattered across workers by a small dirty set.
-            if ($dirty !== null && ! isset($dirty[$key])) {
-                continue;
+            $analyse = $dirty === null || isset($dirty[$key]);
+            $varying = [];
+
+            foreach ($variants[strtolower($key)] ?? [] as $variantKey => $bindings) {
+                if ($analyse || isset($newVariants[$variantKey]) || isset($dirty[$variantKey])) {
+                    $varying[$variantKey] = $bindings;
+                }
             }
 
-            $summary = null;
-            $log->begin($key);
+            if (! $analyse && $varying === []) {
+                continue;
+            }
 
             // Every body of the group, fetched once for both passes below.
             // Fetching each again for the second pass rebuilt every file the
@@ -319,31 +366,45 @@ final class InterproceduralResolver
             $this->bodies?->retainFor($group[0] instanceof FunctionMeta ? $group[0]->path : null);
             $contexts = array_map($this->body(...), $group);
 
-            foreach ($contexts as $context) {
-                $extracted = $this->extractor->extract($context, $visible, $roundProperties, $roundScopes);
-                $summary = $summary === null ? $extracted : $summary->union($extracted);
-            }
+            // The function's own summary, then each variant of it, each under
+            // its own key, so its callers read what they asked for. Each is
+            // its own reader: a variant reads what the function reads, and
+            // what its callee variants hold.
+            if ($analyse) {
+                $log->begin($key);
+                $this->summarise(
+                    $contexts,
+                    [],
+                    $visible,
+                    $roundProperties,
+                    $roundScopes,
+                    $summaries,
+                    $readers,
+                    $dirty,
+                    $produced,
+                );
 
-            $visible->put($summary);
-            $produced[] = $summary;
-
-            // A changed summary makes its readers later in this slice dirty now,
-            // not next round: re-analysing everything, they would have seen it
-            // this round, and waiting moves a chain one level per round.
-            if ($dirty !== null) {
-                $previous = $summaries->get($key);
-
-                if ($previous === null || ! $previous->equals($summary)) {
-                    foreach ($readers['s:' . $key] ?? [] as $reader) {
-                        $dirty[$reader] = true;
-                    }
+                foreach ($contexts as $context) {
+                    // A pass with no parameter seeded, purely so property
+                    // writes in the body land in the map. Findings are
+                    // discarded.
+                    $this->analyzer->analyze($context, $visible, $roundProperties, $roundScopes, null, false);
                 }
             }
 
-            foreach ($contexts as $context) {
-                // A pass with no parameter seeded, purely so property writes in
-                // the body land in the map. Findings are discarded.
-                $this->analyzer->analyze($context, $visible, $roundProperties, $roundScopes, null, false);
+            foreach ($varying as $variantKey => $bindings) {
+                $log->begin((string) $variantKey);
+                $this->summarise(
+                    $contexts,
+                    $bindings,
+                    $visible,
+                    $roundProperties,
+                    $roundScopes,
+                    $summaries,
+                    $readers,
+                    $dirty,
+                    $produced,
+                );
             }
         }
 
@@ -364,7 +425,59 @@ final class InterproceduralResolver
             'properties' => $roundProperties,
             'scopes' => $roundScopes,
             'reads' => $log->all(),
+            'requests' => $visible->requests(),
         ];
+    }
+
+    /**
+     * Summarise one function, or one variant of it, over every body its key
+     * has, and publish the summary to this worker's view. A summary that
+     * changed makes its readers later in this slice dirty now, not next
+     * round: re-analysing everything, they would have seen it this round,
+     * and waiting moves a chain one level per round.
+     *
+     * @param list<FunctionContext>        $contexts
+     * @param array<int, int|string>       $bindings
+     * @param array<string, list<string>>  $readers
+     * @param array<string, true>|null     $dirty
+     * @param list<FunctionSummary>        $produced
+     */
+    private function summarise(
+        array $contexts,
+        array $bindings,
+        SummaryTable $visible,
+        PropertyTaintMap $properties,
+        ScopeTable $scopes,
+        SummaryTable $previous,
+        array $readers,
+        ?array &$dirty,
+        array &$produced,
+    ): void {
+        $summary = null;
+
+        foreach ($contexts as $context) {
+            $extracted = $this->extractor->extract($context, $visible, $properties, $scopes, $bindings);
+            $summary = $summary === null ? $extracted : $summary->union($extracted);
+        }
+
+        if ($summary === null) {
+            return;
+        }
+
+        $visible->put($summary);
+        $produced[] = $summary;
+
+        if ($dirty === null) {
+            return;
+        }
+
+        $before = $previous->get($summary->key);
+
+        if ($before === null || ! $before->equals($summary)) {
+            foreach ($readers['s:' . strtolower($summary->key)] ?? [] as $reader) {
+                $dirty[$reader] = true;
+            }
+        }
     }
 
     private static function isMain(FunctionMeta|FunctionContext $function): bool

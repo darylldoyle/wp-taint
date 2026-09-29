@@ -20,6 +20,14 @@ final class SummaryTable
     private ?ReadLog $log = null;
 
     /**
+     * Variants a call asked for that the table does not hold yet: see
+     * {@see FunctionSummary::variantKey()}. The next round analyses them.
+     *
+     * @var array<string, array{string, array<int, int|string>}> variant key => function key and bindings
+     */
+    private array $requests = [];
+
+    /**
      * Record every lookup from now on. See {@see ReadLog}.
      */
     public function recordReadsInto(?ReadLog $log): void
@@ -60,6 +68,24 @@ final class SummaryTable
     public function put(FunctionSummary $summary): void
     {
         $this->summaries[strtolower($summary->key)] = $summary;
+    }
+
+    /**
+     * Ask for a variant of a function's summary, for the next round.
+     *
+     * @param array<int, int|string> $bindings parameter index => literal
+     */
+    public function request(string $variantKey, string $functionKey, array $bindings): void
+    {
+        $this->requests[strtolower($variantKey)] ??= [$functionKey, $bindings];
+    }
+
+    /**
+     * @return array<string, array{string, array<int, int|string>}> variant key => function key and bindings
+     */
+    public function requests(): array
+    {
+        return $this->requests;
     }
 
     public function has(string $key): bool

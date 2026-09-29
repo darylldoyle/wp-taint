@@ -82,6 +82,14 @@ final class ValueResolver
     private bool $loops = false;
 
     /**
+     * The parameters a summary variant binds, by the parameter operand's
+     * object id: see {@see keyStrings()}.
+     *
+     * @var array<int, string>
+     */
+    private array $bound = [];
+
+    /**
      * Every constant string this operand can hold.
      *
      * @return list<string> empty when any of its values cannot be pinned down
@@ -113,17 +121,24 @@ final class ValueResolver
      * resolves through a loop connects more code, which adds findings, and
      * that is a change of its own.
      *
+     * A summary variant binds a parameter to the literal its callers pass,
+     * `$bound`: see {@see FunctionSummary::variantKey()}. That too is for
+     * keys only.
+     *
+     * @param array<int, string> $bound a parameter operand's object id => the literal it holds
+     *
      * @return list<string> empty when any of its values cannot be pinned down
      */
-    public function keyStrings(Operand $operand): array
+    public function keyStrings(Operand $operand, array $bound = []): array
     {
-        $previous = $this->loops;
+        $previous = [$this->loops, $this->bound];
         $this->loops = true;
+        $this->bound = $bound;
 
         try {
             return $this->resolve($operand, 0, false);
         } finally {
-            $this->loops = $previous;
+            [$this->loops, $this->bound] = $previous;
         }
     }
 
@@ -164,6 +179,9 @@ final class ValueResolver
                 : [],
             $definition instanceof Op\Iterator\Key => $this->loops
                 ? $this->fromIteratedKeys($definition, $depth)
+                : [],
+            $definition instanceof Op\Expr\Param => isset($this->bound[spl_object_id($operand)])
+                ? [$this->bound[spl_object_id($operand)]]
                 : [],
             $definition instanceof Op\Expr\ConcatList => $this->fromParts($definition->list, $depth, $partial),
             $definition instanceof Op\Expr\BinaryOp\Concat => $this->fromParts(
