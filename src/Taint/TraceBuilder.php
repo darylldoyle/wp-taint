@@ -294,6 +294,7 @@ final class TraceBuilder
             TaintKind::SqlUnquoted => [TaintKind::Sql],
             TaintKind::SqlSelfQuoted => [TaintKind::SqlUnquoted, TaintKind::SqlUnticked, TaintKind::Sql],
             TaintKind::SqlUnticked => [TaintKind::Sql],
+            TaintKind::CsvPrefixed => [TaintKind::Csv],
             TaintKind::EscapeVoided => [TaintKind::Escaped, TaintKind::Html],
             TaintKind::Escaped => [TaintKind::Html],
             default => [],

@@ -95,7 +95,7 @@ final class GuardAnalyzer
      * WordPress functions that end the request, so a branch calling one never
      * reaches the code after it.
      */
-    private const NEVER_RETURN = [
+    public const NEVER_RETURN = [
         'wp_die', 'wp_send_json', 'wp_send_json_success', 'wp_send_json_error', 'wp_nonce_ays',
     ];
 

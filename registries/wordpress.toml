@@ -1526,7 +1526,7 @@ message = "This value reaches output unescaped, and nothing in the scan says whe
 id = "wp.output.csv-injection"
 title = "Exported value can be a spreadsheet formula"
 description = "A user-supplied value is written into CSV without neutralising a leading =, +, - or @. Excel and Sheets execute those cells as formulas when the file is opened, so an exported field becomes code running on whoever reviews the export (CWE-1236)."
-remediation = "Prefix a value beginning with =, +, - or @ with an apostrophe, tab or space before writing the cell. HTML escapers do nothing here: esc_html() leaves a formula exactly as it found it."
+remediation = "Prefix a value beginning with =, +, - or @ with an apostrophe before writing the cell, and write the file with an empty escape character, fputcsv( $handle, $row, ',', '\"', '' ), so a quote in the value cannot end its cell early. HTML escapers do nothing here: esc_html() leaves a formula exactly as it found it."
 cwe = "CWE-1236"
 message = "This value is written into CSV without neutralising a leading formula character."
 
