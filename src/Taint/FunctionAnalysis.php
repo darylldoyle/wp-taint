@@ -2849,7 +2849,8 @@ final class FunctionAnalysis
 
     /**
      * What a function that can undo escaping leaves of a value: its escaped
-     * SQL residuals as raw `sql` again.
+     * SQL residuals as raw `sql` again, and a formula behind an apostrophe as
+     * a formula, since `substr( $v, 1 )` takes the apostrophe off.
      *
      * A probe run notes that it happened to SQL-carrying data, so the summary
      * can say a caller's escaped argument may come back unescaped. See
@@ -2857,9 +2858,9 @@ final class FunctionAnalysis
      */
     private function undoneEscaping(TaintSet $taint): TaintSet
     {
-        $this->noteReverted(self::sqlResiduals(), $taint);
+        $this->noteReverted(self::residuals(), $taint);
 
-        return self::unescapedSql($taint);
+        return self::unescaped($taint);
     }
 
     /**
@@ -2874,13 +2875,32 @@ final class FunctionAnalysis
             return;
         }
 
-        $sql = $residuals->intersect(self::sqlResiduals());
-
-        if ($sql->isEmpty() || ! $taint->has(TaintKind::Sql) || ! $taint->has(TaintKind::Seed)) {
+        if (! $taint->has(TaintKind::Seed)) {
             return;
         }
 
-        $this->revertedResiduals = ($this->revertedResiduals ?? TaintSet::empty())->union($sql);
+        $noted = $taint->has(TaintKind::Sql) ? $residuals->intersect(self::sqlResiduals()) : TaintSet::empty();
+
+        if ($taint->has(TaintKind::Csv) && $residuals->has(TaintKind::CsvPrefixed)) {
+            $noted = $noted->with(TaintKind::CsvPrefixed);
+        }
+
+        if ($noted->isEmpty()) {
+            return;
+        }
+
+        $this->revertedResiduals = ($this->revertedResiduals ?? TaintSet::empty())->union($noted);
+    }
+
+    /**
+     * Every kind an escaper leaves that a later function can undo.
+     */
+    private static function residuals(): TaintSet
+    {
+        /** @var TaintSet|null $residuals */
+        static $residuals = null;
+
+        return $residuals ??= self::sqlResiduals()->with(TaintKind::CsvPrefixed);
     }
 
     private static function sqlResiduals(): TaintSet
@@ -2892,17 +2912,20 @@ final class FunctionAnalysis
     }
 
     /**
-     * An escaped SQL value's residuals turned back into `sql`.
+     * An escaped SQL value's residuals turned back into `sql`, and
+     * `csv_prefixed` back into `csv`.
      */
-    private static function unescapedSql(TaintSet $taint): TaintSet
+    private static function unescaped(TaintSet $taint): TaintSet
     {
         $residuals = self::sqlResiduals();
 
-        if ($taint->intersect($residuals)->isEmpty()) {
-            return $taint;
+        if (! $taint->intersect($residuals)->isEmpty()) {
+            $taint = $taint->without($residuals)->with(TaintKind::Sql);
         }
 
-        return $taint->without($residuals)->with(TaintKind::Sql);
+        return $taint->has(TaintKind::CsvPrefixed)
+            ? $taint->without(TaintSet::of(TaintKind::CsvPrefixed))->with(TaintKind::Csv)
+            : $taint;
     }
 
     /**
@@ -4174,6 +4197,7 @@ final class FunctionAnalysis
             $incoming,
             $sanitizer->clearsBy === null ? null : ($proof->clears ?? TaintSet::empty()),
             $proof->sqlQuotedOnly ?? false,
+            $proof->csvPrefixOnly ?? false,
         );
 
         // Remember that this value has been escaped, so that a filter standing
@@ -4530,15 +4554,23 @@ final class FunctionAnalysis
      */
     private static function residualsThrough(TaintSet $argument, TaintSet $reached, ?TaintSet $reverts): TaintSet
     {
+        $through = TaintSet::empty();
         $residuals = $argument->intersect(self::sqlResiduals());
 
-        if ($residuals->isEmpty() || ! $reached->has(TaintKind::Sql)) {
-            return TaintSet::empty();
+        if (! $residuals->isEmpty() && $reached->has(TaintKind::Sql)) {
+            $through = $reverts !== null && ! $reverts->intersect(self::sqlResiduals())->isEmpty()
+                ? TaintSet::of(TaintKind::Sql)
+                : $residuals;
         }
 
-        return $reverts !== null && ! $reverts->intersect(self::sqlResiduals())->isEmpty()
-            ? TaintSet::of(TaintKind::Sql)
-            : $residuals;
+        // A formula behind an apostrophe rides with `csv` the same way.
+        if ($argument->has(TaintKind::CsvPrefixed) && $reached->has(TaintKind::Csv)) {
+            $through = $through->with(
+                $reverts !== null && $reverts->has(TaintKind::CsvPrefixed) ? TaintKind::Csv : TaintKind::CsvPrefixed,
+            );
+        }
+
+        return $through;
     }
 
     /**
@@ -4552,11 +4584,12 @@ final class FunctionAnalysis
      */
     private static function madeFrom(TaintSet $argument, TaintSet $reached): TaintSet
     {
-        if (! $argument->has(TaintKind::Sql)) {
-            return TaintSet::empty();
-        }
+        $made = $argument->has(TaintKind::Sql) ? $reached->intersect(self::sqlResiduals()) : TaintSet::empty();
 
-        return $reached->intersect(self::sqlResiduals());
+        // `function acme_cell( $v ) { return preg_replace( '/^([=+\-@])/', "'$1", $v ); }`
+        return $argument->has(TaintKind::Csv) && $reached->has(TaintKind::CsvPrefixed)
+            ? $made->with(TaintKind::CsvPrefixed)
+            : $made;
     }
 
     /**
@@ -6329,6 +6362,13 @@ final class FunctionAnalysis
                         $reference->sinkIdentity,
                         $reference->functionDisplayName,
                     ),
+                    TaintKind::CsvPrefixed => sprintf(
+                        'Reaches %s inside %s behind an apostrophe. The writer keeps a backslash as its escape '
+                            . 'character, so a quote after one ends the cell early and starts a cell the apostrophe '
+                            . 'does not cover. Pass an empty escape character.',
+                        $reference->sinkIdentity,
+                        $reference->functionDisplayName,
+                    ),
                     default => sprintf(
                         'Reaches %s inside %s with %s taint intact.',
                         $reference->sinkIdentity,
@@ -6547,12 +6587,16 @@ final class FunctionAnalysis
      * `unserialize_allows_objects`: a call that already forbids classes cannot
      * run a POP chain, and reporting it would tell people to do the thing they
      * have done.
+     *
+     * `csv_escapable`: a writer that doubles every quote keeps each value in
+     * its own cell, so an apostrophe in front of it covers all of it.
      */
     private function sinkApplies(Sink $sink, Operand $operand): bool
     {
         return match ($sink->appliesBy) {
             Sink::UNANCHORED => ! $this->anchors->has($operand),
             Sink::UNSERIALIZE_ALLOWS_OBJECTS => $this->sinkCall === null || ! $this->forbidsClasses($this->sinkCall),
+            Sink::CSV_ESCAPABLE => $this->sinkCall === null || ! self::escapesEveryQuote($this->sinkCall),
             Sink::ESCAPED_THEN_VOIDED => $this->state->effectiveTaintOf($operand)->has(TaintKind::Escaped),
             // A component whose tags were stripped and whose quotes were not,
             // landing inside a quoted attribute. `html` is excluded so a raw
@@ -6588,6 +6632,21 @@ final class FunctionAnalysis
         $name = OperandHelper::literalString($definition->name);
 
         return $name !== null && strtolower($name) === 'false';
+    }
+
+    /**
+     * Does this `fputcsv()` call pass an empty escape character?
+     *
+     * Read as the fifth argument, written as a literal. PHP's default is a
+     * backslash, and `"\0"` or any other character leaves the same gap for a
+     * value that holds it. A named `escape:` argument is not read, because the
+     * control flow graph keeps arguments by position only, so it reports.
+     */
+    private static function escapesEveryQuote(CallTarget $call): bool
+    {
+        $escape = $call->argument(4);
+
+        return $escape !== null && OperandHelper::literalString($escape) === '';
     }
 
     /**
@@ -6646,6 +6705,10 @@ final class FunctionAnalysis
         if (! $taint->has($sink->kind)) {
             $this->checkQueryShape($sink, $op, $operand, $identity);
 
+            if ($sink->kind === TaintKind::CsvPrefixed && $this->sinkApplies($sink, $operand)) {
+                $this->recordPrefixContext($sink, $op, $operand, $identity);
+            }
+
             return;
         }
 
@@ -6672,6 +6735,7 @@ final class FunctionAnalysis
 
         $this->recordSinkReference($sink, $op, $identity, $taint->partsOf($sink->kind));
         $this->recordQuoteContext($sink, $op, $operand, $identity);
+        $this->recordPrefixContext($sink, $op, $operand, $identity);
 
         if (! $this->collecting || ! $this->collectFindings) {
             return;
@@ -6684,7 +6748,14 @@ final class FunctionAnalysis
             $op,
             $identity,
             $operand,
-            sprintf('Reaches %s with %s taint intact.', $identity, $sink->kind->value),
+            $sink->kind === TaintKind::CsvPrefixed
+                ? sprintf(
+                    'Reaches %s behind an apostrophe, with a backslash as the escape character. A quote after a '
+                        . 'backslash ends the cell early and starts a cell the apostrophe does not cover. Pass an '
+                        . 'empty escape character: fputcsv( $handle, $row, \',\', \'"\', \'\' ).',
+                    $identity,
+                )
+                : sprintf('Reaches %s with %s taint intact.', $identity, $sink->kind->value),
         );
     }
 
@@ -6881,6 +6952,44 @@ final class FunctionAnalysis
                 $this->state->effectiveTaintOf($component)->parts(),
             );
         }
+    }
+
+    /**
+     * Where the seeded parameter reaches a writer that lets a cell end early,
+     * for a caller whose value, or this callee, put an apostrophe in front.
+     *
+     * The probe seeds `csv`. A caller that neutralised its argument passes
+     * `csv_prefixed`, which a reference recorded for `csv` does not match. A
+     * callee that neutralises the parameter itself reaches the sink with
+     * `csv_prefixed`, which the caller's `csv` does not match. So each records
+     * a reference for the other kind as well.
+     */
+    private function recordPrefixContext(Sink $sink, Op $op, Operand $operand, string $identity): void
+    {
+        if ($sink->kind !== TaintKind::CsvPrefixed || $this->seedParameterIndex === null || ! $this->collecting) {
+            return;
+        }
+
+        $taint = $this->guardedEffectiveTaintOf($operand);
+
+        if (! $taint->has(TaintKind::Seed)) {
+            return;
+        }
+
+        [$held, $other] = $taint->has(TaintKind::CsvPrefixed)
+            ? [TaintKind::CsvPrefixed, TaintKind::Csv]
+            : [TaintKind::Csv, TaintKind::CsvPrefixed];
+
+        if (! $taint->has($held)) {
+            return;
+        }
+
+        $this->recordSinkReference(
+            new Sink($sink->matcher, $sink->arguments, $other, $sink->severity, $sink->ruleId),
+            $op,
+            $identity,
+            $taint->partsOf($held),
+        );
     }
 
     /**

@@ -3,7 +3,8 @@
 /**
  * A spreadsheet treats a cell beginning `=`, `+`, `-` or `@` as a formula.
  * Prefixing one with an apostrophe stops that, and it is exactly what
- * `wp.output.csv-injection` tells people to do.
+ * `wp.output.csv-injection` tells people to do. The empty escape character
+ * makes fputcsv() double every quote, so the value cannot end its cell early.
  *
  * Asking for something and then not crediting it when it is done is the same
  * defect as advice that cannot be followed.
@@ -18,6 +19,6 @@ function acme_export_safely(): void {
 
 	$name = preg_replace( '/^([=+\-@])/', "'$1", (string) get_option( 'acme_name' ) );
 
-	fputcsv( $out, array( $name ) );
+	fputcsv( $out, array( $name ), ',', '"', '' );
 	fclose( $out );
 }
