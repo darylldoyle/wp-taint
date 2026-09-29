@@ -154,6 +154,13 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A write under a literal key joined the element it replaced.
+  `$args['include'] = absint( $args['include'] )` and then
+  `echo $args['include']` reported the request data the first line had
+  replaced. php-cfg keeps one operand for the array, so both values sat in one
+  element. A read later in the same block, with nothing between that could
+  change the element, now sees only what the write left. WooCommerce's
+  webhook search builds `IN (…)` from ids this way.
 - `wp.csrf.bypassable-nonce-check` reported a nonce check that stops a
   request with no nonce anyway (issue 8). The rule saw
   `isset( $n ) && ! wp_verify_nonce( $n )` and stopped there. It did not look

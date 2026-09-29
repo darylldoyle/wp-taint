@@ -167,6 +167,9 @@ final class FunctionAnalysis
     /** The block being walked, so a sink can ask what guarded the path to it. */
     private ?Block $currentBlock = null;
 
+    /** Whether no variable can change out of sight: see referenceFree(). */
+    private ?bool $referenceFree = null;
+
     /** The call currently being reported on, for sink strategies that need it. */
     private ?CallTarget $sinkCall = null;
 
@@ -1859,6 +1862,12 @@ final class FunctionAnalysis
             return $this->state->set($op->result, TaintSet::empty());
         }
 
+        $overwrite = $key === null ? null : $this->overwriteBefore($op, $key);
+
+        if ($overwrite !== null && $key !== null) {
+            return $this->transferOverwrittenRead($op, $key, $overwrite);
+        }
+
         if ($key !== null) {
             return $this->transferKeyedRead($op, [$key]);
         }
@@ -1875,6 +1884,177 @@ final class FunctionAnalysis
             $op->var,
             sprintf('Read out of %s.', OperandHelper::describe($op->var)),
         );
+    }
+
+    /**
+     * The write that last set this element, earlier in the same block, when
+     * nothing between could have changed it.
+     *
+     * php-cfg keeps one operand for an array however many of its elements are
+     * written, so a write under a key joins the element it replaces:
+     *
+     * ```php
+     * $args['include'] = implode( ',', wp_parse_id_list( $args['include'] ) );
+     * $include         = 'AND webhook_id IN (' . $args['include'] . ')';
+     * ```
+     *
+     * read the request's list, which the first line had replaced with ids.
+     * Within one block the ops run in order, so the read sees exactly what
+     * the write left. Anything between that touches the array, other than a
+     * read or write under a different literal key, ends the search: a write
+     * under a computed key, a push that could land on an integer key, a call
+     * the array is handed to, an `unset()`. So does a function where a
+     * variable can change without its operand in sight: a reference, a
+     * `global` or `static`, an include, `extract()`, or a variable variable.
+     */
+    private function overwriteBefore(Op\Expr\ArrayDimFetch $read, int|string $key): ?Op\Expr\Assign
+    {
+        $block = $this->currentBlock;
+        $array = $read->var;
+
+        if ($block === null || OperandHelper::variableName($array) === 'GLOBALS' || ! $this->referenceFree()) {
+            return null;
+        }
+
+        $children = array_values($block->children);
+        $at = self::positionOf($read, $children);
+
+        if ($at === null) {
+            return null;
+        }
+
+        // Back from the read, nearest first.
+        foreach (array_reverse(array_slice($children, 0, $at, true), true) as $index => $op) {
+            if (! in_array($op, $array->usages, true)) {
+                continue;
+            }
+
+            if (! $op instanceof Op\Expr\ArrayDimFetch || $op->var !== $array) {
+                return null;
+            }
+
+            if ($op->dim === null) {
+                // A push takes the next integer key, which could be this one.
+                if (is_int($key)) {
+                    return null;
+                }
+
+                continue;
+            }
+
+            $written = OperandHelper::literalKey($op->dim);
+
+            if ($written === null) {
+                return null;
+            }
+
+            if ($written !== $key) {
+                continue;
+            }
+
+            // The same element: the write that set it, or a read of it or a
+            // write below it, which ends the search.
+            foreach ($op->result->ops as $writer) {
+                if ($writer instanceof Op\Expr\Assign && $writer->var === $op->result) {
+                    $position = self::positionOf($writer, $children);
+
+                    return $position !== null && $position > $index && $position < $at ? $writer : null;
+                }
+            }
+
+            return null;
+        }
+
+        return null;
+    }
+
+    /**
+     * @param list<Op> $ops
+     */
+    private static function positionOf(Op $op, array $ops): ?int
+    {
+        foreach ($ops as $position => $each) {
+            if ($each === $op) {
+                return $position;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Whether no variable in this function can change without an op on its
+     * operand: see {@see overwriteBefore()}.
+     */
+    private function referenceFree(): bool
+    {
+        if ($this->referenceFree !== null) {
+            return $this->referenceFree;
+        }
+
+        foreach ($this->context->func->params as $param) {
+            if ($param->byRef) {
+                return $this->referenceFree = false;
+            }
+        }
+
+        foreach ($this->blocks as $block) {
+            foreach ($block->children as $op) {
+                if (
+                    $op instanceof Op\Expr\AssignRef
+                    || $op instanceof Op\Terminal\GlobalVar
+                    || $op instanceof Op\Terminal\StaticVar
+                    || $op instanceof Op\Expr\Include_
+                    || $op instanceof Op\Expr\Eval_
+                    || $op instanceof Op\Expr\VarVar
+                    || ($op instanceof Op\Iterator\Value && $op->byRef)
+                ) {
+                    return $this->referenceFree = false;
+                }
+
+                if ($op instanceof Op\Expr\Closure) {
+                    foreach ($op->useVars as $use) {
+                        if ($use instanceof Operand\BoundVariable && $use->byRef) {
+                            return $this->referenceFree = false;
+                        }
+                    }
+                }
+
+                if ($op instanceof Op\Expr\FuncCall || $op instanceof Op\Expr\NsFuncCall) {
+                    $name = OperandHelper::literalString($op->name);
+
+                    if ($name === null || in_array(strtolower(ltrim($name, '\\')), ['extract', 'parse_str'], true)) {
+                        return $this->referenceFree = false;
+                    }
+                }
+            }
+        }
+
+        return $this->referenceFree = true;
+    }
+
+    /**
+     * A read of an element the same block wrote earlier: what the write left.
+     */
+    private function transferOverwrittenRead(Op\Expr\ArrayDimFetch $op, int|string $key, Op\Expr\Assign $write): bool
+    {
+        $value = $write->expr;
+        $proof = $this->proofFor($value, $this->currentBlock);
+        $taint = self::guarded($this->state->taintOf($value), $proof);
+        $provenance = new Provenance(
+            TraceVerb::Propagate,
+            $op,
+            sprintf(
+                "Read out of %s['%s'], as the write on line %d left it.",
+                OperandHelper::describe($op->var),
+                $key,
+                $write->getLine(),
+            ),
+            [$value],
+        );
+        $changed = $proof === null && $this->state->addShape($op->result, $this->state->shapeOf($value), $provenance);
+
+        return $this->state->set($op->result, $taint, $taint->isEmpty() ? null : $provenance) || $changed;
     }
 
     /**
