@@ -37,7 +37,8 @@ function partsReadBy(string $body): array
 
 it('names each part a function reads, through loops and copies', function (): void {
     // Under each parameter, and under each node read by literal key,
-    // `[others]` stands for the keys the body does not name there.
+    // `[others]` stands for the keys the body does not name there. Each
+    // parameter has `[*]` for what it holds under a computed key.
     expect(partsReadBy(<<<'PHP'
         function acme_f( $options, $flag, $atts ) {
             foreach ( $options as $field ) {
@@ -55,7 +56,7 @@ it('names each part a function reads, through loops and copies', function (): vo
         }
         PHP))->toBe([
         0 => ['[*]', "[*]['desc']", "[*]['value']", '[others]', '[*][others]'],
-        1 => ['[others]'],
+        1 => ['[*]', '[others]'],
         2 => ['#keys', '[*]', '[others]'],
     ]);
 });
@@ -67,7 +68,7 @@ it('does not count a write into an element as a read of it', function (): void {
             $args['nested']['id'] = 1;
             echo $args['label'];
         }
-        PHP))->toBe([0 => ["['label']", "['nested']", '[others]']]);
+        PHP))->toBe([0 => ["['label']", "['nested']", '[*]', '[others]']]);
 });
 
 it('follows a join its inputs agree on, and a computed key', function (): void {
@@ -79,7 +80,7 @@ it('follows a join its inputs agree on, and a computed key', function (): void {
         }
         PHP))->toBe([
         0 => ["['a']", '[*]', "['a']['b']", '[others]', "['a'][others]"],
-        1 => ['[others]'],
+        1 => ['[*]', '[others]'],
     ]);
 });
 

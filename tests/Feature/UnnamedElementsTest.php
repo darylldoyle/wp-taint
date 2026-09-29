@@ -164,3 +164,44 @@ it('keeps each element apart in a property a constructor stores whole', function
         }
         PHP))->toBe(['wp.xss.unescaped-output@10']);
 });
+
+it('hands a list back as a list', function (): void {
+    // Each item of a list literal sits under a computed key, which still goes
+    // to the part for the whole parameter, and comes back as items.
+    expect(unnamedElementFindings(<<<'PHP'
+        function acme_id( $rows ) {
+            return $rows;
+        }
+        function acme_labels( $rows ) {
+            foreach ( $rows as $row ) {
+                echo esc_html( $row['label'] );
+            }
+            return $rows;
+        }
+        function acme_show() {
+            $rows = array( array( 'raw' => $_GET['r'], 'label' => 'Name' ) );
+            foreach ( acme_id( $rows ) as $row ) {
+                echo $row['label'];
+                echo $row['raw'];
+            }
+            foreach ( acme_labels( $rows ) as $row ) {
+                echo $row['label'];
+                echo $row['raw'];
+            }
+        }
+        PHP))->toBe(['wp.xss.unescaped-output@15', 'wp.xss.unescaped-output@19']);
+});
+
+it('still reaches every read through a list item', function (): void {
+    // An item under a computed key could be under any key, so a callee's
+    // read of a named key still sees it.
+    expect(unnamedElementFindings(<<<'PHP'
+        function acme_first( $rows ) {
+            echo $rows['title'];
+            return $rows;
+        }
+        function acme_show() {
+            acme_first( array( $_GET['t'] ) );
+        }
+        PHP))->toBe(['wp.xss.unescaped-output@3']);
+});

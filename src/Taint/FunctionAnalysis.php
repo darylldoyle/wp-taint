@@ -952,10 +952,12 @@ final class FunctionAnalysis
 
     /**
      * A shape holding `$taint` at `$path` and nothing else: under each literal
-     * key in turn, under any element for {@see ParameterParts::ANY}, under the
-     * element standing for the keys no part names for
-     * {@see ParameterParts::OTHERS}, and in the keys for a path that ends in
-     * {@see ParameterParts::KEYS}.
+     * key in turn, under the element standing for what the parameter holds
+     * under a computed key for {@see ParameterParts::ANY}, under the element
+     * standing for the keys no part names for {@see ParameterParts::OTHERS},
+     * and in the keys for a path that ends in {@see ParameterParts::KEYS}.
+     * Seeded as elements that stand for others, the first two show where the
+     * caller's elements went: see {@see mappedBack()}.
      *
      * @param list<int|string>       $path
      * @param list<list<int|string>> $parts every part of the parameter
@@ -968,7 +970,7 @@ final class FunctionAnalysis
 
         foreach (array_reverse($steps, true) as $at => $step) {
             $shape = match ($step) {
-                ParameterParts::ANY => Shape::rest($shape),
+                ParameterParts::ANY => Shape::element(Shape::ITEMS, $shape),
                 ParameterParts::OTHERS => Shape::element(
                     Shape::others(ParameterParts::namedUnder($parts, array_slice($steps, 0, $at))),
                     $shape,
@@ -4315,6 +4317,8 @@ final class FunctionAnalysis
      *
      * A sealed map makes this a no-op, which is what keeps the caller's own
      * probe runs from reintroducing the problem one frame up.
+     *
+     * @param array{string, Shape}|null $others the stand-in the piece is for: see mappedBack()
      */
     private function applySummaryProperties(
         Op\Expr $op,
@@ -4322,7 +4326,7 @@ final class FunctionAnalysis
         int $index,
         Operand $argument,
         TaintSet $argumentTaint,
-        ?Shape $others = null,
+        ?array $others = null,
     ): bool {
         $changed = false;
 
@@ -4428,6 +4432,8 @@ final class FunctionAnalysis
      * through a helper chain exactly as it carries a capture: A's probe
      * applying B's summary learns that A's parameter reaches the template B
      * includes, and A's summary tells A's callers.
+     *
+     * @param array{string, Shape}|null $others the stand-in the piece is for: see mappedBack()
      */
     private function applySummaryScopes(
         Op\Expr $op,
@@ -4435,7 +4441,7 @@ final class FunctionAnalysis
         int $index,
         Operand $argument,
         TaintSet $argumentTaint,
-        ?Shape $others = null,
+        ?array $others = null,
     ): bool {
         $references = $summary->scopesFor($index);
 
@@ -5675,9 +5681,9 @@ final class FunctionAnalysis
                 // A guarded argument hands the callee what the guard admits.
                 $argumentTaint = self::guarded($piece, $proof);
 
-                // The piece of an `[others]` part is the elements it stood
-                // for, which come back each under its own key.
-                $others = $proof === null ? $this->othersNode($summary, $index, $part, $argument) : null;
+                // The piece of an `[others]` or a `[*]` part comes back where
+                // the caller had it: see mappedBack().
+                $others = $proof === null ? $this->standInNode($summary, $index, $part, $argument) : null;
 
                 if ($argumentTaint->isEmpty()) {
                     continue;
@@ -5797,8 +5803,10 @@ final class FunctionAnalysis
         $back = Shape::empty();
 
         foreach ($shape->elements() as $key => $element) {
-            $taint = self::eachBack($summary, $index, $element->flatten(), [ParameterParts::step($key)], $proof);
-            $back = $back->join(Shape::element($key, Shape::of($taint)));
+            $items = $key === Shape::ITEMS;
+            $step = $items ? ParameterParts::ANY : ParameterParts::step($key);
+            $taint = self::eachBack($summary, $index, $element->flatten(), [$step], $proof);
+            $back = $back->join($items ? Shape::rest(Shape::of($taint)) : Shape::element($key, Shape::of($taint)));
         }
 
         $own = $this->state->taintOf($argument)->union($shape->own());
@@ -5833,29 +5841,51 @@ final class FunctionAnalysis
 
     /**
      * What a summary's shape brings back from one piece of an argument: each
-     * node's kinds through the body. For the piece of an `[others]` part,
-     * `$others` is the node of the argument the part sits under, and each of
-     * its elements the part stood for comes back under its own key rather
-     * than as one set with the others. See {@see Shape::others()}.
+     * node's kinds through the body. The piece of an `[others]` part is the
+     * elements it stood for, and each comes back under its own key rather
+     * than as one set. The piece of a `[*]` part is what the argument holds
+     * under a computed key, and it comes back there with what it holds below
+     * itself. `$standIn` names which, with the node of the argument the part
+     * sits under: see {@see standInNode()}.
+     *
+     * A stand-in is replaced only where it holds its own seed. One that only
+     * holds another stand-in below it, `[*][others]` inside `[*]`, is walked
+     * into.
+     *
+     * @param array{string, Shape}|null $standIn
      */
     private static function mappedBack(
         Shape $reached,
         TaintSet $argumentTaint,
         ?TaintSet $reverts,
-        ?Shape $others,
+        ?array $standIn,
     ): Shape {
         $map = static fn (TaintSet $kinds): TaintSet => self::throughBody($argumentTaint, $kinds, $reverts);
 
-        if ($others === null) {
+        if ($standIn === null) {
             return $reached->mapSets($map);
         }
 
-        $back = static function (string $key, Shape $element) use ($others, $reverts): array {
-            $kinds = $element->flatten();
-            $leftOut = Shape::leftOutBy($key) ?? [];
-            $placed = [];
+        [$kind, $node] = $standIn;
 
-            foreach ($others->elements() as $at => $value) {
+        $back = static function (string $key, Shape $element) use ($kind, $node, $reverts): ?Shape {
+            if ($element->own()->isEmpty() || ($key === Shape::ITEMS) !== ($kind === Shape::ITEMS)) {
+                return null;
+            }
+
+            $kinds = $element->flatten();
+            $through = static fn (Shape $value): Shape => $value->mapSets(
+                static fn (TaintSet $set): TaintSet => self::throughBody($set, $kinds, $reverts),
+            );
+
+            if ($kind === Shape::ITEMS) {
+                return Shape::rest($through($node->restPart()));
+            }
+
+            $leftOut = Shape::leftOutBy($key) ?? [];
+            $placed = Shape::empty();
+
+            foreach ($node->elements() as $at => $value) {
                 if (isset($leftOut[$at])) {
                     continue;
                 }
@@ -5866,9 +5896,7 @@ final class FunctionAnalysis
                     $at = Shape::others(array_keys($leftOut + (Shape::leftOutBy($at) ?? [])));
                 }
 
-                $placed[$at] = $value->mapSets(
-                    static fn (TaintSet $set): TaintSet => self::throughBody($set, $kinds, $reverts),
-                );
+                $placed = $placed->join(Shape::element($at, $through($value)));
             }
 
             return $placed;
@@ -5878,14 +5906,18 @@ final class FunctionAnalysis
     }
 
     /**
-     * The node of the argument an `[others]` part sits under, or null for any
-     * other part.
+     * For the piece of an `[others]` or `[*]` part, which stand-in it is, as
+     * {@see Shape::OTHERS} or {@see Shape::ITEMS}, and the node of the
+     * argument the part sits under. Null for any other part.
+     *
+     * @return array{string, Shape}|null
      */
-    private function othersNode(FunctionSummary $summary, int $index, ?int $part, Operand $argument): ?Shape
+    private function standInNode(FunctionSummary $summary, int $index, ?int $part, Operand $argument): ?array
     {
         $path = $part === null || $part === 0 ? null : ($summary->partsFor($index)[$part - 1] ?? null);
+        $last = $path === null || $path === [] ? null : $path[count($path) - 1];
 
-        if ($path === null || $path === [] || $path[count($path) - 1] !== ParameterParts::OTHERS) {
+        if ($path === null || ($last !== ParameterParts::OTHERS && $last !== ParameterParts::ANY)) {
             return null;
         }
 
@@ -5895,7 +5927,7 @@ final class FunctionAnalysis
             $node = $step === ParameterParts::ANY ? $node->anyElement() : $node->elementAt($step);
         }
 
-        return $node;
+        return [$last === ParameterParts::ANY ? Shape::ITEMS : Shape::OTHERS, $node];
     }
 
     /**
@@ -5983,6 +6015,13 @@ final class FunctionAnalysis
         }
 
         foreach ($node->elements() as $key => $element) {
+            // What a probe's parameter holds under a computed key stays there.
+            if ($key === Shape::ITEMS) {
+                self::splitByParts($element, [...$path, ParameterParts::ANY], $parts, $keys, $pieces);
+
+                continue;
+            }
+
             // An element standing for other keys could be under any of them.
             if (Shape::isStandIn($key)) {
                 foreach (self::standInSteps($key, $path, $parts, $keys) as $step) {

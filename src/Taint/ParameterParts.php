@@ -147,6 +147,12 @@ final class ParameterParts
             static fn (array $a, array $b): int => [count($a), self::describe($a)] <=> [count($b), self::describe($b)],
         );
 
+        // A part for what the parameter holds under a computed key, so a list's
+        // items come back as items: see Shape::ITEMS.
+        if (! in_array([self::ANY], $parts, true) && count($parts) < TaintSet::MAX_PARTS - 1) {
+            $parts[] = [self::ANY];
+        }
+
         foreach ($nodes as $node) {
             if (count($parts) >= TaintSet::MAX_PARTS - 1) {
                 break;
