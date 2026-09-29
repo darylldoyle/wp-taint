@@ -243,6 +243,11 @@ function = "wp_unslash"
 note = "Strips slashes only. Pure pass-through. NOT a sanitizer."
 ```
 
+Some plugins fire their hooks through wrappers of their own, which a scan
+rarely has the source for. `registries/gravity-forms.toml` models Gravity
+Forms' `gf_do_action()` and `gf_apply_filters()`. The WordPress catalogue
+extends it, so every scan loads it, and nothing needs turning on.
+
 A PHP function the catalogue does not list behaves by what PHP declares it to
 return. `registries/php-generated.toml` is written from reflection by
 `tools/generate-php-catalogue.php`, and any hand-written entry wins over it.
