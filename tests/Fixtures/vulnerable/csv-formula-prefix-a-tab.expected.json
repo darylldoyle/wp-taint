@@ -1,0 +1,10 @@
+{
+    "expectation": "vulnerable",
+    "findings": [
+        {
+            "ruleId": "wp.output.csv-injection",
+            "kind": "csv",
+            "line": 17
+        }
+    ]
+}
