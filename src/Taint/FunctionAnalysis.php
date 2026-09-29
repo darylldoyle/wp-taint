@@ -1879,11 +1879,58 @@ final class FunctionAnalysis
     /**
      * What an array holds once `$written` goes into it under `$fetch`'s key.
      */
-    private static function underKey(Op\Expr\ArrayDimFetch $fetch, Shape $written): Shape
+    private function underKey(Op\Expr\ArrayDimFetch $fetch, Shape $written): Shape
     {
-        $key = $fetch->dim === null ? null : OperandHelper::literalKey($fetch->dim);
+        $key = $fetch->dim === null ? null : $this->oneKey($fetch->dim);
 
         return $key === null ? Shape::rest($written) : Shape::element($key, $written);
+    }
+
+    /**
+     * The one key a write's key can be: a literal, a constant, or a parameter
+     * a summary for a fixed key binds, `$type` in
+     * `$this->sql_clauses[ $type ][] = $clause` called with `'where'`. Null
+     * when it can be more than one, which stays a computed key.
+     */
+    private function oneKey(Operand $dim): int|string|null
+    {
+        $keys = $this->namedKeys($dim);
+
+        return $keys !== null && count($keys) === 1 ? $keys[0] : null;
+    }
+
+    /**
+     * An element write into a property, as a write of the property.
+     */
+    private function writeIntoProperty(
+        Op\Expr\Assign|Op\Expr\AssignRef $op,
+        Op\Expr\PropertyFetch|Op\Expr\StaticPropertyFetch $fetch,
+        Shape $part,
+    ): bool {
+        $property = OperandHelper::literalString($fetch->name);
+
+        if ($property === null) {
+            if (! $part->isEmpty()) {
+                $this->imprecise = true;
+            }
+
+            return false;
+        }
+
+        $owner = $fetch instanceof Op\Expr\PropertyFetch
+            ? $this->propertyOwnerClass($fetch)
+            : $this->staticOwnerClass($fetch);
+
+        $this->properties->track($owner, $property);
+        $this->properties->recordAnchor($owner, $property, $this->anchors->has($op->expr));
+
+        if ($part->isEmpty()) {
+            return false;
+        }
+
+        $this->recordPropertyReference($owner, $property, $part);
+
+        return $this->properties->add($owner, $property, $part, $this->writeTrace($op, $property, $part->flatten()));
     }
 
     /**
@@ -1905,16 +1952,13 @@ final class FunctionAnalysis
     ): bool {
         $changed = false;
         $dim = $target;
-        $part = self::underKey($target, $written);
+        $part = $this->underKey($target, $written);
 
         for ($depth = 0; $depth < self::MAX_ELEMENT_DEPTH; $depth++) {
             $base = OperandHelper::definingOp($dim->var);
 
-            // An element write into a property stops here, as it did before:
-            // a property is one slot per class, so carrying it up would give
-            // every instance what one instance wrote. Stage 3c takes it on.
             if ($base instanceof Op\Expr\PropertyFetch || $base instanceof Op\Expr\StaticPropertyFetch) {
-                return $changed;
+                return $this->writeIntoProperty($op, $base, $part) || $changed;
             }
 
             if (! $base instanceof Op\Expr\ArrayDimFetch) {
@@ -1923,7 +1967,7 @@ final class FunctionAnalysis
 
             // `$dim->var` is what `$base` read out of `$base->var`, so the
             // part goes under `$base`'s key there.
-            $part = self::underKey($base, $part);
+            $part = $this->underKey($base, $part);
 
             if (! $part->flatten()->isEmpty()) {
                 $changed = $this->state->addShape(
@@ -6333,7 +6377,11 @@ final class FunctionAnalysis
         if ($variant === null) {
             $this->summaries->request($variantKey, $key, $bindings);
 
-            return $summary;
+            // The next round analyses the variant, and the property writes
+            // wait for it: applied now, under a key the summary cannot name,
+            // they would stay for every key to read. A function past its cap
+            // gets no variant, so its own summary applies in full.
+            return $this->summaries->isCapped($key) ? $summary : $summary->withoutPropertyWrites();
         }
 
         return $variant;

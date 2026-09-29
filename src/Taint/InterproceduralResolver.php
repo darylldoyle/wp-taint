@@ -172,6 +172,10 @@ final class InterproceduralResolver
                 $summaries->put($summary);
             }
 
+            foreach (array_keys($previousSummaries->capped()) as $capped) {
+                $summaries->markCapped($capped);
+            }
+
             $properties = clone $previousProperties;
             $scopes = clone $previousScopes;
             $changed = false;
@@ -215,7 +219,20 @@ final class InterproceduralResolver
                 foreach ($shardResult['requests'] as $variantKey => [$functionKey, $bindings]) {
                     $base = strtolower($functionKey);
 
-                    if (isset($variants[$base][$variantKey]) || count($variants[$base] ?? []) >= self::MAX_VARIANTS) {
+                    if (isset($variants[$base][$variantKey])) {
+                        continue;
+                    }
+
+                    // Past the cap a call applies the function's own summary,
+                    // property writes included, which it held back while it
+                    // waited. Its callers run again to do so.
+                    if (count($variants[$base] ?? []) >= self::MAX_VARIANTS) {
+                        if (! $summaries->isCapped($base)) {
+                            $summaries->markCapped($base);
+                            $changed = true;
+                            $moved['c:' . $base] = true;
+                        }
+
                         continue;
                     }
 

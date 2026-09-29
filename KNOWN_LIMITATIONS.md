@@ -268,29 +268,19 @@ what every part inherits. So does a callback `array_map()` and its relatives
 run, and a function declared twice, whose two bodies number their parts apart.
 **Direction:** over-reports.
 
-### An element write into a property stops at the property
+### An element write into a property reaches the property
 
 ```php
-$rows   = array();
-$rows[] = array( 'title' => $_GET['t'] );
-echo $rows[0]['title'];                 // reported
-
-$a['x']['y'] = $_GET['v'];
-echo $a['x']['y'];                      // reported
-
 $this->opts['name'] = $_GET['n'];       // in one method
-echo $this->opts['name'];               // in another: not reported
+echo $this->opts['name'];               // in another: reported
 ```
 
-An element write into a local array reaches the array, however many keys deep,
-and an array literal written into an element keeps its own elements. A write
-into an element of a property still lands on a temporary that nothing reads
-again. A property is one slot per class, so carrying the write up would give
-every instance what one instance wrote: WooCommerce's report queries share one
-clause list across every report. That waits for a design that tells instances
-apart.
-
-**Direction:** under-reports.
+A write into an element of a property reaches the property, however many keys
+deep. A property is still one slot per class, so every instance shares what
+any instance wrote. A write under a key a call fixes, `add_sql_clause( 'where',
+$clause )`, lands under that key, and a read under another key does not see
+it. A key the scanner cannot name lands where every read sees it.
+**Direction:** over-reports.
 
 **An overwrite replaces the element only for a read in the same block.**
 

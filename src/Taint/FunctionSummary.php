@@ -28,6 +28,8 @@ final class FunctionSummary
 
     private ?self $plain = null;
 
+    private ?self $withoutPropertyWrites = null;
+
     /**
      * @param array<int, TaintSet>            $paramToReturn kinds that reach the return value from each parameter
      * @param array<int, list<SinkReference>> $paramToSink   sinks each parameter reaches
@@ -368,6 +370,45 @@ final class FunctionSummary
             $sets($this->revertedResiduals),
             [],
             $sets($this->paramToReturnEach),
+            $this->keyParameters,
+        );
+    }
+
+    /**
+     * This summary with no parameter written into a property: what a call
+     * applies while it waits for the summary for its fixed key.
+     *
+     * The property map only grows. A call that applied this summary's own
+     * writes first, under a key it could not name, left them for every key
+     * to read, and the summary for the key it passes could only add to them.
+     * See {@see FunctionAnalysis::variantOf()}.
+     */
+    public function withoutPropertyWrites(): self
+    {
+        if ($this->paramToProperty === []) {
+            return $this;
+        }
+
+        return $this->withoutPropertyWrites ??= new self(
+            $this->key,
+            $this->displayName,
+            $this->paramToReturn,
+            $this->paramToSink,
+            $this->clears,
+            $this->introducesOrNull,
+            $this->imprecise,
+            $this->paramToParam,
+            $this->sourcesToParam,
+            $this->returnAnchored,
+            [],
+            $this->paramToCapture,
+            $this->paramToScope,
+            $this->paramToReturnShape,
+            $this->introducesShapeOrNull,
+            $this->parameterKeys,
+            $this->revertedResiduals,
+            $this->parameterParts,
+            $this->paramToReturnEach,
             $this->keyParameters,
         );
     }

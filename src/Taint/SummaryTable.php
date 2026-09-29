@@ -28,6 +28,14 @@ final class SummaryTable
     private array $requests = [];
 
     /**
+     * Functions with every summary for a fixed key they may have: see
+     * {@see markCapped()}.
+     *
+     * @var array<string, true>
+     */
+    private array $capped = [];
+
+    /**
      * Record every lookup from now on. See {@see ReadLog}.
      */
     public function recordReadsInto(?ReadLog $log): void
@@ -86,6 +94,31 @@ final class SummaryTable
     public function requests(): array
     {
         return $this->requests;
+    }
+
+    /**
+     * Record that a function has every summary for a fixed key it may have,
+     * so a call asking for another applies the function's own summary in
+     * full. See {@see FunctionAnalysis::variantOf()}.
+     */
+    public function markCapped(string $functionKey): void
+    {
+        $this->capped[strtolower($functionKey)] = true;
+    }
+
+    public function isCapped(string $functionKey): bool
+    {
+        $this->log?->record('c:' . strtolower($functionKey));
+
+        return isset($this->capped[strtolower($functionKey)]);
+    }
+
+    /**
+     * @return array<string, true>
+     */
+    public function capped(): array
+    {
+        return $this->capped;
     }
 
     public function has(string $key): bool

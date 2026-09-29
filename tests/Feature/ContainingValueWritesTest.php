@@ -7,8 +7,8 @@ use Enshrined\WpTaint\Scan\Scanner;
 use Enshrined\WpTaint\Taint\AnalysisOptions;
 
 // An element write lands on the temporary the fetch before it produced, which
-// nothing reads again, so `$a['x']['y'] = $_GET['v']` went nowhere. An element
-// write into a property still stops at the property: stage 3c.
+// nothing reads again, so `$a['x']['y'] = $_GET['v']` and
+// `$this->opts['k'] = $_GET['v']` both went nowhere.
 
 /**
  * @return list<string> rule@line for each finding
@@ -72,6 +72,57 @@ it('leaves the array a copy was taken from alone', function (): void {
         PHP))->toBe([]);
 });
 
+it('carries an element write into a property to the property', function (): void {
+    $findings = containingValueFindings(<<<'PHP'
+        class Acme_Box {
+            private $opts = array();
+            public function set() {
+                $this->opts['k'] = $_GET['x'];
+                echo $this->opts['k'];
+            }
+            public function show() {
+                echo $this->opts['k'];
+            }
+        }
+        PHP);
+
+    expect($findings)->toContain('wp.xss.unescaped-output@6')
+        ->and($findings)->toContain('wp.xss.unescaped-output@9');
+});
+
+it('carries a nested element write into a static property to the property', function (): void {
+    expect(containingValueFindings(<<<'PHP'
+        class Acme_Cache {
+            private static $cache = array();
+            public static function set( $group ) {
+                self::$cache[ $group ]['k'] = $_GET['x'];
+            }
+            public static function show() {
+                echo self::$cache['posts']['k'];
+            }
+        }
+        PHP))->toContain('wp.xss.unescaped-output@8');
+});
+
+it('carries a parameter written into a property element to the caller', function (): void {
+    expect(containingValueFindings(<<<'PHP'
+        class Acme_Box {
+            private $opts = array();
+            public function set( $value ) {
+                $this->opts['k'] = $value;
+            }
+            public function show() {
+                echo $this->opts['k'];
+            }
+        }
+        function acme_run() {
+            $box = new Acme_Box();
+            $box->set( $_GET['x'] );
+            $box->show();
+        }
+        PHP))->toContain('wp.xss.unescaped-output@8');
+});
+
 it('carries an array literal written into an element or a property', function (): void {
     $findings = containingValueFindings(<<<'PHP'
         class Acme_Box {
@@ -98,4 +149,28 @@ it('carries an array literal written into an element or a property', function ()
     expect($findings)->toContain('wp.xss.unescaped-output@8')
         ->and($findings)->toContain('wp.xss.unescaped-output@15')
         ->and($findings)->toContain('wp.xss.unescaped-output@19');
+});
+
+it('keeps a property element written under a fixed key apart from the others', function (): void {
+    // WooCommerce's SqlQuery::add_sql_clause( $type, $clause ): each clause
+    // type reads only what was written under it.
+    expect(containingValueFindings(<<<'PHP'
+        class Acme_Query {
+            private $clauses = array( 'where' => array(), 'order_by' => array() );
+            public function add( $type, $clause ) {
+                $this->clauses[ $type ][] = $clause;
+            }
+            public function get( $type ) {
+                return implode( ' ', $this->clauses[ $type ] );
+            }
+        }
+        function acme_report() {
+            global $wpdb;
+            $query = new Acme_Query();
+            $query->add( 'where', 'AND status = 1' );
+            $query->add( 'order_by', $_GET['orderby'] );
+            $wpdb->get_results( 'SELECT id FROM t WHERE 1=1 ' . $query->get( 'where' ) );
+            $wpdb->get_results( 'SELECT id FROM t ORDER BY ' . $query->get( 'order_by' ) );
+        }
+        PHP))->toBe(['wp.sqli.wpdb-query@17']);
 });

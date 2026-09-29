@@ -173,6 +173,14 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A write into an element of a property went nowhere, as a write two keys
+  deep into a local array did before. `$this->opts['name'] = $_GET['n']` in
+  one method left `echo $this->opts['name']` clean in another. It now reaches
+  the property. A call that passes a fixed key, such as WooCommerce's
+  `add_sql_clause( 'where', $clause )`, writes under that key alone, so a
+  report's order-by clause no longer reaches its where clause. While the
+  summary for a fixed key is still being worked out, the call holds back its
+  property writes, which would otherwise stay under a key any read sees.
 - A write two keys deep into a local array went nowhere.
   `$a['x']['y'] = $_GET['v']` wrote into the temporary `$a['x']` produced,
   and nothing read that temporary again, so `echo $a['x']['y']` was clean. The
