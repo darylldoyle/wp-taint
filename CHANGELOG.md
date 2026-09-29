@@ -154,6 +154,11 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A read whose key was not a literal read every element, even when every
+  value the key could hold was known. `$opts[ $key ]` in `foreach ( array(
+  'path', 'tmpPath' ) as $key )` read `$opts['url']` too, and so did a read
+  under a class constant. Such a read now sees only the elements the key can
+  name.
 - A property held one set of taint, and an array written into it whole stored
   none of its elements. `$this->opts = array( 'name' => $_GET['n'] )` left the
   property clean, so a read of `$this->opts['name']` in another method was

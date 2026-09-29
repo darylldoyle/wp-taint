@@ -136,6 +136,16 @@ echo $context['title'];   // reported
 A write with a literal key goes to a slot of its own, and a read naming that key
 sees only what went into it.
 
+A read counts its key as constant when every value the key can hold is known:
+a literal, a class or global constant, a join of those, or a `foreach` over a
+literal list that nothing writes into. Such a read sees only those elements, so
+`$o[ $k ]` inside `foreach ( array( 'path', 'tmpPath' ) as $k )` reads `'path'`
+and `'tmpPath'` and nothing else. A write under such a key still goes under a
+computed key, and an item of a list literal still sits under any index. Both
+would put taint under a literal key, and an element write keeps only what a
+value holds as a whole or under a computed key. See "A write into an element
+keeps only the value's own taint" below.
+
 **It stops helping the moment either end is dynamic.** A write with a computed
 key could land anywhere, so it goes to the whole-array slot; a read with a
 computed key could be any key, so it sees everything, including every per-key
