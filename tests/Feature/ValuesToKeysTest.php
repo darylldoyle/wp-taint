@@ -35,6 +35,14 @@ it('carries the values into the keys', function (string $body): void {
         $map = array_combine( array( $_GET['k'] ), array( 'v' ) );
         echo implode( ',', array_keys( $map ) );
         PHP],
+    'array_count_values() read by foreach' => [<<<'PHP'
+        $counts = array_count_values( array( $_GET['x'] ) );
+        foreach ( $counts as $value => $n ) { echo $value; }
+        PHP],
+    'array_map() over one array keeps its keys' => [<<<'PHP'
+        $rows = array( $_GET['k'] => 'v' );
+        foreach ( array_map( 'strtoupper', $rows ) as $key => $value ) { echo $key; }
+        PHP],
     'array_fill_keys() read by foreach' => [<<<'PHP'
         $ids = array_fill_keys( array( $_GET['k'] ), true );
         foreach ( $ids as $id => $on ) { echo $id; }
@@ -52,4 +60,11 @@ it('keeps each value where the function puts it', function (): void {
         $keys = array_fill_keys( array( $_GET['k'] ), 'on' );
         echo implode( ',', $keys );
         PHP))->toBe([6, 8]);
+});
+
+it('reads a count as the integer it is', function (): void {
+    expect(valuesToKeysLines(<<<'PHP'
+        $counts = array_count_values( array( 'a' => $_GET['v'] ) );
+        foreach ( $counts as $value => $n ) { echo $n; }
+        PHP))->toBe([]);
 });

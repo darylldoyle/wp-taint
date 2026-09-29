@@ -173,6 +173,10 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `array_keys()` read clean. The first array's values now become the keys.
   `array_flip()` also makes the keys the values, so flipping
   `array( 'a' => $_GET['v'] )` gives values that are only `'a'`.
+  `array_count_values()` makes the values the keys too, and counts them. A
+  count is an integer, so it no longer reports.
+- `array_map()` with one array dropped that array's keys, so a `foreach` key
+  over its result read clean. It now keeps them, as PHP does.
 - A write under a literal key joined the element it replaced.
   `$args['include'] = absint( $args['include'] )` and then
   `echo $args['include']` reported the request data the first line had

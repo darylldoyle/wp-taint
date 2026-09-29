@@ -1457,7 +1457,9 @@ final class FunctionAnalysis
         $calls = $this->resolver->resolveAll($op, $this->context, $this->types);
 
         if ($calls !== [] && $op instanceof Op\Expr) {
-            return $this->transferCalls($op, $calls);
+            $changed = $this->transferCalls($op, $calls);
+
+            return $this->keepMappedKeys($op) || $changed;
         }
 
         return match (true) {
@@ -3657,8 +3659,9 @@ final class FunctionAnalysis
     }
 
     /**
-     * `array_flip()`, `array_combine()` and `array_fill_keys()`: the first
-     * array's values become the result's keys.
+     * `array_flip()`, `array_combine()`, `array_fill_keys()` and
+     * `array_count_values()`: the first array's values become the result's
+     * keys.
      *
      * ```php
      * $ids = array_fill_keys( $_GET['ids'], true );
@@ -3668,9 +3671,9 @@ final class FunctionAnalysis
      * A plain propagator put everything into the result's value, so a
      * `foreach` key or `array_keys()` read nothing. `array_flip()` also makes
      * the keys the values. `array_combine()` takes its values from the second
-     * array, each with what it holds below itself, and `array_fill_keys()`
-     * puts the second argument under every key. Null when an argument is
-     * missing, for the plain reading.
+     * array, each with what it holds below itself, `array_fill_keys()` puts
+     * the second argument under every key, and `array_count_values()` counts.
+     * Null when an argument is missing, for the plain reading.
      */
     private function transferValuesToKeys(Op\Expr $op, CallTarget $call, Matcher $matcher, string $description): ?bool
     {
@@ -3678,7 +3681,9 @@ final class FunctionAnalysis
         $second = $call->argument(1);
         $name = $matcher->key();
 
-        if ($first === null || ($name !== 'function:array_flip' && $second === null)) {
+        $oneArgument = in_array($name, ['function:array_flip', 'function:array_count_values'], true);
+
+        if ($first === null || (! $oneArgument && $second === null)) {
             return null;
         }
 
@@ -3687,6 +3692,9 @@ final class FunctionAnalysis
 
         if ($name === 'function:array_flip') {
             $values = Shape::of($this->keysOf($first));
+        } elseif ($name === 'function:array_count_values') {
+            // Each value is a count, an integer the input cannot choose.
+            $values = Shape::empty();
         } elseif ($name === 'function:array_combine' && $second !== null) {
             $own = $this->state->taintOf($second);
             $values = $this->state->shapeOf($second)->anyElement();
@@ -3911,6 +3919,43 @@ final class FunctionAnalysis
         }
 
         return $changed;
+    }
+
+    /**
+     * `array_map( $cb, $items )` with one array keeps its keys, whatever the
+     * callback returns under them. With more than one it numbers them.
+     *
+     * The callback's returns go under a computed key of the result, and the
+     * keys went nowhere: `foreach ( array_map( 'trim', $rows ) as $k => $v )`
+     * read `$k` clean when `$rows` was keyed by request data.
+     */
+    private function keepMappedKeys(Op\Expr $op): bool
+    {
+        if (! ($op instanceof Op\Expr\FuncCall || $op instanceof Op\Expr\NsFuncCall) || count($op->args) !== 2) {
+            return false;
+        }
+
+        $name = OperandHelper::literalString($op->name);
+        $items = $op->args[1] ?? null;
+
+        if ($name === null || strtolower(ltrim($name, '\\')) !== 'array_map' || ! $items instanceof Operand) {
+            return false;
+        }
+
+        $keys = $this->keysOf($items);
+
+        if ($keys->isEmpty()) {
+            return false;
+        }
+
+        $provenance = new Provenance(
+            TraceVerb::Propagate,
+            $op,
+            'array_map() keeps the keys of the one array it maps.',
+            [$items],
+        );
+
+        return $this->state->addShape($op->result, Shape::keys($keys, $provenance), $provenance);
     }
 
     /**
@@ -5453,7 +5498,12 @@ final class FunctionAnalysis
         // reads and returns. See {@see CallTarget::$positional}.
         $plain = $call->positional && $this->resultMode === CallResultMode::Value;
 
-        $movesValuesToKeys = ['function:array_flip', 'function:array_combine', 'function:array_fill_keys'];
+        $movesValuesToKeys = [
+            'function:array_flip',
+            'function:array_combine',
+            'function:array_fill_keys',
+            'function:array_count_values',
+        ];
 
         if ($plain && in_array($matcher->key(), $movesValuesToKeys, true)) {
             $moved = $this->transferValuesToKeys($op, $call, $matcher, $description);

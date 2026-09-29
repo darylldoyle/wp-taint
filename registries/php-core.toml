@@ -284,6 +284,11 @@ function = "array_flip"
 keeps_residuals = true
 args = [0]
 
+# The values become the keys, each counting how often it appears.
+[[propagators]]
+function = "array_count_values"
+args = [0]
+
 [[propagators]]
 function = "array_values"
 keeps_residuals = true
