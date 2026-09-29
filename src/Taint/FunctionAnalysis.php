@@ -77,6 +77,12 @@ final class FunctionAnalysis
     private array $storedValues = [];
 
     /**
+     * How many keys deep an element write is carried up to its array:
+     * `$a['1']['2']…['8']`.
+     */
+    private const MAX_ELEMENT_DEPTH = 8;
+
+    /**
      * Properties the seeded parameter reached, keyed to deduplicate, with
      * what reached each.
      *
@@ -1604,14 +1610,15 @@ final class FunctionAnalysis
             $changed = $this->state->addShape($op->result, $kept, $provenance) || $changed;
         }
 
-        // A property keeps the whole value, its elements under their keys, so
-        // a read of one element sees only what that element was given. A
-        // guard vouches for a scalar, so what it lets through is one set.
+        // Written into an element or a property, the value goes whole, its
+        // parts below its own taint. `$a['x'] = array( 'y' => $v )` and
+        // `$this->opts = array( 'k' => $v )` carried nothing, because the
+        // literal holds its taint under its keys. A guarded value is one set.
         $written = $proof === null
-            ? Shape::node($taint, $shape)
+            ? $this->state->valueShapeOf($value)
             : Shape::of($taint->union($container));
 
-        return $this->propagateIndirectWrite($op, $taint->union($container)->union($keys), $written) || $changed;
+        return $this->propagateIndirectWrite($op, $written) || $changed;
     }
 
     /**
@@ -1686,12 +1693,10 @@ final class FunctionAnalysis
      * `$taint` is what an element write stores, and `$value` the whole value
      * a property write stores.
      */
-    private function propagateIndirectWrite(
-        Op\Expr\Assign|Op\Expr\AssignRef $op,
-        TaintSet $taint,
-        Shape $value,
-    ): bool {
+    private function propagateIndirectWrite(Op\Expr\Assign|Op\Expr\AssignRef $op, Shape $written): bool
+    {
         $target = OperandHelper::definingOp($op->var);
+        $taint = $written->flatten();
 
         // Record *every* property write, tainted or not. "We watched this
         // property and nothing tainted ever went into it" is the answer the
@@ -1713,7 +1718,7 @@ final class FunctionAnalysis
                 // are the ones the body lets through to the property, plus any
                 // its own sources add. The caller publishes the first of
                 // those only: see applySummaryProperties().
-                $this->recordPropertyReference($owner, $property, $value);
+                $this->recordPropertyReference($owner, $property, $written);
 
                 // Whether the written value carried a literal fragment, so a
                 // read elsewhere can tell `$this->option_name` holding
@@ -1733,71 +1738,35 @@ final class FunctionAnalysis
             && $this->recordKeyTaint($op, $target);
 
         if ($target instanceof Op\Expr\PropertyFetch || $target instanceof Op\Expr\StaticPropertyFetch) {
-            return $this->writeProperty($op, $target, $value);
+            return $this->writeProperty($op, $target, $written);
         }
 
+        // `$a['x']['y'] = $v` is part of what the fetch before it read from.
+        $contained = $target instanceof Op\Expr\ArrayDimFetch
+            && $this->writeIntoContainingValue($op, $target, $written);
+
         if ($taint->isEmpty()) {
-            return $keyed;
+            return $keyed || $contained;
         }
 
         if ($target instanceof Op\Expr\ArrayDimFetch) {
             $key = $target->dim === null ? null : OperandHelper::literalKey($target->dim);
 
-            // A literal key is precise, and a read naming the same key sees
-            // only this. `$context['id'] = 42` no longer taints
-            // `$context['title']`.
-            if ($key !== null) {
-                return $this->state->addShape(
-                    $target->var,
-                    Shape::element($key, Shape::of($taint)),
-                    new Provenance(
-                        TraceVerb::Propagate,
-                        $op,
-                        sprintf("Written into %s['%s'].", OperandHelper::describe($target->var), $key),
-                        [$op->expr],
-                    ),
-                );
+            if ($key === null) {
+                $each = $target->dim === null ? null : $this->eachPart($target->dim);
+
+                if ($each !== null) {
+                    return $this->writeEachElement($op, $target, $taint, $each) || $keyed || $contained;
+                }
+
+                $numbers = $target->dim === null ? null : $this->loopKeyNumbers($target->dim);
+
+                if ($numbers !== null && $taint->namesElements()) {
+                    return $this->writeUnderLoopKeys($op, $target, $taint, $numbers) || $keyed || $contained;
+                }
             }
 
-            // A probe's write under the key of a loop over its parameter puts
-            // what each element brought under Shape::EACH: see eachPart().
-            $each = $target->dim === null ? null : $this->eachPart($target->dim);
-
-            if ($each !== null) {
-                return $this->writeEachElement($op, $target, $taint, $each) || $keyed;
-            }
-
-            // A write under the key of a loop over an array with literal keys
-            // puts each element's kinds back under that element's key: see
-            // rebuildLoopNumbers().
-            $numbers = $target->dim === null ? null : $this->loopKeyNumbers($target->dim);
-
-            if ($numbers !== null && $taint->namesElements()) {
-                return $this->writeUnderLoopKeys($op, $target, $taint, $numbers) || $keyed;
-            }
-
-
-            // A computed key can land anywhere, so it goes to the whole-array
-            // slot — which is what every element write did before.
-            //
-            // Held apart from the operand's own taint because SSA does not
-            // re-version an array for an element write: `$a = array();` and
-            // `$a[$k] = $tainted;` write the same operand, and letting them
-            // share a slot makes the fixed point oscillate.
-            return $this->state->addShape(
-                $target->var,
-                Shape::rest(Shape::of($taint)),
-                new Provenance(
-                    TraceVerb::Propagate,
-                    $op,
-                    sprintf(
-                        'Written into %s under a computed key. The key could be any of them, so the whole array '
-                            . 'is treated as tainted from here.',
-                        OperandHelper::describe($target->var),
-                    ),
-                    [$op->expr],
-                ),
-            ) || $keyed;
+            return $this->writeElement($op, $target, $written) || $keyed || $contained;
         }
 
         return false;
@@ -1833,6 +1802,122 @@ final class FunctionAnalysis
             $value,
             $this->writeTrace($op, $property, $value->flatten()),
         );
+    }
+
+    /**
+     * A write into one element of an array: `$target->var[ $target->dim ]`.
+     */
+    private function writeElement(
+        Op\Expr\Assign|Op\Expr\AssignRef $op,
+        Op\Expr\ArrayDimFetch $target,
+        Shape $written,
+    ): bool {
+        $key = $target->dim === null ? null : OperandHelper::literalKey($target->dim);
+
+        // A literal key is precise, and a read naming the same key sees only
+        // this. `$context['id'] = 42` no longer taints `$context['title']`.
+        if ($key !== null) {
+            return $this->state->addShape(
+                $target->var,
+                Shape::element($key, $written),
+                new Provenance(
+                    TraceVerb::Propagate,
+                    $op,
+                    sprintf("Written into %s['%s'].", OperandHelper::describe($target->var), $key),
+                    [$op->expr],
+                ),
+            );
+        }
+
+        // A computed key can land anywhere, so it goes to the whole-array
+        // slot — which is what every element write did before.
+        //
+        // Held apart from the operand's own taint because SSA does not
+        // re-version an array for an element write: `$a = array();` and
+        // `$a[$k] = $tainted;` write the same operand, and letting them share a
+        // slot makes the fixed point oscillate.
+        return $this->state->addShape(
+            $target->var,
+            Shape::rest($written),
+            new Provenance(
+                TraceVerb::Propagate,
+                $op,
+                sprintf(
+                    'Written into %s under a computed key. The key could be any of them, so the whole array '
+                        . 'is treated as tainted from here.',
+                    OperandHelper::describe($target->var),
+                ),
+                [$op->expr],
+            ),
+        );
+    }
+
+    /**
+     * What an array holds once `$written` goes into it under `$fetch`'s key.
+     */
+    private static function underKey(Op\Expr\ArrayDimFetch $fetch, Shape $written): Shape
+    {
+        $key = $fetch->dim === null ? null : OperandHelper::literalKey($fetch->dim);
+
+        return $key === null ? Shape::rest($written) : Shape::element($key, $written);
+    }
+
+    /**
+     * Carry an element write up to the value the element belongs to.
+     *
+     * `$a['x']['y'] = $v` writes into the temporary `$a['x']` produced, and
+     * nothing reads that temporary again, so the value went nowhere: a later
+     * `echo $a['x']['y']` was clean. The value is part of what the first
+     * fetch read from, so it goes there too, under `y` of element `x` of
+     * `$a`.
+     *
+     * A copy is not a container. `$b = $a['x']; $b['y'] = $v;` writes `$b`,
+     * and `$a` is left alone, as PHP leaves it.
+     */
+    private function writeIntoContainingValue(
+        Op\Expr\Assign|Op\Expr\AssignRef $op,
+        Op\Expr\ArrayDimFetch $target,
+        Shape $written,
+    ): bool {
+        $changed = false;
+        $dim = $target;
+        $part = self::underKey($target, $written);
+
+        for ($depth = 0; $depth < self::MAX_ELEMENT_DEPTH; $depth++) {
+            $base = OperandHelper::definingOp($dim->var);
+
+            // An element write into a property stops here, as it did before:
+            // a property is one slot per class, so carrying it up would give
+            // every instance what one instance wrote. Stage 3c takes it on.
+            if ($base instanceof Op\Expr\PropertyFetch || $base instanceof Op\Expr\StaticPropertyFetch) {
+                return $changed;
+            }
+
+            if (! $base instanceof Op\Expr\ArrayDimFetch) {
+                return $changed;
+            }
+
+            // `$dim->var` is what `$base` read out of `$base->var`, so the
+            // part goes under `$base`'s key there.
+            $part = self::underKey($base, $part);
+
+            if (! $part->flatten()->isEmpty()) {
+                $changed = $this->state->addShape(
+                    $base->var,
+                    $part,
+                    new Provenance(
+                        TraceVerb::Propagate,
+                        $op,
+                        sprintf('Written into an element of %s.', OperandHelper::describe($base->var)),
+                        [$op->expr],
+                    ),
+                ) || $changed;
+            }
+
+            $dim = $base;
+        }
+
+        return $changed;
     }
 
     private function transferArrayDimFetch(Op\Expr\ArrayDimFetch $op): bool
