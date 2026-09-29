@@ -5094,7 +5094,7 @@ final class FunctionAnalysis
         // reads and returns. See {@see CallTarget::$positional}.
         $plain = $call->positional && $this->resultMode === CallResultMode::Value;
 
-        if ($plain && $matcher->key() === 'function:array_column') {
+        if ($plain && in_array($matcher->key(), ['function:array_column', 'function:wp_list_pluck'], true)) {
             $column = $this->transferColumn($op, $call, $description);
 
             if ($column !== null) {
@@ -5161,10 +5161,11 @@ final class FunctionAnalysis
     }
 
     /**
-     * `array_column( $rows, 'title', 'id' )`: each row's element under the
-     * column key, under a computed key, with each row's index column as the
-     * keys. A column key the resolver cannot name reads any element of each
-     * row, and a null column hands back the rows whole. The column and index
+     * `array_column( $rows, 'title', 'id' )`, and WordPress's
+     * `wp_list_pluck()`, which takes the same arguments: each row's element
+     * under the column key, under a computed key, with each row's index
+     * column as the keys. A column key the resolver cannot name reads any
+     * element of each row, and a null column hands back the rows whole. The column and index
      * arguments only pick elements, as a key does in a read.
      *
      * Null when a guard vouched for the rows, which reads them as one set.

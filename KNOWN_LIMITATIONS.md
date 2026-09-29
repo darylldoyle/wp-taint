@@ -201,7 +201,11 @@ itself. An integer key can be renumbered, so its element joins the whole-array
 slot, still whole. `array_values()` puts every element there. `reset()`,
 `end()`, `array_shift()` and the functions like them return one element with
 its parts, and `array_column()` returns each row's element under the column
-key, with each row's index column as the keys. The elements fold into one set
+key, with each row's index column as the keys. WordPress's `wp_parse_args()`
+keeps each key as `array_merge()` does, and `wp_list_pluck()` reads one field
+of each row as `array_column()` does. A callee that hands its parameter to
+either one still receives every element of it, as it would for any other
+function. The elements fold into one set
 in three cases:
 
 - a function that builds something else, `implode( ',', $row )`
