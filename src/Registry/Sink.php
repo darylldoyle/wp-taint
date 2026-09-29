@@ -59,11 +59,24 @@ final class Sink
      */
     public const QUOTED_ATTRIBUTE = 'quoted_attribute';
 
+    /**
+     * Fire only where a quote in the value can end its cell early.
+     *
+     * `fputcsv()` doubles each quote in a cell, except one that follows its
+     * escape character, a backslash unless the call passes another. A
+     * spreadsheet reads that quote as the end of the cell, and what follows as
+     * a new cell. An empty escape, `fputcsv( $h, $row, ',', '"', '' )`, doubles
+     * every quote, so a cell holds its whole value. See
+     * {@see TaintKind::CsvPrefixed}.
+     */
+    public const CSV_ESCAPABLE = 'csv_escapable';
+
     public const STRATEGIES = [
         self::UNANCHORED,
         self::UNSERIALIZE_ALLOWS_OBJECTS,
         self::ESCAPED_THEN_VOIDED,
         self::QUOTED_ATTRIBUTE,
+        self::CSV_ESCAPABLE,
     ];
 
     public function __construct(

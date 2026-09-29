@@ -161,6 +161,16 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   element. A read later in the same block, with nothing between that could
   change the element, now sees only what the write left. WooCommerce's
   webhook search builds `IN (…)` from ids this way.
+- The CSV formula neutraliser was credited whatever wrote the file. An
+  apostrophe in front of a formula covers the cell's first character, and
+  `fputcsv()`'s default escape character, a backslash, lets a quote in the
+  value end the cell early. What follows is a new cell the apostrophe does not
+  cover. The neutralised value now carries `csv_prefixed`, and `fputcsv()`
+  reports it unless the call passes an empty escape character,
+  `fputcsv( $h, $row, ',', '"', '' )`. A tab or a space in front no longer
+  counts, since `trim()` removes either. A summary also kept one reference per
+  sink and rule, so a second kind reported at the same sink was lost. It now
+  keeps one per kind.
 - `wp.csrf.bypassable-nonce-check` reported a nonce check that stops a
   request with no nonce anyway (issue 8). The rule saw
   `isset( $n ) && ! wp_verify_nonce( $n )` and stopped there. It did not look

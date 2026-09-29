@@ -46,7 +46,7 @@ final class AllowlistPattern
         // and `retainedCharacters()` only understands a negated one — it
         // returns null here, and the allowlist path would leave before asking.
         $csv = self::neutralisesCsvFormulas($pattern, $replacement)
-            ? CharacterProof::clearing(TaintSet::of(TaintKind::Csv))
+            ? CharacterProof::csvPrefixed()
             : null;
 
         $retained = self::retainedCharacters($pattern);
@@ -67,7 +67,7 @@ final class AllowlistPattern
      * The documented fix for CSV formula injection, recognised.
      *
      * A spreadsheet treats a cell beginning `=`, `+`, `-` or `@` as a formula.
-     * Prefixing one with an apostrophe, tab or space stops that, and it is what
+     * Prefixing one with an apostrophe stops that, and it is what
      * `wp.output.csv-injection` tells people to do:
      *
      *     $name = preg_replace( '/^([=+\-@])/', "'$1", $row['name'] );
@@ -75,14 +75,19 @@ final class AllowlistPattern
      * Asking for something and then not crediting it when it is done is the
      * same defect as advice that cannot be followed. This is the one shape that
      * counts: anchored at the start, a class covering all four characters, and
-     * a replacement that begins with a neutraliser.
+     * a replacement that begins with an apostrophe.
      *
-     * The character has to be first in the replacement. `$1'` puts the
-     * apostrophe *after* the `=`, which neutralises nothing.
+     * The apostrophe has to be first in the replacement. `$1'` puts it *after*
+     * the `=`, which neutralises nothing. A tab or a space does not count:
+     * `trim()` removes either, and so do readers that strip a cell's leading
+     * whitespace.
+     *
+     * The proof covers the first character only, so the value keeps
+     * `csv_prefixed`. See {@see TaintKind::CsvPrefixed}.
      */
     private static function neutralisesCsvFormulas(string $pattern, string $replacement): bool
     {
-        if ($replacement === '' || ! str_contains("'\t ", $replacement[0])) {
+        if ($replacement === '' || $replacement[0] !== "'") {
             return false;
         }
 
