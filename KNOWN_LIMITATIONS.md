@@ -233,7 +233,11 @@ a file that reads the parameter. **Direction:** over-reports.
 **A key carries its collection's own taint and what the code used as a key.**
 A `foreach` key over `$_GET` is request data. After `$rows[ $_GET['k'] ] = 1`,
 the `$k` in `foreach ( $rows as $k => $v )` is request data too, and `$v` is
-not. `array_keys()` reads the keys the same way.
+not. `array_keys()` reads the keys the same way. `array_flip()`,
+`array_combine()`, `array_fill_keys()` and `array_count_values()` use the
+first array's values as the keys, and `array_flip()` the keys as the values.
+`array_map()` over one array drops its keys, though PHP keeps them, so a key
+read of its result is clean. **Direction:** misses.
 
 **A summary keeps apart the parts a function reads a parameter through.** A
 literal key, any element, and the keys are each a part, to four levels, and a
