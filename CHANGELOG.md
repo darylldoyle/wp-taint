@@ -154,6 +154,13 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A helper that returns its argument as it came dropped two markers the
+  argument carried. An escaped value filtered and then passed through
+  `function acme_id( $v ) { return $v; }` lost its escape-voided finding, and
+  a value of unknown origin came back clean. A property, a capture and an
+  included file's scope already kept both. A return now keeps them the same
+  way: the escape markers ride with HTML, and unknown origin rides when the
+  body clears nothing.
 - A caller's element under a key the callee never names reached the callee's
   reads of the keys it does name. The element went to the part of the node
   above it, whose taint every read below the node inherits. So a stored value
