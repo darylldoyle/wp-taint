@@ -142,10 +142,7 @@ a literal, a class or global constant, a join of those, or a `foreach` over a
 literal list that nothing writes into. Such a read sees only those elements, so
 `$o[ $k ]` inside `foreach ( array( 'path', 'tmpPath' ) as $k )` reads `'path'`
 and `'tmpPath'` and nothing else. A write under such a key still goes under a
-computed key, and an item of a list literal still sits under any index. Both
-would put taint under a literal key, and an element write keeps only what a
-value holds as a whole or under a computed key. See "A write into an element
-keeps only the value's own taint" below.
+computed key, and an item of a list literal still sits under any index.
 
 **It stops helping the moment either end is dynamic.** A write with a computed
 key could land anywhere, so it goes to the whole-array slot; a read with a
@@ -268,25 +265,27 @@ what every part inherits. So does a callback `array_map()` and its relatives
 run, and a function declared twice, whose two bodies number their parts apart.
 **Direction:** over-reports.
 
-### A write into an element keeps only the value's own taint
+### An element write into a property stops at the property
 
 ```php
 $rows   = array();
 $rows[] = array( 'title' => $_GET['t'] );
-echo $rows[0]['title'];                 // not reported
+echo $rows[0]['title'];                 // reported
 
 $a['x']['y'] = $_GET['v'];
-echo $a['x']['y'];                      // not reported
+echo $a['x']['y'];                      // reported
 
 $this->opts['name'] = $_GET['n'];       // in one method
 echo $this->opts['name'];               // in another: not reported
 ```
 
-An element write stores the value's own taint and what it holds under a
-computed key, not the elements a literal holds under its keys. A write two keys
-deep, or into an element of a property, lands on a temporary that nothing reads
-again. A fix for both exists. It lands once the analysis keeps enough structure
-that the flows it adds are real ones.
+An element write into a local array reaches the array, however many keys deep,
+and an array literal written into an element keeps its own elements. A write
+into an element of a property still lands on a temporary that nothing reads
+again. A property is one slot per class, so carrying the write up would give
+every instance what one instance wrote: WooCommerce's report queries share one
+clause list across every report. That waits for a design that tells instances
+apart.
 
 **Direction:** under-reports.
 
