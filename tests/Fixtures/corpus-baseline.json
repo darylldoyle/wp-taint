@@ -38,9 +38,9 @@
     },
     "duplicate-post": {
         "version": "4.7",
-        "findings": 8,
+        "findings": 4,
         "bySeverity": {
-            "high": 6,
+            "high": 2,
             "medium": 2
         },
         "warnings": 0,

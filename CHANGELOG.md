@@ -154,6 +154,15 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- An array function folded what each element held below itself into one set.
+  `array_merge( $defaults, $row )['meta']['title']` read all of
+  `$row['meta']`, and `reset( $rows )['title']` read every column of every
+  row. The functions that keep their input's keys or values now keep each
+  element whole. `reset()`, `end()`, `array_shift()` and the functions like
+  them return one element with its parts. `array_column()` reads only its
+  column, and its index column becomes the keys. A function that
+  `array_map()` hands an array's items still folds them, since what it reads
+  is a level below its argument.
 - A read whose key was not a literal read every element, even when every
   value the key could hold was known. `$opts[ $key ]` in `foreach ( array(
   'path', 'tmpPath' ) as $key )` read `$opts['url']` too, and so did a read

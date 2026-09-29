@@ -2978,7 +2978,14 @@ final class FunctionAnalysis
      * has no keys to keep it under, it joins the others. When the result keeps
      * its input's keys, `array_filter()` or `apply_filters()` on an array, an
      * element under a string key stays under that key: folding it in made a
-     * stored `'value'` taint the `'id'` read beside it.
+     * stored `'value'` taint the `'id'` read beside it. A result that keeps
+     * its input's values, `array_values()`, holds each of them under a
+     * computed key.
+     *
+     * Either way each element keeps what it holds below itself when the call
+     * is `$direct`: its inputs are the arrays the function is handed, and its
+     * result is what the function returns. A guard or an escaping change on
+     * the value reads it as one set.
      *
      * @param list<Operand> $inputs
      */
@@ -2990,12 +2997,19 @@ final class FunctionAnalysis
         bool $keepsKeys = false,
         bool $revertResiduals = false,
         ?TaintKind $sqlBecomes = null,
+        bool $keepsValues = false,
+        bool $direct = false,
     ): bool {
         $taint = TaintSet::empty();
         $container = TaintSet::empty();
         $keys = TaintSet::empty();
 
-        /** @var list<array{0: Operand, 1: string, 2: TaintSet}> $kept */
+        // An array result keeps each element whole, and anything else, a
+        // string, folds its elements into one set.
+        $whole = $direct && ($keepsKeys || $keepsValues) && ! $revertResiduals && $sqlBecomes === null;
+        $rest = Shape::empty();
+
+        /** @var list<array{0: Operand, 1: string, 2: TaintSet, 3: Shape}> $kept */
         $kept = [];
 
         // A guarded input brings only what the guard admits, so
@@ -3007,24 +3021,35 @@ final class FunctionAnalysis
             }
 
             $proof = $this->proofFor($input, $this->currentBlock);
+            $shape = $this->state->shapeOf($input);
+            $keepsWhole = $whole && $proof === null;
             $taint = $taint->union(self::guarded($this->state->taintOf($input), $proof));
-            $container = $container->union(self::guarded($this->state->shapeOf($input)->restPart()->flatten(), $proof));
+
+            if ($keepsWhole) {
+                $rest = $rest->join($shape->restPart());
+            } else {
+                $container = $container->union(self::guarded($shape->restPart()->flatten(), $proof));
+            }
 
             // A result that keeps its input's keys keeps what they carry.
             if ($keepsKeys) {
-                $keys = $keys->union(self::guarded($this->state->shapeOf($input)->keysTaint(), $proof));
+                $keys = $keys->union(self::guarded($shape->keysTaint(), $proof));
             }
 
-            foreach ($this->state->shapeOf($input)->elements() as $key => $element) {
+            foreach ($shape->elements() as $key => $element) {
                 $keyed = $element->flatten();
 
                 if ($keepsKeys && is_string($key)) {
-                    $kept[] = [$input, $key, self::guarded($keyed, $proof)];
+                    $kept[] = [$input, $key, self::guarded($keyed, $proof), $keepsWhole ? $element : Shape::empty()];
 
                     continue;
                 }
 
-                $container = $container->union(self::guarded($keyed, $proof));
+                if ($keepsWhole) {
+                    $rest = $rest->join($element);
+                } else {
+                    $container = $container->union(self::guarded($keyed, $proof));
+                }
             }
         }
 
@@ -3034,7 +3059,7 @@ final class FunctionAnalysis
             $taint = $this->undoneEscaping($taint);
             $container = $this->undoneEscaping($container);
             $kept = array_map(
-                fn (array $entry): array => [$entry[0], $entry[1], $this->undoneEscaping($entry[2])],
+                fn (array $entry): array => [$entry[0], $entry[1], $this->undoneEscaping($entry[2]), $entry[3]],
                 $kept,
             );
         }
@@ -3047,12 +3072,15 @@ final class FunctionAnalysis
                 : $set;
             $taint = $escaped($taint);
             $container = $escaped($container);
-            $kept = array_map(static fn (array $entry): array => [$entry[0], $entry[1], $escaped($entry[2])], $kept);
+            $kept = array_map(
+                static fn (array $entry): array => [$entry[0], $entry[1], $escaped($entry[2]), $entry[3]],
+                $kept,
+            );
         }
 
         $hasKept = array_filter($kept, static fn (array $entry): bool => ! $entry[2]->isEmpty()) !== [];
 
-        $provenance = $taint->isEmpty() && $container->isEmpty() && $keys->isEmpty() && ! $hasKept
+        $provenance = $taint->isEmpty() && $container->isEmpty() && $rest->isEmpty() && $keys->isEmpty() && ! $hasKept
             ? null
             : new Provenance(TraceVerb::Propagate, $op, $description, $inputs, imprecise: $imprecise);
 
@@ -3062,22 +3090,29 @@ final class FunctionAnalysis
             return $changed;
         }
 
-        if (! $container->isEmpty()) {
-            $changed = $this->state->addShape($op->result, Shape::rest(Shape::of($container)), $provenance) || $changed;
+        // What the inputs hold under a computed key: whole where the result
+        // keeps it whole, see $whole, and as one set from an input a guard
+        // vouched for or a result that is not an array. A trace goes through
+        // this call on its way to the writes below.
+        $computed = $rest->join(Shape::of($container));
+        $computed = Shape::node($computed->own(), $computed->structure(), $provenance);
+
+        if (! $computed->isEmpty()) {
+            $changed = $this->state->addShape($op->result, Shape::rest($computed), $provenance) || $changed;
         }
 
         if (! $keys->isEmpty()) {
             $changed = $this->state->addShape($op->result, Shape::keys($keys), $provenance) || $changed;
         }
 
-        foreach ($kept as [$input, $key, $keyed]) {
+        foreach ($kept as [$input, $key, $keyed, $element]) {
             if ($keyed->isEmpty()) {
                 continue;
             }
 
             $changed = $this->state->addShape(
                 $op->result,
-                Shape::element($key, Shape::of($keyed)),
+                Shape::element($key, $element->isEmpty() ? Shape::of($keyed) : $element),
                 $this->state->partProvenanceOf($input, $key) ?? $provenance,
             ) || $changed;
         }
@@ -5026,6 +5061,29 @@ final class FunctionAnalysis
             }
         }
 
+        // A plain call hands the function the value itself and gets back what
+        // it returns. A dispatcher can hand it an array's items instead,
+        // `array_map()`, or collect its returns into an array, and there each
+        // argument and the result sit a level away from what the function
+        // reads and returns. See {@see CallTarget::$positional}.
+        $plain = $call->positional && $this->resultMode === CallResultMode::Value;
+
+        if ($plain && $matcher->key() === 'function:array_column') {
+            $column = $this->transferColumn($op, $call, $description);
+
+            if ($column !== null) {
+                return $column;
+            }
+        }
+
+        if ($plain && $propagator->returnsElement && $inputs !== [] && $this->keepsResiduals($call, $propagator)) {
+            $element = $this->transferElementOf($op, $inputs, $description);
+
+            if ($element !== null) {
+                return $element;
+            }
+        }
+
         $escape = $propagator->readsEscapes ? $this->escapeReading($call) : null;
 
         return $this->transferUnion(
@@ -5042,7 +5100,124 @@ final class FunctionAnalysis
             keepsKeys: $propagator->keepsKeys,
             revertResiduals: ! $this->keepsResiduals($call, $propagator),
             sqlBecomes: $escape,
+            keepsValues: $propagator->keepsValues,
+            direct: $plain,
         );
+    }
+
+    /**
+     * `reset( $rows )`, `end()`, `array_shift()`: one element of the input,
+     * with what it holds below itself, so `reset( $rows )['title']` reads
+     * only the rows' titles. Null when a guard vouched for an input, which
+     * reads it as one set.
+     *
+     * @param non-empty-list<Operand> $inputs
+     */
+    private function transferElementOf(Op\Expr $op, array $inputs, string $description): ?bool
+    {
+        $taint = TaintSet::empty();
+        $structure = Shape::empty();
+
+        foreach ($inputs as $input) {
+            if ($this->proofFor($input, $this->currentBlock) !== null) {
+                return null;
+            }
+
+            $element = $this->state->shapeOf($input)->anyElement();
+            $taint = $taint->union($this->state->taintOf($input))->union($element->own());
+            $structure = $structure->join($element->structure());
+        }
+
+        $provenance = new Provenance(TraceVerb::Propagate, $op, $description, $inputs);
+        $changed = $this->writeResult($op->result, $taint, $taint->isEmpty() ? null : $provenance);
+
+        return $this->state->addShape($op->result, $structure, $provenance) || $changed;
+    }
+
+    /**
+     * `array_column( $rows, 'title', 'id' )`: each row's element under the
+     * column key, under a computed key, with each row's index column as the
+     * keys. A column key the resolver cannot name reads any element of each
+     * row, and a null column hands back the rows whole. The column and index
+     * arguments only pick elements, as a key does in a read.
+     *
+     * Null when a guard vouched for the rows, which reads them as one set.
+     */
+    private function transferColumn(Op\Expr $op, CallTarget $call, string $description): ?bool
+    {
+        $input = $call->argument(0);
+
+        if ($input === null || $this->proofFor($input, $this->currentBlock) !== null) {
+            return null;
+        }
+
+        $rows = $this->state->shapeOf($input)->anyElement();
+        $column = $this->columnOf($rows, $call->argument(1));
+        $provenance = new Provenance(TraceVerb::Propagate, $op, $description, [$input]);
+
+        // What the array and each row carry as a whole, every column carries.
+        $whole = $this->state->taintOf($input)->union($rows->own());
+        $changed = $this->writeResult($op->result, TaintSet::empty());
+        $changed = $this->state->addShape(
+            $op->result,
+            Shape::rest(Shape::node($whole->union($column->own()), $column->structure())),
+            $provenance,
+        ) || $changed;
+
+        $index = $call->argument(2);
+
+        if ($index === null || self::isNull($index)) {
+            return $changed;
+        }
+
+        $keys = $whole->union($this->columnOf($rows, $index)->flatten());
+
+        return $this->state->addShape($op->result, Shape::keys($keys), $provenance) || $changed;
+    }
+
+    /**
+     * What each row holds under `$column`: the element under a key the
+     * resolver names, and the whole row for a null column. A key it cannot
+     * name could be null too, so it reads the row and any element of it.
+     */
+    private function columnOf(Shape $rows, ?Operand $column): Shape
+    {
+        if ($column === null || self::isNull($column)) {
+            return $rows;
+        }
+
+        $keys = $this->namedKeys($column);
+
+        if ($keys === null) {
+            return $rows->join($rows->anyElement());
+        }
+
+        $element = $rows->restPart();
+
+        foreach ($keys as $key) {
+            $element = $element->join($rows->elementAt($key));
+        }
+
+        return $element;
+    }
+
+    /**
+     * An argument written as `null`, which php-cfg reads as a constant.
+     */
+    private static function isNull(Operand $operand): bool
+    {
+        if ($operand instanceof Operand\NullOperand) {
+            return true;
+        }
+
+        if ($operand instanceof Operand\Literal) {
+            return $operand->value === null;
+        }
+
+        $definition = OperandHelper::definingOp($operand);
+
+        return $definition instanceof Op\Expr\ConstFetch
+            && strtolower(ltrim(OperandHelper::literalString($definition->name) ?? '', '\\')) === 'null';
     }
 
     /**

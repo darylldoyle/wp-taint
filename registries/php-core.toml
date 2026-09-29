@@ -279,6 +279,12 @@ keeps_residuals = true
 [[propagators]]
 function = "array_values"
 keeps_residuals = true
+keeps_values = true
+
+# Each row's element under the column key, and its index column as the key.
+[[propagators]]
+function = "array_column"
+keeps_residuals = true
 
 [[propagators]]
 function = "array_filter"
@@ -420,14 +426,39 @@ keeps_keys = true
 [[propagators]]
 function = "reset"
 keeps_residuals = true
+returns_element = true
 
 [[propagators]]
 function = "current"
 keeps_residuals = true
+returns_element = true
 
 [[propagators]]
 function = "end"
 keeps_residuals = true
+returns_element = true
+
+# These return one element of the array too, and move its pointer or take
+# the element out, which leaves nothing the array holds tainted differently.
+[[propagators]]
+function = "next"
+keeps_residuals = true
+returns_element = true
+
+[[propagators]]
+function = "prev"
+keeps_residuals = true
+returns_element = true
+
+[[propagators]]
+function = "array_shift"
+keeps_residuals = true
+returns_element = true
+
+[[propagators]]
+function = "array_pop"
+keeps_residuals = true
+returns_element = true
 
 [[propagators]]
 function = "urldecode"

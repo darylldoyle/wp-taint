@@ -38,7 +38,8 @@ final class RegistryLoader
 
     private const PROPAGATOR_KEYS = [
         'function', 'class', 'method', 'static_method', 'arg', 'args', 'all_args', 'note', 'keeps_keys',
-        'keeps_residuals', 'mask_arg', 'format_arg', 'format_array', 'glue_arg', 'reads_escapes',
+        'keeps_values', 'returns_element', 'keeps_residuals', 'mask_arg', 'format_arg', 'format_array',
+        'glue_arg', 'reads_escapes',
     ];
 
     private const SINK_KEYS = [
@@ -403,6 +404,8 @@ final class RegistryLoader
                 $this->arguments($file, $context, $entry, ArgumentSelector::all()),
                 $this->optionalString($file, $context . ' note', $entry['note'] ?? null),
                 $this->boolValue($file, $context . ' keeps_keys', $entry['keeps_keys'] ?? false),
+                $this->boolValue($file, $context . ' keeps_values', $entry['keeps_values'] ?? false),
+                $this->boolValue($file, $context . ' returns_element', $entry['returns_element'] ?? false),
                 $this->boolValue($file, $context . ' keeps_residuals', $entry['keeps_residuals'] ?? false),
                 $this->optionalPosition($file, $context . ' mask_arg', $entry['mask_arg'] ?? null),
                 $this->optionalPosition($file, $context . ' format_arg', $entry['format_arg'] ?? null),
