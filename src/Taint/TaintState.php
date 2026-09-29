@@ -61,6 +61,15 @@ final class TaintState
      */
     private SplObjectStorage $shapes;
 
+    /**
+     * The shape last joined into each operand, as it was handed in. Shapes
+     * only grow, so the same one again adds nothing, and every pass of the
+     * fixed point hands most operands the same shape.
+     *
+     * @var SplObjectStorage<Operand, Shape>
+     */
+    private SplObjectStorage $lastJoined;
+
     private bool $countsChanges = false;
 
     /** @var SplObjectStorage<Operand, int> */
@@ -71,6 +80,7 @@ final class TaintState
         $this->taint = new SplObjectStorage();
         $this->provenance = new SplObjectStorage();
         $this->shapes = new SplObjectStorage();
+        $this->lastJoined = new SplObjectStorage();
         $this->changeCounts = new SplObjectStorage();
     }
 
@@ -111,6 +121,12 @@ final class TaintState
         if ($shape->isEmpty()) {
             return false;
         }
+
+        if ($this->lastJoined->contains($operand) && $this->lastJoined[$operand] === $shape) {
+            return false;
+        }
+
+        $this->lastJoined[$operand] = $shape;
 
         if ($provenance !== null) {
             $shape = $shape->withProvenance($provenance);
