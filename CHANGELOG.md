@@ -167,6 +167,12 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A by-reference loop wrote each item back into the collection as one set.
+  After `foreach ( $rows as &$row ) { $row['data'] = … }`, a later
+  `$row['data']` read every value each row held under any key.
+  WooCommerce's order save filters its rows this way, and the stored order
+  values reached the column names its insert helper builds a query from.
+  Each item now goes back with its own parts.
 - `array_flip()`, `array_combine()` and `array_fill_keys()` put what they
   read into the result's value, so the keys they build carried nothing.
   `array_fill_keys( $_GET['ids'], true )` and then a `foreach` key or

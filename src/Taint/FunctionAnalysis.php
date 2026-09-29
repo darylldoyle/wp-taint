@@ -1258,7 +1258,12 @@ final class FunctionAnalysis
         // here cannot start a fight. Pushing back the other
         // way would, because an ordinary assignment to the loop variable owns
         // that operand and would reset it every pass.
-        return $this->state->addShape($collection, Shape::rest(Shape::of($held)), $provenance);
+        //
+        // Each item goes back with its own parts. As one set, a row rewritten
+        // through `foreach ( $rows as &$row ) { $row['data'] = … }` put every
+        // value it held under every key of every row: a later `$row['data']`
+        // read the row's `'table'` and `'format'` as well.
+        return $this->state->addShape($collection, Shape::rest($this->state->valueShapeOf($value)), $provenance);
     }
 
     /**
