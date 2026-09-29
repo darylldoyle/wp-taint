@@ -3648,6 +3648,78 @@ final class FunctionAnalysis
         return $this->state->taintOf($array)->union($this->state->shapeOf($array)->keysTaint());
     }
 
+    /**
+     * What an array holds as values, at any depth, and not its keys.
+     */
+    private function valuesOf(Operand $array): TaintSet
+    {
+        return $this->state->taintOf($array)->union($this->state->shapeOf($array)->anyElement()->flatten());
+    }
+
+    /**
+     * `array_flip()`, `array_combine()` and `array_fill_keys()`: the first
+     * array's values become the result's keys.
+     *
+     * ```php
+     * $ids = array_fill_keys( $_GET['ids'], true );
+     * foreach ( $ids as $id => $on ) { echo $id; }   // the request's values
+     * ```
+     *
+     * A plain propagator put everything into the result's value, so a
+     * `foreach` key or `array_keys()` read nothing. `array_flip()` also makes
+     * the keys the values. `array_combine()` takes its values from the second
+     * array, each with what it holds below itself, and `array_fill_keys()`
+     * puts the second argument under every key. Null when an argument is
+     * missing, for the plain reading.
+     */
+    private function transferValuesToKeys(Op\Expr $op, CallTarget $call, Matcher $matcher, string $description): ?bool
+    {
+        $first = $call->argument(0);
+        $second = $call->argument(1);
+        $name = $matcher->key();
+
+        if ($first === null || ($name !== 'function:array_flip' && $second === null)) {
+            return null;
+        }
+
+        $keys = $this->valuesOf($first);
+        $own = TaintSet::empty();
+
+        if ($name === 'function:array_flip') {
+            $values = Shape::of($this->keysOf($first));
+        } elseif ($name === 'function:array_combine' && $second !== null) {
+            $own = $this->state->taintOf($second);
+            $values = $this->state->shapeOf($second)->anyElement();
+        } else {
+            $values = $second === null
+                ? Shape::empty()
+                : Shape::node($this->state->taintOf($second), $this->state->shapeOf($second)->structure());
+        }
+
+        $provenance = new Provenance(
+            TraceVerb::Propagate,
+            $op,
+            sprintf(
+                $name === 'function:array_flip'
+                    ? '%s makes the values the keys, and the keys the values.'
+                    : '%s makes the first array\'s values the keys.',
+                $matcher->describe(),
+            ),
+            array_values(array_filter([$first, $second])),
+        );
+        $changed = $this->writeResult($op->result, $own, $own->isEmpty() ? null : $provenance);
+
+        if (! $keys->isEmpty()) {
+            $changed = $this->state->addShape($op->result, Shape::keys($keys, $provenance), $provenance) || $changed;
+        }
+
+        if (! $values->isEmpty()) {
+            $changed = $this->state->addShape($op->result, Shape::rest($values), $provenance) || $changed;
+        }
+
+        return $changed;
+    }
+
     private function transferPassThrough(Op\Expr $op, Operand $input, string $description): bool
     {
         return $this->transferUnion($op, [$input], $description);
@@ -5380,6 +5452,16 @@ final class FunctionAnalysis
         // argument and the result sit a level away from what the function
         // reads and returns. See {@see CallTarget::$positional}.
         $plain = $call->positional && $this->resultMode === CallResultMode::Value;
+
+        $movesValuesToKeys = ['function:array_flip', 'function:array_combine', 'function:array_fill_keys'];
+
+        if ($plain && in_array($matcher->key(), $movesValuesToKeys, true)) {
+            $moved = $this->transferValuesToKeys($op, $call, $matcher, $description);
+
+            if ($moved !== null) {
+                return $moved;
+            }
+        }
 
         if ($plain && in_array($matcher->key(), ['function:array_column', 'function:wp_list_pluck'], true)) {
             $column = $this->transferColumn($op, $call, $description);

@@ -251,6 +251,7 @@ function = "array_fill"
 keeps_residuals = true
 note = "Repeats a value. Used with implode() to build a prepare() placeholder list for IN (...)."
 
+# The first array's values become the keys, each holding the second argument.
 [[propagators]]
 function = "array_fill_keys"
 keeps_residuals = true
@@ -272,9 +273,16 @@ keeps_keys = true
 [[propagators]]
 function = "array_keys"
 
+# The first array's values become the keys, and the second's the values.
 [[propagators]]
 function = "array_combine"
 keeps_residuals = true
+
+# The values become the keys, and the keys the values.
+[[propagators]]
+function = "array_flip"
+keeps_residuals = true
+args = [0]
 
 [[propagators]]
 function = "array_values"
