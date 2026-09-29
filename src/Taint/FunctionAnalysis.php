@@ -3313,7 +3313,9 @@ final class FunctionAnalysis
             ? null
             : new Provenance(TraceVerb::Propagate, $op, $description, $inputs, imprecise: $imprecise);
 
-        $changed = $this->writeResult($op->result, $taint, $provenance);
+        // A result that keeps its inputs' keys keeps each element's markers
+        // with the element, so the call's own `escaped` is only theirs.
+        $changed = $this->writeResult($op->result, $taint, $provenance, $keepsKeys ? $inputs : []);
 
         if ($provenance === null) {
             return $changed;
@@ -3917,9 +3919,17 @@ final class FunctionAnalysis
         return implode("\n", $lines);
     }
 
-    private function writeResult(Operand $result, TaintSet $taint, ?Provenance $provenance = null): bool
-    {
-        $voided = $this->voidEscaping($taint);
+    /**
+     * @param list<Operand|null> $keptInputs arguments whose elements the result keeps under their own keys: see
+     *                                       {@see voidEscaping()}
+     */
+    private function writeResult(
+        Operand $result,
+        TaintSet $taint,
+        ?Provenance $provenance = null,
+        array $keptInputs = [],
+    ): bool {
+        $voided = $this->voidEscaping($taint, $keptInputs);
 
         // Say where. A step describing the propagation is the wrong answer to
         // "filtered where?", and it was the only one in the trace. The prefix
@@ -6662,8 +6672,15 @@ final class FunctionAnalysis
      * Applied in writeResult() rather than in one of the role branches because
      * a dispatcher can also be a propagator or resolve to callees, and all of
      * those paths end here.
+     *
+     * An argument whose elements the result keeps under their own keys lends
+     * the result its own taint only. Each element keeps its own `escaped`,
+     * so `apply_filters( 'x', array( 'a' => esc_html( $v ), 'n' => 12 ) )`
+     * voids `'a'` and leaves `'n'`, which nobody escaped, to the other rules.
+     *
+     * @param list<Operand|null> $keptInputs
      */
-    private function voidEscaping(TaintSet $taint): TaintSet
+    private function voidEscaping(TaintSet $taint, array $keptInputs = []): TaintSet
     {
         if ($this->voidingCall === null) {
             return $taint;
@@ -6680,7 +6697,16 @@ final class FunctionAnalysis
         // `echo get_option( 'x' )` reports twice — once as unescaped output,
         // which is the real finding, and once as voided escaping, which adds
         // nothing to it.
-        $incoming = $this->state->unionOf($this->voidingCall->arguments);
+        $incoming = TaintSet::empty();
+
+        foreach ($this->voidingCall->arguments as $argument) {
+            $incoming = $incoming->union(
+                in_array($argument, $keptInputs, true)
+                    ? $this->state->taintOf($argument)
+                    : $this->state->effectiveTaintOf($argument),
+            );
+        }
+
         $voided = $taint->union(TaintSet::of(TaintKind::EscapeVoided));
 
         return $incoming->has(TaintKind::Escaped)
