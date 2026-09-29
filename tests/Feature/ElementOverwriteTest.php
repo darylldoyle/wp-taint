@@ -33,6 +33,18 @@ it('reads what an overwrite left', function (string $body): void {
             acme_show( array( 'include' => $_GET['i'] ) );
         }
         PHP],
+    'beside a global for another variable' => [<<<'PHP'
+        function acme_show( $args ) {
+            global $wpdb;
+            if ( ! empty( $args['include'] ) ) {
+                $args['include'] = implode( ',', array_map( 'absint', explode( ',', $args['include'] ) ) );
+                echo 'IN (' . $args['include'] . ')' . $wpdb->prefix;
+            }
+        }
+        function acme_page() {
+            acme_show( array( 'include' => $_GET['i'] ) );
+        }
+        PHP],
     'inside a branch' => [<<<'PHP'
         function acme_show() {
             $args = array( 'include' => $_GET['i'], 'x' => 1 );

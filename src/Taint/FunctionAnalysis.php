@@ -167,8 +167,14 @@ final class FunctionAnalysis
     /** The block being walked, so a sink can ask what guarded the path to it. */
     private ?Block $currentBlock = null;
 
-    /** Whether no variable can change out of sight: see referenceFree(). */
-    private ?bool $referenceFree = null;
+    /**
+     * The variables that can change out of sight: see referencedNames().
+     *
+     * @var array<string, true>|null
+     */
+    private ?array $referencedNames = null;
+
+    private bool $referencedNamesFound = false;
 
     /** The call currently being reported on, for sink strategies that need it. */
     private ?CallTarget $sinkCall = null;
@@ -1903,16 +1909,19 @@ final class FunctionAnalysis
      * the write left. Anything between that touches the array, other than a
      * read or write under a different literal key, ends the search: a write
      * under a computed key, a push that could land on an integer key, a call
-     * the array is handed to, an `unset()`. So does a function where a
-     * variable can change without its operand in sight: a reference, a
-     * `global` or `static`, an include, `extract()`, or a variable variable.
+     * the array is handed to, an `unset()`. So does an array that can change
+     * without its operand in sight: one a reference, a `global`, a `static` or
+     * a by-reference capture binds. See {@see referencedNames()}.
      */
     private function overwriteBefore(Op\Expr\ArrayDimFetch $read, int|string $key): ?Op\Expr\Assign
     {
         $block = $this->currentBlock;
         $array = $read->var;
 
-        if ($block === null || OperandHelper::variableName($array) === 'GLOBALS' || ! $this->referenceFree()) {
+        $name = OperandHelper::variableName($array);
+        $referenced = $this->referencedNames();
+
+        if ($block === null || $name === 'GLOBALS' || $referenced === null || isset($referenced[$name ?? ''])) {
             return null;
         }
 
@@ -1983,54 +1992,109 @@ final class FunctionAnalysis
     }
 
     /**
-     * Whether no variable in this function can change without an op on its
-     * operand: see {@see overwriteBefore()}.
+     * The variables in this function that can change without an op on their
+     * operand, by name, or null when any of them can: see
+     * {@see overwriteBefore()}.
+     *
+     * A reference binds the variables on both sides, a `global` or `static`
+     * the one it names, a by-reference loop its collection and value, and a
+     * closure the variables it captures by reference. Only an include,
+     * `eval`, `extract()`, `parse_str()` or a variable variable can change a
+     * variable the code never names, so only those give up on every one.
+     *
+     * @return array<string, true>|null
      */
-    private function referenceFree(): bool
+    private function referencedNames(): ?array
     {
-        if ($this->referenceFree !== null) {
-            return $this->referenceFree;
+        if ($this->referencedNamesFound) {
+            return $this->referencedNames;
         }
+
+        $this->referencedNamesFound = true;
+        $names = [];
 
         foreach ($this->context->func->params as $param) {
             if ($param->byRef) {
-                return $this->referenceFree = false;
+                $names[] = OperandHelper::variableName($param->result);
             }
         }
 
         foreach ($this->blocks as $block) {
             foreach ($block->children as $op) {
                 if (
-                    $op instanceof Op\Expr\AssignRef
-                    || $op instanceof Op\Terminal\GlobalVar
-                    || $op instanceof Op\Terminal\StaticVar
-                    || $op instanceof Op\Expr\Include_
+                    $op instanceof Op\Expr\Include_
                     || $op instanceof Op\Expr\Eval_
                     || $op instanceof Op\Expr\VarVar
-                    || ($op instanceof Op\Iterator\Value && $op->byRef)
                 ) {
-                    return $this->referenceFree = false;
-                }
-
-                if ($op instanceof Op\Expr\Closure) {
-                    foreach ($op->useVars as $use) {
-                        if ($use instanceof Operand\BoundVariable && $use->byRef) {
-                            return $this->referenceFree = false;
-                        }
-                    }
+                    return $this->referencedNames = null;
                 }
 
                 if ($op instanceof Op\Expr\FuncCall || $op instanceof Op\Expr\NsFuncCall) {
                     $name = OperandHelper::literalString($op->name);
 
-                    if ($name === null || in_array(strtolower(ltrim($name, '\\')), ['extract', 'parse_str'], true)) {
-                        return $this->referenceFree = false;
+                    if ($name !== null && in_array(strtolower(ltrim($name, '\\')), ['extract', 'parse_str'], true)) {
+                        return $this->referencedNames = null;
+                    }
+                }
+
+                if ($op instanceof Op\Expr\AssignRef) {
+                    $names[] = self::baseName($op->var);
+                    $names[] = self::baseName($op->expr);
+                }
+
+                if ($op instanceof Op\Terminal\GlobalVar || $op instanceof Op\Terminal\StaticVar) {
+                    $names[] = OperandHelper::variableName($op->var) ?? OperandHelper::literalString($op->var);
+                }
+
+                if ($op instanceof Op\Iterator\Value && $op->byRef) {
+                    $names[] = self::baseName($op->var);
+                    $names[] = OperandHelper::variableName($op->result);
+                }
+
+                if ($op instanceof Op\Expr\Closure) {
+                    foreach ($op->useVars as $use) {
+                        if ($use instanceof Operand\BoundVariable && $use->byRef) {
+                            $names[] = OperandHelper::literalString($use->name);
+                        }
                     }
                 }
             }
         }
 
-        return $this->referenceFree = true;
+        $this->referencedNames = [];
+
+        foreach ($names as $name) {
+            if ($name !== null) {
+                $this->referencedNames[$name] = true;
+            }
+        }
+
+        return $this->referencedNames;
+    }
+
+    /**
+     * The variable an operand is, or the one it is an element or property
+     * of: `$args` for `$args['k']['j']`.
+     */
+    private static function baseName(Operand $operand): ?string
+    {
+        for ($hops = 0; $hops < Shape::DEPTH + 2; $hops++) {
+            $name = OperandHelper::variableName($operand);
+
+            if ($name !== null) {
+                return $name;
+            }
+
+            $definition = OperandHelper::definingOp($operand);
+
+            if (! $definition instanceof Op\Expr\ArrayDimFetch && ! $definition instanceof Op\Expr\PropertyFetch) {
+                return null;
+            }
+
+            $operand = $definition->var;
+        }
+
+        return null;
     }
 
     /**

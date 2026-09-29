@@ -167,12 +167,6 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- A filter that returned an array spread one element's `escaped` marker to
-  every element. `apply_filters( 'x', array( 'amount' => esc_html( $a ),
-  'size' => 12 ) )['size']` reported as voided escaping, though nobody escaped
-  it. The result keeps its input's keys, and each element now keeps its own
-  marker, so only `'amount'` reports. A value handed to the filter beside the
-  array still counts, because a callback can return it.
 - A write under a literal key joined the element it replaced.
   `$args['include'] = absint( $args['include'] )` and then
   `echo $args['include']` reported the request data the first line had
@@ -180,6 +174,12 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   element. A read later in the same block, with nothing between that could
   change the element, now sees only what the write left. WooCommerce's
   webhook search builds `IN (…)` from ids this way.
+- A filter that returned an array spread one element's `escaped` marker to
+  every element. `apply_filters( 'x', array( 'amount' => esc_html( $a ),
+  'size' => 12 ) )['size']` reported as voided escaping, though nobody escaped
+  it. The result keeps its input's keys, and each element now keeps its own
+  marker, so only `'amount'` reports. A value handed to the filter beside the
+  array still counts, because a callback can return it.
 - The CSV formula neutraliser was credited whatever wrote the file. An
   apostrophe in front of a formula covers the cell's first character, and
   `fputcsv()`'s default escape character, a backslash, lets a quote in the
