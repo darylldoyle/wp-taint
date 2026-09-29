@@ -212,18 +212,21 @@ in three cases:
 
 **Direction:** over-reports where the elements fold.
 
-**An element the body never names travels with the others the body does not
-name.** A summary knows the parts a function reads its parameter through. Under
-each node it reads by literal key, one more part stands for every key it does
-not name there. A caller's element under such a key reaches a loop, a computed
-read, a flatten and a read under any other key, and comes back in what the
-function returns. It does not reach a read of a key the body names. Those
-elements come back as one set, though. So
-`function acme_pick( $a ) { echo $a['title']; return $a; }` hands back
-`array( 'title' => 'x', 't' => $_GET['t'], 'm' => 'x' )` with `'title'` clean
-and `'m'` tainted. A function that names no key, `function acme_id( $a ) {
-return $a; }`, hands everything back as one set, and so does one that includes
-a file that reads the parameter. **Direction:** over-reports.
+**A caller's element comes back where the caller had it.** A summary knows the
+parts a function reads its parameter through. Under the parameter, and under
+each node the body reads by literal key, one more part stands for every key the
+body does not name there. Under the parameter, one more stands for what it holds
+under a computed key, which includes every item of a list literal. A caller's
+element under a key the body never names reaches a loop, a computed read, a
+flatten and a read under any other key, and not a read of a key the body names.
+What the caller holds under a computed key reaches every read, because it could
+be under a key the body names. Both come back where the caller had them, with
+what they hold below themselves, in what the function returns, stores in a
+property, or hands an included file. So `function acme_id( $a ) { return $a; }`
+hands back `array( 't' => $_GET['t'], 'm' => 'x' )` with `'m'` clean, and a list
+of rows with each row's `'label'` apart from its `'raw'`. A value the function
+builds from a computed read of the parameter, `array( 'x' => $a[ $k ] )`, still
+takes every element the read could see. **Direction:** over-reports there.
 
 **A key carries its collection's own taint and what the code used as a key.**
 A `foreach` key over `$_GET` is request data. After `$rows[ $_GET['k'] ] = 1`,
