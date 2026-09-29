@@ -5688,10 +5688,11 @@ final class FunctionAnalysis
                 // here, may undo it for this run's caller too.
                 $this->noteReverted($reverts, $argumentTaint);
 
+                // As for a side channel: the markers ride with the kind they
+                // qualify, so an escaped value handed back as it came is still
+                // escaped, and one of unknown origin is still unknown.
                 $reached = $record->returnTaintFor($index);
-                $returned = $argumentTaint->intersect($reached)
-                    ->union(self::madeFrom($argumentTaint, $reached))
-                    ->union(self::residualsThrough($argumentTaint, $reached, $reverts));
+                $returned = self::throughBody($argumentTaint, $reached, $reverts);
 
                 // What the argument put into the returned array's elements and
                 // keys, as for a property: the kinds that got through the body.
