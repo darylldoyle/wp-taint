@@ -72,6 +72,14 @@ it('stays quiet when the missing nonce is handled anyway', function (string $bod
             exit;
         }
         PHP],
+    'an earlier throw' => [<<<'PHP'
+        if ( ! isset( $_POST['n'] ) ) {
+            throw new Exception( 'no nonce' );
+        }
+        if ( isset( $_POST['n'] ) && ! wp_verify_nonce( $_POST['n'], 'a' ) ) {
+            wp_die();
+        }
+        PHP],
     'an earlier return, outside the block' => [<<<'PHP'
         if ( ! isset( $_POST['n'] ) ) {
             return;
@@ -141,6 +149,19 @@ it('still reports a check that a missing nonce skips', function (string $body, i
             if ( isset( $_POST['n'] ) && ! wp_verify_nonce( $_POST['n'], 'a' ) ) {
                 wp_die();
             }
+        }
+        PHP, 7],
+    // The catch takes the throw, and the save after the try still runs.
+    'a throw that a try can catch' => [<<<'PHP'
+        try {
+            if ( ! isset( $_POST['n'] ) ) {
+                throw new Exception( 'no nonce' );
+            }
+            if ( isset( $_POST['n'] ) && ! wp_verify_nonce( $_POST['n'], 'a' ) ) {
+                wp_die();
+            }
+        } catch ( Exception $e ) {
+            error_log( $e->getMessage() );
         }
         PHP, 7],
     // A branch before the one that exits could be taken instead, and fall through.

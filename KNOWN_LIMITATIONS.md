@@ -1725,7 +1725,8 @@ Everything else is unknown. So a missing nonce stopped any other way is still
 reported: by `array_key_exists()`, by `'' === $n`, by a helper that dies, by a
 branch that ends in an `if` and `else` that both return, or by a check in the
 caller. `break` and `continue` do not count as stopping, because the work after
-the loop still runs.
+the loop still runs. Nor does a `throw` inside a `try`, because the `catch` can
+take it and the work after the `try` still runs.
 
 ### Object authorization is a scope check, not proof the check is right
 

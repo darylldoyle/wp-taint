@@ -90,7 +90,8 @@ use SplObjectStorage;
  * reported. The second stays quiet only when the earlier branch is certainly
  * taken and ends in `return`, `exit`, `throw` or a WordPress function that
  * never returns. `break` and `continue` do not count. They leave a loop, and
- * the work after the loop still runs.
+ * the work after the loop still runs. A `throw` inside a `try` does not count
+ * either, since the `catch` can take it.
  */
 final class BypassableNonceCheck implements StructuralRule
 {
@@ -281,10 +282,14 @@ final class BypassableNonceCheck implements StructuralRule
         Standard $printer,
     ): bool {
         $child = $node;
+        // A throw inside a try can be caught, and the code after the try
+        // still runs, so from there on only a return or an exit leaves.
+        $caught = false;
 
         while (true) {
             $parent = self::parentOf($child, $parents);
             $siblings = $parent === null ? $ast : self::siblingList($parent, $child);
+            $caught = $caught || $parent instanceof Node\Stmt\TryCatch;
 
             foreach ($siblings as $sibling) {
                 if ($sibling === $child) {
@@ -294,7 +299,7 @@ final class BypassableNonceCheck implements StructuralRule
                 if (
                     $sibling instanceof Node\Stmt\If_
                     && $this->whenAbsent($sibling->cond, $guarded, $printer) === true
-                    && self::neverFallsThrough($sibling->stmts)
+                    && self::neverFallsThrough($sibling->stmts, $caught)
                 ) {
                     return true;
                 }
@@ -303,7 +308,7 @@ final class BypassableNonceCheck implements StructuralRule
             if (
                 $parent instanceof Node\Stmt\If_
                 && ($child instanceof Node\Stmt\ElseIf_ || $child instanceof Node\Stmt\Else_)
-                && $this->earlierBranchExits($parent, $child, $guarded, $printer)
+                && $this->earlierBranchExits($parent, $child, $guarded, $printer, $caught)
             ) {
                 return true;
             }
@@ -332,6 +337,7 @@ final class BypassableNonceCheck implements StructuralRule
         Node\Stmt\ElseIf_|Node\Stmt\Else_ $branch,
         string $guarded,
         Standard $printer,
+        bool $caught,
     ): bool {
         foreach ([$if, ...$if->elseifs] as $earlier) {
             if ($earlier === $branch) {
@@ -345,7 +351,7 @@ final class BypassableNonceCheck implements StructuralRule
             }
 
             if ($taken) {
-                return self::neverFallsThrough($earlier->stmts);
+                return self::neverFallsThrough($earlier->stmts, $caught);
             }
         }
 
@@ -355,9 +361,11 @@ final class BypassableNonceCheck implements StructuralRule
     /**
      * Does this block always end by stopping the request's handler?
      *
+     * A `throw` counts only when no `try` around the block can catch it.
+     *
      * @param array<Node\Stmt> $body
      */
-    private static function neverFallsThrough(array $body): bool
+    private static function neverFallsThrough(array $body, bool $caught): bool
     {
         $statements = array_values(array_filter(
             $body,
@@ -375,8 +383,12 @@ final class BypassableNonceCheck implements StructuralRule
 
         $expression = $last->expr;
 
-        if ($expression instanceof Node\Expr\Exit_ || $expression instanceof Node\Expr\Throw_) {
+        if ($expression instanceof Node\Expr\Exit_) {
             return true;
+        }
+
+        if ($expression instanceof Node\Expr\Throw_) {
+            return ! $caught;
         }
 
         return $expression instanceof Node\Expr\FuncCall
