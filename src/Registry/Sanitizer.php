@@ -119,6 +119,12 @@ final class Sanitizer
             $cleared = $cleared->with(TaintKind::SqlUnquoted);
         }
 
+        // A value that cannot hold a formula cannot hold one behind an
+        // apostrophe either.
+        if ($this->clears->has(TaintKind::Csv)) {
+            $cleared = $cleared->with(TaintKind::CsvPrefixed);
+        }
+
         return $incoming->without($cleared);
     }
 
@@ -133,13 +139,24 @@ final class Sanitizer
      * @param TaintSet|null $strategyCleared    what a `clears_by` strategy worked out the call clears, which
      *                                          needs the call's arguments; null for a sanitizer without one
      * @param bool          $strategyQuotedOnly whether the strategy proved SQL safe inside quotes only
+     * @param bool          $strategyCsvPrefix  whether the strategy proved the first character only
+     *                                          safe from formulas: see {@see TaintKind::CsvPrefixed}
      */
     public function transform(
         TaintSet $incoming,
         ?TaintSet $strategyCleared = null,
         bool $strategyQuotedOnly = false,
+        bool $strategyCsvPrefix = false,
     ): TaintSet {
+        if ($strategyCleared !== null && $strategyCleared->has(TaintKind::Csv) && ! $strategyCsvPrefix) {
+            $strategyCleared = $strategyCleared->with(TaintKind::CsvPrefixed);
+        }
+
         $cleared = $strategyCleared === null ? $this->apply($incoming) : $incoming->without($strategyCleared);
+
+        if ($strategyCsvPrefix && $incoming->has(TaintKind::Csv)) {
+            $cleared = $cleared->with(TaintKind::CsvPrefixed);
+        }
 
         // Applying any sanitizer settles two questions whatever else it did or
         // did not clear: where the value came from, and whether anyone cleaned

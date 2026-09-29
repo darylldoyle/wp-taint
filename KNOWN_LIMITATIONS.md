@@ -71,7 +71,7 @@ badge:
 | [`esc_sql()` outside a readable quote position](#esc_sql-is-only-credited-inside-quotes) | Misses |
 | [`$_FILES['f']['tmp_name']` is treated as PHP's own path](#_files-sub-keys-are-phps-or-the-clients-not-all-one-thing) | Misses |
 | [A sanitiser at input is credited at output](#a-sanitiser-at-input-is-credited-at-output) | Misses |
-| [A CSV formula prefix spelled any other way](#the-csv-neutraliser-the-rule-asks-for-is-recognised) | Over-reports |
+| [A CSV formula prefix spelled any other way](#the-csv-neutraliser-the-rule-asks-for-is-recognised-with-the-writer-that-keeps-it) | Over-reports |
 | [Stored sources carry no `path` or `url` taint](#stored-sources-carry-html-and-sql-taint-only-not-path-or-url) | Misses |
 | [An option write judged administrator-only through a caller the scan cannot see](#an-option-only-an-administrator-can-write-stores-nothing) | Misses |
 | [An administrator's option write reached through a plugin's own hook, WP-CLI, cron or activation](#an-option-only-an-administrator-can-write-stores-nothing) | Over-reports |
@@ -751,25 +751,40 @@ nothing escaping could have been applied to.
 **What is still missed.** A filter reached inside a function whose body the scan
 cannot see.
 
-### The CSV neutraliser the rule asks for is recognised
+### The CSV neutraliser the rule asks for is recognised, with the writer that keeps it
 
 ```php
 $name = preg_replace( '/^([=+\-@])/', "'$1", $row['name'] );
-fputcsv( $out, array( $name ) );                // not reported
+fputcsv( $out, array( $name ), ',', '"', '' );   // not reported
+fputcsv( $out, array( $name ) );                 // reported
 ```
 
 A spreadsheet treats a cell beginning `=`, `+`, `-` or `@` as a formula, and
-prefixing one with an apostrophe, tab or space stops that. Asking for something
-and then not crediting it when it is done is the same defect as advice that
-cannot be followed.
+prefixing one with an apostrophe stops that. Asking for something and then not
+crediting it when it is done is the same defect as advice that cannot be
+followed.
 
 One shape counts: anchored at the start, a class covering all four characters,
-and a replacement whose *first* character is the neutraliser. `$1'` puts the
-apostrophe after the `=` and neutralises nothing, so it still reports.
+and a replacement whose *first* character is an apostrophe. `$1'` puts the
+apostrophe after the `=` and neutralises nothing, so it still reports. A tab
+or a space in front does not count. `trim()` removes either, and so do readers
+that strip a cell's leading whitespace.
+
+**The apostrophe counts only where every quote is doubled.** It covers the
+cell's first character. `fputcsv()`'s default escape character is a backslash,
+and a quote that follows one is not doubled. A spreadsheet reads that quote as
+the end of the cell, so `x\",=HYPERLINK(…)` writes a second cell that starts
+with `=`. The neutralised value carries `csv_prefixed`, and `fputcsv()` reports
+it unless its fifth argument is the literal `''`. `"\0"` does not count: a NUL
+before a quote leaves the same gap. The apostrophe crosses helpers both ways,
+and a function that can take it off, `substr()` among them, turns the value
+back into `csv`.
 
 **What is missed.** Any other spelling, a `str_starts_with()` test and a
 concatenation, a `substr()` check, an allowlist of known-safe values. Those
-clear nothing and the finding stands.
+clear nothing and the finding stands. A named `escape: ''` argument is not
+read, because the control flow graph keeps arguments by position only, so that
+call reports too. **Direction:** over-reports.
 
 ### Stored object injection is a separate, lower severity
 

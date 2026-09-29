@@ -86,6 +86,11 @@ final class CharacterProof
          * @var list<Operand>
          */
         public readonly array $cleanLists = [],
+        /**
+         * The value is safe from formulas only in a writer that cannot end a
+         * cell early: `csv` becomes `csv_prefixed`. See {@see csvPrefixed()}.
+         */
+        public readonly bool $csvPrefixOnly = false,
     ) {
     }
 
@@ -101,7 +106,13 @@ final class CharacterProof
      */
     public function requiringClean(Operand $list): self
     {
-        return new self($this->clears, $this->sqlQuotedOnly, $this->complete, [...$this->cleanLists, $list]);
+        return new self(
+            $this->clears,
+            $this->sqlQuotedOnly,
+            $this->complete,
+            [...$this->cleanLists, $list],
+            $this->csvPrefixOnly,
+        );
     }
 
     /**
@@ -142,12 +153,16 @@ final class CharacterProof
     }
 
     /**
-     * A value that can no longer carry these kinds, for a reason other than
-     * its characters: a CSV formula neutraliser.
+     * A value whose first character cannot start a formula: a CSV formula
+     * neutraliser put an apostrophe in front of it.
+     *
+     * Its other characters are as they were, so a writer that lets a quote end
+     * the cell early starts a new cell the apostrophe does not cover. The
+     * value carries `csv_prefixed` in place of `csv`, and the sink decides.
      */
-    public static function clearing(TaintSet $kinds): self
+    public static function csvPrefixed(): self
     {
-        return new self($kinds, false);
+        return new self(TaintSet::of(TaintKind::Csv), false, false, [], true);
     }
 
     /**
@@ -171,7 +186,7 @@ final class CharacterProof
      */
     public function clearsEveryPayload(): bool
     {
-        if ($this->sqlQuotedOnly) {
+        if ($this->sqlQuotedOnly || $this->csvPrefixOnly) {
             return false;
         }
 
@@ -188,14 +203,22 @@ final class CharacterProof
         if ($this->complete || $other->complete) {
             $complete = $this->complete ? $this : $other;
 
-            return new self($complete->clears, $complete->sqlQuotedOnly, true, $lists);
+            return new self($complete->clears, $complete->sqlQuotedOnly, true, $lists, $complete->csvPrefixOnly);
         }
 
         $clears = $this->clears->union($other->clears);
         $fullSql = ($this->clears->has(TaintKind::Sql) && ! $this->sqlQuotedOnly)
             || ($other->clears->has(TaintKind::Sql) && ! $other->sqlQuotedOnly);
+        $fullCsv = ($this->clears->has(TaintKind::Csv) && ! $this->csvPrefixOnly)
+            || ($other->clears->has(TaintKind::Csv) && ! $other->csvPrefixOnly);
 
-        return new self($clears, $clears->has(TaintKind::Sql) && ! $fullSql, false, $lists);
+        return new self(
+            $clears,
+            $clears->has(TaintKind::Sql) && ! $fullSql,
+            false,
+            $lists,
+            $clears->has(TaintKind::Csv) && ! $fullCsv,
+        );
     }
 
     /**
@@ -206,7 +229,7 @@ final class CharacterProof
         $lists = [...$this->cleanLists, ...$other->cleanLists];
 
         if ($this->complete && $other->complete) {
-            return new self($this->clears, $this->sqlQuotedOnly, true, $lists);
+            return new self($this->clears, $this->sqlQuotedOnly, true, $lists, $this->csvPrefixOnly);
         }
 
         $clears = $this->clears->intersect($other->clears);
@@ -216,6 +239,7 @@ final class CharacterProof
             $clears->has(TaintKind::Sql) && ($this->sqlQuotedOnly || $other->sqlQuotedOnly),
             false,
             $lists,
+            $clears->has(TaintKind::Csv) && ($this->csvPrefixOnly || $other->csvPrefixOnly),
         );
     }
 
@@ -225,7 +249,15 @@ final class CharacterProof
      */
     public function settles(TaintKind $kind): bool
     {
-        return $this->clears->has($kind) && ! ($kind === TaintKind::Sql && $this->sqlQuotedOnly);
+        // A value that cannot start a formula anywhere cannot start one behind
+        // an apostrophe either.
+        if ($kind === TaintKind::CsvPrefixed) {
+            return $this->clears->has(TaintKind::Csv) && ! $this->csvPrefixOnly;
+        }
+
+        return $this->clears->has($kind)
+            && ! ($kind === TaintKind::Sql && $this->sqlQuotedOnly)
+            && ! ($kind === TaintKind::Csv && $this->csvPrefixOnly);
     }
 
     /**
@@ -256,7 +288,8 @@ final class CharacterProof
      * whether anyone cleaned it, and a proof that leaves no payload settles
      * both. A name is not a payload here: digits written to an option are not
      * stored XSS, though the same digits can still name an option.
-     * `sql_unquoted` stays unless SQL is cleared outright.
+     * `sql_unquoted` stays unless SQL is cleared outright, and so does
+     * `csv_prefixed` unless formulas are.
      */
     public function apply(TaintSet $taint): TaintSet
     {
@@ -278,6 +311,14 @@ final class CharacterProof
 
         if ($this->clears->has(TaintKind::Html)) {
             $removed = $removed->union(TaintSet::of(TaintKind::Escaped, TaintKind::EscapeVoided));
+        }
+
+        if ($this->csvPrefixOnly && $taint->has(TaintKind::Csv)) {
+            $taint = $taint->union(TaintSet::of(TaintKind::CsvPrefixed));
+        }
+
+        if ($this->clears->has(TaintKind::Csv) && ! $this->csvPrefixOnly) {
+            $removed = $removed->union(TaintSet::of(TaintKind::CsvPrefixed));
         }
 
         $left = $taint->without($removed);

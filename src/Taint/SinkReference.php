@@ -38,9 +38,22 @@ final class SinkReference
     ) {
     }
 
+    /**
+     * The sink, the rule and the kind it reports.
+     *
+     * The kind is part of it: one sink can report two kinds under one rule,
+     * `csv` and `csv_prefixed` at an `fputcsv()`, and a caller passing either
+     * needs the reference for its own.
+     */
     public function identityKey(): string
     {
-        return implode('|', [$this->ruleId, $this->relativeFile, (string) $this->line, (string) $this->column]);
+        return implode('|', [
+            $this->ruleId,
+            $this->kind->value,
+            $this->relativeFile,
+            (string) $this->line,
+            (string) $this->column,
+        ]);
     }
 
     /**

@@ -154,6 +154,16 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The CSV formula neutraliser was credited whatever wrote the file. An
+  apostrophe in front of a formula covers the cell's first character, and
+  `fputcsv()`'s default escape character, a backslash, lets a quote in the
+  value end the cell early. What follows is a new cell the apostrophe does not
+  cover. The neutralised value now carries `csv_prefixed`, and `fputcsv()`
+  reports it unless the call passes an empty escape character,
+  `fputcsv( $h, $row, ',', '"', '' )`. A tab or a space in front no longer
+  counts, since `trim()` removes either. A summary also kept one reference per
+  sink and rule, so a second kind reported at the same sink was lost. It now
+  keeps one per kind.
 - A helper that returns its argument as it came dropped two markers the
   argument carried. An escaped value filtered and then passed through
   `function acme_id( $v ) { return $v; }` lost its escape-voided finding, and

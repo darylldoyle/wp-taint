@@ -995,6 +995,17 @@ kind = "csv"
 severity = "medium"
 rule_id = "wp.output.csv-injection"
 
+# A value behind an apostrophe, written with an escape character that lets a
+# quote end the cell early. An empty escape, the fifth argument, doubles every
+# quote.
+[[sinks]]
+function = "fputcsv"
+args = [1]
+kind = "csv_prefixed"
+applies_by = "csv_escapable"
+severity = "medium"
+rule_id = "wp.output.csv-injection"
+
 [[sinks]]
 function = "unserialize"
 kind = "unserialize"
