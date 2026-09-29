@@ -71,9 +71,9 @@
         "findings": 51,
         "bySeverity": {
             "critical": 4,
-            "high": 29,
+            "high": 28,
             "low": 7,
-            "medium": 11
+            "medium": 12
         },
         "warnings": 0,
         "parseFailures": 0
