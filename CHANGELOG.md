@@ -167,6 +167,12 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A write two keys deep into a local array went nowhere.
+  `$a['x']['y'] = $_GET['v']` wrote into the temporary `$a['x']` produced,
+  and nothing read that temporary again, so `echo $a['x']['y']` was clean. The
+  value now reaches the array under both keys. An array literal written into
+  an element, `$rows[] = array( 'title' => $_GET['t'] )`, keeps its own
+  elements. An element write into a property still stops at the property.
 - A by-reference loop wrote each item back into the collection as one set.
   After `foreach ( $rows as &$row ) { $row['data'] = … }`, a later
   `$row['data']` read every value each row held under any key.
