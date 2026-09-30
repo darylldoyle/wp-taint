@@ -179,6 +179,12 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- An option WordPress saves as an integer reads as clean.
+  `get_option( 'posts_per_page' )` and 24 more are numbers, since
+  `sanitize_option()` casts them before they are saved. WooCommerce's report
+  stores put `posts_per_page` into a LIMIT clause, and each store's queries
+  were reported as SQL injection.
+
 - A write to a property reached every object of its class. WooCommerce's
   report stores share one query class, and a LIMIT one store built from an
   option reached every other store's queries as a critical SQL finding. A
