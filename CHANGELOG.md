@@ -20,7 +20,9 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `$this->values[ $key ]`, hands back only `'mode'`, and
   `acme_pick( $row, 'label' )` only `$row['label']`. A function gets up to 16
   such summaries. Past that, and for a key the call does not fix, it applies
-  its own summary, as before.
+  its own summary, as before. A function whose keys only pick an element gets
+  up to 256, so each of WooCommerce's 183 `get_prop()` getters returns its own
+  prop, and a product's rating no longer reads as text.
 - `wp_parse_args()` and `wp_list_pluck()` keep each element apart. They
   returned clean before, as a function the registry does not model does.
   `wp_parse_args()` keeps each key of the caller's array over the defaults, as

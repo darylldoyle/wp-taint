@@ -62,6 +62,141 @@ final class KeyParameters
     }
 
     /**
+     * Whether every key parameter only picks an element. Each use of it, or
+     * of a copy of it, is one of these:
+     *
+     * - an element key, `$this->data[ $prop ]`, to read or to write
+     * - a test for the key, `isset()`, `empty()` or `array_key_exists()`
+     * - a comparison
+     * - a part of a joined string, `'acme_get_' . $prop`
+     *
+     * WooCommerce's `WC_Data::get_prop()` and `set_prop()` are two such
+     * functions. A variant of one differs from its own run only in the
+     * element it reads or writes. It hands the key to no callee, so it asks
+     * for no variant of its own. See {@see FunctionSummary::$picksElements}.
+     *
+     * @param list<int> $keys the key parameters: see {@see of()}
+     */
+    public static function onlyPick(Func $func, array $keys): bool
+    {
+        if ($keys === []) {
+            return false;
+        }
+
+        $indexes = [];
+
+        foreach (array_values($func->params) as $index => $param) {
+            if (in_array($index, $keys, true)) {
+                $indexes[spl_object_id($param->result)] = true;
+            }
+        }
+
+        foreach (BlockOrder::of($func->cfg) as $block) {
+            foreach ([...$block->phi, ...$block->children] as $op) {
+                foreach ($op->getVariableNames() as $name) {
+                    if (! is_string($name) || $op->isWriteVariable($name)) {
+                        continue;
+                    }
+
+                    foreach (self::operandsIn(OperandHelper::readProperty($op, $name)) as $operand) {
+                        if (! self::picks($op, $name, $operand) && self::isCopyOf($operand, $indexes, [])) {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @return list<Operand>
+     */
+    private static function operandsIn(mixed $slot): array
+    {
+        if ($slot instanceof Operand) {
+            return [$slot];
+        }
+
+        return is_array($slot) ? array_values(array_filter($slot, static fn ($o): bool => $o instanceof Operand)) : [];
+    }
+
+    /**
+     * Whether an operand is one of the parameters, or a copy of one through
+     * an assignment, a narrowed type or a phi.
+     *
+     * @param array<int, true> $indexes a parameter operand's object id => true
+     * @param array<int, true> $seen
+     */
+    private static function isCopyOf(Operand $operand, array $indexes, array $seen): bool
+    {
+        $id = spl_object_id($operand);
+
+        if (isset($indexes[$id])) {
+            return true;
+        }
+
+        if (isset($seen[$id]) || count($seen) > self::MAX_HOPS) {
+            return false;
+        }
+
+        $seen[$id] = true;
+
+        foreach ($operand->ops as $writer) {
+            $from = match (true) {
+                $writer instanceof Op\Expr\Assign, $writer instanceof Op\Expr\Assertion => [$writer->expr],
+                $writer instanceof Op\Phi => $writer->vars,
+                default => [],
+            };
+
+            foreach ($from as $source) {
+                if ($source instanceof Operand && self::isCopyOf($source, $indexes, $seen)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Whether a parameter in this slot of this op only picks an element, or
+     * is copied, so the copy's own uses decide.
+     */
+    private static function picks(Op $op, string $slot, Operand $operand): bool
+    {
+        return match (true) {
+            $op instanceof Op\Expr\ArrayDimFetch => $slot === 'dim',
+            $op instanceof Op\Expr\Assign, $op instanceof Op\Expr\Assertion => $slot === 'expr',
+            $op instanceof Op\Phi,
+            $op instanceof Op\Expr\Isset_,
+            $op instanceof Op\Expr\Empty_,
+            $op instanceof Op\Expr\BinaryOp\Identical,
+            $op instanceof Op\Expr\BinaryOp\NotIdentical,
+            $op instanceof Op\Expr\BinaryOp\Equal,
+            $op instanceof Op\Expr\BinaryOp\NotEqual,
+            $op instanceof Op\Expr\BinaryOp\Concat,
+            $op instanceof Op\Expr\ConcatList => true,
+            $op instanceof Op\Expr\FuncCall,
+            $op instanceof Op\Expr\NsFuncCall => $slot === 'args' && ($op->args[0] ?? null) === $operand
+                && self::testsForKey($op),
+            default => false,
+        };
+    }
+
+    /**
+     * `array_key_exists( $prop, $this->data )`, which reads no element.
+     */
+    private static function testsForKey(Op\Expr\FuncCall|Op\Expr\NsFuncCall $call): bool
+    {
+        $name = OperandHelper::literalString($call->name);
+
+        return $name !== null
+            && in_array(strtolower(ltrim($name, '\\')), ['array_key_exists', 'key_exists'], true);
+    }
+
+    /**
      * @param array<string, list<int>> $glues
      *
      * @return array{array<int, true>, array<int, true>} the parameters used as a key, and the ones in a glue

@@ -193,6 +193,13 @@ final class FunctionSummary
          * @var list<int>
          */
         public readonly array $glueParameters = [],
+        /**
+         * Whether every key parameter only picks an element, and no key is
+         * handed on to a callee: see {@see KeyParameters::onlyPick()}. Such
+         * a function may have many more literal variants, since each one
+         * costs a run of its body and asks for no other.
+         */
+        public readonly bool $picksElements = false,
     ) {
     }
 
@@ -410,6 +417,7 @@ final class FunctionSummary
             $this->keyParameters,
             $this->receiverView,
             $this->glueParameters,
+            $this->picksElements,
         );
     }
 
@@ -451,6 +459,7 @@ final class FunctionSummary
             $this->keyParameters,
             $this->receiverView,
             $this->glueParameters,
+            $this->picksElements,
         );
     }
 
@@ -652,6 +661,7 @@ final class FunctionSummary
                 ? null
                 : $this->receiverView->union($other->receiverView),
             self::mergeKeyParameters($this->glueParameters, $other->glueParameters),
+            $this->picksElements && $other->picksElements,
         );
     }
 
@@ -1103,6 +1113,7 @@ final class FunctionSummary
             $this->parameterKeys !== $other->parameterKeys
             || $this->keyParameters !== $other->keyParameters
             || $this->glueParameters !== $other->glueParameters
+            || $this->picksElements !== $other->picksElements
         ) {
             return false;
         }
