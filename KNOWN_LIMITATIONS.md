@@ -824,6 +824,15 @@ esc_html( $_GET['v'] ) )` voids the escaped default and returns a stored value
 raw, and the line reports one escape-voided finding at the stored value's
 severity.
 
+**A call takes the escaped marker only from an argument escaped as a whole.**
+An argument that still carries html was escaped in part at most, and nothing
+says the escaped part is what the call hands back. Elementor reads an
+attachment id out of settings whose other fields were escaped and filtered,
+and passes it to `wp_get_attachment_image()`. The id carried their marker, and
+the image was reported as voided escaping. So when the call's own result
+holds nothing escaped, a partly escaped argument leaves it unmarked, and the
+line reports nothing. **Direction:** misses.
+
 **Two deliberate exceptions.**
 
 - **Registered escapers never void.** Core ends `esc_html()` with

@@ -8239,14 +8239,23 @@ final class FunctionAnalysis
         // `echo get_option( 'x' )` reports twice — once as unescaped output,
         // which is the real finding, and once as voided escaping, which adds
         // nothing to it.
+        //
+        // Only an argument escaped as a whole lends the marker. One that
+        // still carries html was escaped in part at most, and nothing says
+        // the escaped part is what comes back. Elementor reads an attachment
+        // id out of a widget's settings, whose other fields were escaped and
+        // filtered, and hands it to wp_get_attachment_image(). The id carried
+        // their marker, and the image was reported as voided escaping.
         $incoming = TaintSet::empty();
 
         foreach ($this->voidingCall->arguments as $argument) {
-            $incoming = $incoming->union(
-                in_array($argument, $keptInputs, true)
-                    ? $this->state->taintOf($argument)
-                    : $this->state->effectiveTaintOf($argument),
-            );
+            $lent = in_array($argument, $keptInputs, true)
+                ? $this->state->taintOf($argument)
+                : $this->state->effectiveTaintOf($argument);
+
+            if (! $lent->has(TaintKind::Html)) {
+                $incoming = $incoming->union($lent);
+            }
         }
 
         $voided = $taint->union(TaintSet::of(TaintKind::EscapeVoided));
