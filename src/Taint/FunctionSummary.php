@@ -188,6 +188,20 @@ final class FunctionSummary
     public const RECEIVER = -1;
 
     /**
+     * The class a summary records a write to `$this->name` under, in
+     * {@see $paramToProperty}. The call site puts the write on the object
+     * the call runs on: the variant's receiver, or the objects the method's
+     * own run is on.
+     *
+     * ```php
+     * class Acme_Store extends Acme_Query {
+     *     public function limit( $n ) { $this->add( 'limit', $n ); }
+     * }
+     * ```
+     */
+    public const THIS = '$this';
+
+    /**
      * The key of a variant of a summary: the function analysed with each
      * parameter in `$bindings` holding that literal as an array key.
      *

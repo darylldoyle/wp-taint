@@ -124,7 +124,11 @@ final class PropertyTaintMap
      */
     public function allocatedOwners(string $property): array
     {
-        $this->log?->record('p*:' . $property);
+        // Its own entry, not `p*:`. The answer moves only when a site is
+        // written for the first time, and `p*:` moves whenever any slot of
+        // the name does: every reader of `$this->settings` ran again each
+        // time one settings object changed.
+        $this->log?->record('pa:' . $property);
 
         return $this->allocated[$property] ?? [];
     }
@@ -303,12 +307,29 @@ final class PropertyTaintMap
      */
     public function mergeChangedKeys(self $other): array
     {
+        return $this->mergeChanges($other)['keys'];
+    }
+
+    /**
+     * Merge, and say which entries moved, as `class::property` keys, and
+     * which properties were written on an allocation site for the first
+     * time, which is when {@see allocatedOwners()} gives another answer.
+     *
+     * @return array{keys: list<string>, allocated: list<string>}
+     */
+    public function mergeChanges(self $other): array
+    {
         $changed = [];
+        $allocated = [];
 
         foreach (array_keys($other->tracked) as $key) {
             if (! isset($this->tracked[$key])) {
-                $this->startTracking($key);
+                $property = $this->startTracking($key);
                 $changed[$key] = true;
+
+                if ($property !== null) {
+                    $allocated[$property] = true;
+                }
             }
         }
 
@@ -352,7 +373,7 @@ final class PropertyTaintMap
             }
         }
 
-        return array_keys($changed);
+        return ['keys' => array_keys($changed), 'allocated' => array_map('strval', array_keys($allocated))];
     }
 
     /**
@@ -411,19 +432,26 @@ final class PropertyTaintMap
      * Track a `class::property` key, and index it by property when its owner
      * is an allocation site. Rebuilding the index from every tracked key
      * whenever one was added cost up to 10.8 seconds a scan.
+     *
+     * @return string|null the property, when the key is a new allocation site's
      */
-    private function startTracking(string $key): void
+    private function startTracking(string $key): ?string
     {
         if (isset($this->tracked[$key])) {
-            return;
+            return null;
         }
 
         $this->tracked[$key] = true;
         $at = strrpos($key, '::');
 
-        if ($at !== false && str_contains(substr($key, 0, $at), '@')) {
-            $this->allocated[substr($key, $at + 2)][] = substr($key, 0, $at);
+        if ($at === false || ! str_contains(substr($key, 0, $at), '@')) {
+            return null;
         }
+
+        $property = substr($key, $at + 2);
+        $this->allocated[$property][] = substr($key, 0, $at);
+
+        return $property;
     }
 
     private static function key(?string $class, string $property): string

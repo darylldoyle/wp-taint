@@ -1751,7 +1751,7 @@ final class FunctionAnalysis
                 // are the ones the body lets through to the property, plus any
                 // its own sources add. The caller publishes the first of
                 // those only: see applySummaryProperties().
-                $this->recordPropertyReference($owner, $property, $written);
+                $this->recordPropertyReference($this->referenceOwner($target, $owner), $property, $written);
 
                 // Whether the written value carried a literal fragment, so a
                 // read elsewhere can tell `$this->option_name` holding
@@ -1937,7 +1937,7 @@ final class FunctionAnalysis
             return false;
         }
 
-        $this->recordPropertyReference($owner, $property, $part);
+        $this->recordPropertyReference($this->referenceOwner($fetch, $owner), $property, $part);
 
         return $this->properties->add($owner, $property, $part, $this->writeTrace($op, $property, $part->flatten()));
     }
@@ -4949,7 +4949,9 @@ final class FunctionAnalysis
      * A sealed map makes this a no-op, which is what keeps the caller's own
      * probe runs from reintroducing the problem one frame up.
      *
-     * @param array{string, Shape}|null $others the stand-in the piece is for: see mappedBack()
+     * @param array{string, Shape}|null $others   the stand-in the piece is for: see mappedBack()
+     * @param string|null               $receiver the object the callee ran on, where its writes to
+     *                                            `$this` land: see variantOf()
      */
     private function applySummaryProperties(
         Op\Expr $op,
@@ -4958,12 +4960,17 @@ final class FunctionAnalysis
         Operand $argument,
         TaintSet $argumentTaint,
         ?array $others = null,
+        ?string $receiver = null,
     ): bool {
         $changed = false;
 
         $reverts = $summary->revertedResidualsFor($index);
 
         foreach ($summary->propertiesFor($index) as [$class, $property, $reached]) {
+            if ($class === FunctionSummary::THIS) {
+                $class = $receiver;
+            }
+
             // Only what survives the body, part by part. The kinds were
             // recorded by the probe run, whose seed carried every kind: what
             // reached the property is what the body let through.
@@ -6320,7 +6327,7 @@ final class FunctionAnalysis
             $this->imprecise = true;
         }
 
-        $summary = $this->variantOf($op, $call, $key, $summary);
+        [$summary, $receiver] = $this->variantOf($op, $call, $key, $summary);
         $result = $summary->introduces();
         $structure = $summary->introducesShape();
         $contributors = [];
@@ -6379,8 +6386,15 @@ final class FunctionAnalysis
                 }
 
                 $this->reportSummarySinks($op, $call, $record, $index, $argument, $argumentTaint);
-                $changed = $this->applySummaryProperties($op, $record, $index, $argument, $argumentTaint, $others)
-                    || $changed;
+                $changed = $this->applySummaryProperties(
+                    $op,
+                    $record,
+                    $index,
+                    $argument,
+                    $argumentTaint,
+                    $others,
+                    $receiver,
+                ) || $changed;
                 $changed = $this->applySummaryCaptures($op, $record, $index, $argument, $argumentTaint)
                     || $changed;
                 $changed = $this->applySummaryScopes($op, $record, $index, $argument, $argumentTaint, $others)
@@ -6436,11 +6450,18 @@ final class FunctionAnalysis
      *
      * writes `$sql` under `'where'` alone, where the summary itself writes it
      * under any key. See {@see KeyParameters}.
+     *
+     * A method call on another object runs the callee as a variant bound to
+     * that receiver: see {@see receiverBindingFor()}. The second value is the
+     * object the applied summary ran on, where its writes to `$this` land.
+     *
+     * @return array{FunctionSummary, string|null}
      */
-    private function variantOf(Op\Expr $op, CallTarget $call, string $key, FunctionSummary $summary): FunctionSummary
+    private function variantOf(Op\Expr $op, CallTarget $call, string $key, FunctionSummary $summary): array
     {
         $bindings = [];
         $receiver = $this->receiverBindingFor($op, $key);
+        $runsOn = $this->ownReceiverOf($key);
 
         if ($receiver !== null) {
             $bindings[FunctionSummary::RECEIVER] = $receiver;
@@ -6473,7 +6494,7 @@ final class FunctionAnalysis
         }
 
         if ($bindings === []) {
-            return $summary;
+            return [$summary, $runsOn];
         }
 
         $variantKey = FunctionSummary::variantKey($key, $bindings);
@@ -6487,18 +6508,37 @@ final class FunctionAnalysis
             // they would stay for every key to read. A function past its cap
             // gets no variant, so its own summary applies in full.
             if ($this->summaries->isCapped($key)) {
-                return $summary;
+                return [$summary, $runsOn];
             }
 
             // A receiver variant waits as a callee not yet analysed does: the
             // function's own summary reads every object of its class, and what
             // it hands back now would stay in whatever this run writes it to.
-            return $receiver !== null
-                ? FunctionSummary::empty($summary->key, $summary->displayName)
-                : $summary->withoutPropertyWrites();
+            return [
+                $receiver !== null
+                    ? FunctionSummary::empty($summary->key, $summary->displayName)
+                    : $summary->withoutPropertyWrites(),
+                $runsOn,
+            ];
         }
 
-        return $variant;
+        return [$variant, $receiver ?? $runsOn];
+    }
+
+    /**
+     * The objects a method's own run is on, where its summary's writes to
+     * `$this` land when a call applies that summary: see
+     * {@see UserFunctionTable::receiverOf()}. Null for a function.
+     */
+    private function ownReceiverOf(string $calleeKey): ?string
+    {
+        $at = strrpos($calleeKey, '::');
+
+        if ($at === false || str_contains($calleeKey, '{')) {
+            return null;
+        }
+
+        return $this->functions->receiverOf(substr($calleeKey, 0, $at), substr($calleeKey, $at + 2));
     }
 
     /**
@@ -7999,6 +8039,20 @@ final class FunctionAnalysis
      * Record that the seeded parameter reached a sink, for the caller's
      * benefit. Only meaningful while summarising.
      */
+    /**
+     * The class a summary records a write to `$target` under: the class the
+     * write landed on, or {@see FunctionSummary::THIS} for `$this->name` in a
+     * method, which the call site resolves to the object the call runs on.
+     */
+    private function referenceOwner(Op\Expr\PropertyFetch|Op\Expr\StaticPropertyFetch $target, ?string $owner): ?string
+    {
+        if (! $target instanceof Op\Expr\PropertyFetch || OperandHelper::variableName($target->var) !== 'this') {
+            return $owner;
+        }
+
+        return $this->isInstanceContext() && ! $this->context->isClosure() ? FunctionSummary::THIS : $owner;
+    }
+
     /**
      * A probe run reached a property with the seeded parameter's taint.
      *

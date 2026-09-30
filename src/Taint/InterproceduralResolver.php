@@ -204,10 +204,16 @@ final class InterproceduralResolver
                     $summaries->put($summary);
                 }
 
-                foreach ($properties->mergeChangedKeys($shardResult['properties']) as $key) {
+                $propertyChanges = $properties->mergeChanges($shardResult['properties']);
+
+                foreach ($propertyChanges['keys'] as $key) {
                     $changed = true;
                     $moved['p:' . $key] = true;
                     $moved['p*:' . substr($key, (int) strpos($key, '::') + 2)] = true;
+                }
+
+                foreach ($propertyChanges['allocated'] as $property) {
+                    $moved['pa:' . $property] = true;
                 }
 
                 $scopeChanges = $scopes->mergeChanges($shardResult['scopes']);
