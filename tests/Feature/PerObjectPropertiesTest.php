@@ -206,7 +206,7 @@ it('keeps a write in a subclass nothing calls off another subclass\'s object', f
         }
         class Acme_Writer extends Acme_Query {
             public function never_called() {
-                $this->add( 'limit', 'LIMIT ' . get_option( 'posts_per_page' ) );
+                $this->add( 'limit', 'LIMIT ' . get_option( 'acme_per_page' ) );
             }
             public function run() {
                 global $wpdb;
@@ -228,7 +228,7 @@ it('keeps a write to a new object off a subclass\'s object', function (): void {
         function acme_never_called() {
             global $wpdb;
             $query = new Acme_Query();
-            $query->add( 'limit', 'LIMIT ' . get_option( 'posts_per_page' ) );
+            $query->add( 'limit', 'LIMIT ' . get_option( 'acme_per_page' ) );
             return $wpdb->get_results( $query->statement() );
         }
         PHP))->toBe(['wp.sqli.wpdb-query@23']);
