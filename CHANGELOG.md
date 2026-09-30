@@ -9,6 +9,12 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A computed method name with a literal head and tail reaches each method of
+  the receiver's classes that fits it. WooCommerce's settings screens call
+  `$this->{ 'generate_' . $type . '_html' }( $k, $v )`, and each of those
+  methods escapes what it prints, so the field definitions no longer reach
+  the screen raw. A descendant's method counts. A parent outside the scan or a
+  `__call()` leaves the call unresolved, as before.
 - A private property declared as a literal array is read as that literal
   when nothing in the scan writes a property of its name. WooCommerce's report
   queries build a filtered where clause from
@@ -20,7 +26,10 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `$this->values[ $key ]`, hands back only `'mode'`, and
   `acme_pick( $row, 'label' )` only `$row['label']`. A function gets up to 16
   such summaries. Past that, and for a key the call does not fix, it applies
-  its own summary, as before.
+  its own summary, as before. A function whose keys only pick an element gets
+  up to 256. WooCommerce calls `get_prop()` with 183 prop names, and each
+  getter now returns its own prop, so a product's rating no longer reads as
+  text.
 - `wp_parse_args()` and `wp_list_pluck()` keep each element apart. They
   returned clean before, as a function the registry does not model does.
   `wp_parse_args()` keeps each key of the caller's array over the defaults, as

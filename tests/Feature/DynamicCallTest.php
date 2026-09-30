@@ -180,3 +180,67 @@ it('proves a flow safe only when every callee escapes it', function (): void {
 
     expect($result->findings)->toBeEmpty();
 });
+
+// A computed method name with a literal head and tail is one of the methods
+// that fit it, on the receiver's class, its ancestors and its descendants.
+// WooCommerce builds its settings screens with
+// `$this->{ 'generate_' . $type . '_html' }( $k, $v )`, and each of those
+// methods escapes what it prints.
+
+/**
+ * A settings class whose screen calls one `render_*_field()` method per field.
+ * `$more` goes into the class body, and `$after` after it.
+ */
+function computedMethodSettings(string $more = '', string $after = ''): string
+{
+    return <<<PHP
+        <?php
+        class Acme_Settings {
+            public \$fields = array();
+            public function __construct() {
+                \$this->fields = array( 'title' => array( 'type' => 'text', 'label' => get_option( 'acme_label' ) ) );
+            }
+            public function render_text_field( \$key, \$field ) {
+                return '<input name="' . esc_attr( \$key ) . '" value="' . esc_attr( \$field['label'] ) . '">';
+            }
+            public function screen() {
+                \$html = '';
+                foreach ( \$this->fields as \$key => \$field ) {
+                    \$html .= \$this->{ 'render_' . \$field['type'] . '_field' }( \$key, \$field );
+                }
+                echo \$html;
+            }
+            {$more}
+        }
+        {$after}
+        PHP;
+}
+
+it('follows a computed method name to the methods that fit it', function (): void {
+    expect(scanCode(computedMethodSettings())->findings)->toBeEmpty();
+});
+
+it('follows a computed method name to a descendant that prints raw', function (): void {
+    $result = scanCode(computedMethodSettings('', <<<'PHP'
+        class Acme_Raw_Settings extends Acme_Settings {
+            public function render_raw_field( $key, $field ) {
+                return $field['label'];
+            }
+        }
+        PHP));
+
+    expect(findingSignatures($result))->toBe(['wp.xss.unescaped-output@15']);
+});
+
+it('leaves a computed method name unresolved on a class with __call()', function (): void {
+    $result = scanCode(computedMethodSettings('public function __call( $name, $args ) { return $args[1]; }'));
+
+    expect(findingSignatures($result))->toBe(['wp.xss.unescaped-output@15']);
+});
+
+it('leaves a computed method name unresolved under a parent outside the scan', function (): void {
+    $code = str_replace('class Acme_Settings {', 'class Acme_Settings extends Acme_Base {', computedMethodSettings());
+    $result = scanCode($code);
+
+    expect(findingSignatures($result))->toBe(['wp.xss.unescaped-output@15']);
+});

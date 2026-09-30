@@ -131,6 +131,16 @@ final class ClassHierarchy
     }
 
     /**
+     * Whether the scan declares a class, trait, interface or enum of this
+     * name. A parent outside the scan is in {@see lookupOrder()} but not
+     * declared.
+     */
+    public function declares(string $class): bool
+    {
+        return isset($this->seen[self::normalize($class)]);
+    }
+
+    /**
      * Whether the scan declares this name as a trait, which has no objects
      * of its own.
      */

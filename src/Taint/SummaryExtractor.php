@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Enshrined\WpTaint\Taint;
 
 use Enshrined\WpTaint\Registry\ArgumentSelector;
+use PHPCfg\Func;
 
 /**
  * Computes a function's {@see FunctionSummary}.
@@ -45,10 +46,10 @@ final class SummaryExtractor
     private ?array $keyKeepers = null;
 
     /**
-     * Each function's key parameters, and the ones among them in a glue,
-     * which do not change between rounds.
+     * Each function's key parameters, the ones among them in a glue, and
+     * whether they only pick an element, which do not change between rounds.
      *
-     * @var array<string, array{list<int>, list<int>}>
+     * @var array<string, array{list<int>, list<int>, bool}>
      */
     private array $keyParameters = [];
 
@@ -194,10 +195,11 @@ final class SummaryExtractor
             $probeReads,
         );
 
-        [$keys, $glued] = $this->keyParameters[$context->key] ??= KeyParameters::of(
+        [$keys, $glued, $picks] = $this->keyParameters[$context->key] ??= self::keysOf(
             $context->func,
             $this->glues ??= $this->analyzer->glueArguments(),
         );
+        $handedOn = [...array_keys($forwarded), ...$baseline->forwardedKeyParameters];
 
         return new FunctionSummary(
             $keyBindings === [] ? $context->key : FunctionSummary::variantKey($context->key, $keyBindings),
@@ -228,7 +230,7 @@ final class SummaryExtractor
                 ARRAY_FILTER_USE_KEY,
             ),
             $paramToReturnEach,
-            self::keyParameters($keys, [...array_keys($forwarded), ...$baseline->forwardedKeyParameters]),
+            self::keyParameters($keys, $handedOn),
             // A write to `$this` needs a run on the receiver only when the
             // method's own run holds its writes back. Otherwise that run
             // wrote the method's own objects, which every read of the
@@ -238,7 +240,20 @@ final class SummaryExtractor
                     && $this->analyzer->holdsBackReceiverWrites($context, [], $summaries),
             ),
             $glued,
+            $picks && $handedOn === [],
         );
+    }
+
+    /**
+     * @param array<string, list<int>> $glues
+     *
+     * @return array{list<int>, list<int>, bool}
+     */
+    private static function keysOf(Func $func, array $glues): array
+    {
+        [$keys, $glued] = KeyParameters::of($func, $glues);
+
+        return [$keys, $glued, KeyParameters::onlyPick($func, $keys)];
     }
 
     /**

@@ -375,9 +375,23 @@ own summary, which reads every object of its class. The writes the summary
 carries from a parameter land on the object the call names. The method's own
 run then writes its own objects, as a public method's does, so a write from
 the body reaches every object of its class. A variant for a literal key the
-call passes counts against the cap of 16 that every literal variant has, and
+call passes counts against the cap that every literal variant has, and
 past that the method's own summary is the one the call applies or runs
 again.
+
+A function has up to 16 literal variants. A function whose keys only pick an
+element has up to 256. Each use of such a key is an element key, a test for
+the key with `isset()`, `empty()` or `array_key_exists()`, a comparison, or a
+part of a joined string. WooCommerce's `WC_Data::get_prop()` and `set_prop()`
+are two such functions. `get_prop()` is called with 183 prop names, so past
+16 each getter returned every prop, and a product's rating read as text. A
+function that hands its key to another function keeps the cap of 16, since
+each of its variants can ask for more. A joined string built from the key can
+still reach a callee and ask for a variant of it, which counts against the
+callee's own cap. On a case with 200 props the higher
+cap took the scan from 3.9 to 5.7 seconds and from 208MB to 310MB. On a copy
+of WooCommerce's product classes it took 5.5 seconds, against 6.6 before.
+**Direction:** past the cap, over-reports.
 
 A call on another object that waits for its variant applies nothing until a
 round analyses the variant: no return value, no sink and no write. So a
@@ -1220,6 +1234,17 @@ property agrees, `$this->handler = 'acme_render'` in the constructor,
 `call_user_func( $this->handler, … )` in another method, inheritance included.
 A property whose writes disagree, or hold anything but a literal string or
 `array( $this|'Class', 'method' )` pair, stays unresolved.
+
+A computed method name with a literal head and tail resolves to each method
+that fits it. `$this->{ 'generate_' . $type . '_html' }( $k, $v )` is one of
+the `generate_*_html()` methods of the receiver's class, its ancestors and its
+descendants, and the call reaches all of them. A descendant counts because PHP
+runs the method of the object's own class. The list is complete only when the
+scan declares every one of those classes and none has `__call()`, so a parent
+outside the scan or a `__call()` leaves the call unresolved. A subclass
+outside the scan is not found, as for any call on `$this`. A name with only a
+literal head, `'validate_' . $type`, is not resolved this way yet.
+**Direction:** misses a subclass outside the scan.
 
 What does not: a callable arriving as a parameter, or returned by a call the
 engine cannot see into. A name that resolves to a function nobody can find a

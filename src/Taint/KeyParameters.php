@@ -62,6 +62,163 @@ final class KeyParameters
     }
 
     /**
+     * Whether every key parameter only picks an element. Each use of it, or
+     * of a copy of it, is one of these:
+     *
+     * - an element key, `$this->data[ $prop ]`, to read or to write
+     * - a test for the key, `isset()`, `empty()` or `array_key_exists()`
+     * - a comparison
+     * - a part of a joined string, `'acme_get_' . $prop`
+     *
+     * WooCommerce's `WC_Data::get_prop()` and `set_prop()` are two such
+     * functions. A variant of one differs from its own run mostly in the
+     * element it reads or writes. It hands the key itself to no callee. A
+     * joined string can still reach one, `$this->other( 'x_' . $prop )`,
+     * and ask for a variant of it, which counts against the callee's own
+     * cap. See {@see FunctionSummary::$picksElements}.
+     *
+     * @param list<int> $keys the key parameters: see {@see of()}
+     */
+    public static function onlyPick(Func $func, array $keys): bool
+    {
+        if ($keys === []) {
+            return false;
+        }
+
+        $copies = [];
+
+        foreach (array_values($func->params) as $index => $param) {
+            if (in_array($index, $keys, true)) {
+                $copies[spl_object_id($param->result)] = true;
+            }
+        }
+
+        $ops = [];
+
+        foreach (BlockOrder::of($func->cfg) as $block) {
+            array_push($ops, ...$block->phi, ...$block->children);
+        }
+
+        $copies = self::copiesOf($ops, $copies);
+
+        foreach ($ops as $op) {
+            foreach ($op->getVariableNames() as $name) {
+                if (! is_string($name) || $op->isWriteVariable($name)) {
+                    continue;
+                }
+
+                foreach (self::operandsIn(OperandHelper::readProperty($op, $name)) as $operand) {
+                    if (isset($copies[spl_object_id($operand)]) && ! self::picks($op, $name, $operand)) {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * The parameters and every copy of them, through an assignment, a
+     * narrowed type or a phi. Grown until a pass adds nothing, so a loop's
+     * phi is found however the blocks are ordered.
+     *
+     * @param list<Op>         $ops
+     * @param array<int, true> $copies an operand's object id => true
+     *
+     * @return array<int, true>
+     */
+    private static function copiesOf(array $ops, array $copies): array
+    {
+        do {
+            $added = false;
+
+            foreach ($ops as $op) {
+                $into = match (true) {
+                    $op instanceof Op\Expr\Assign => isset($copies[spl_object_id($op->expr)])
+                        ? [$op->var, $op->result]
+                        : [],
+                    $op instanceof Op\Expr\Assertion => isset($copies[spl_object_id($op->expr)]) ? [$op->result] : [],
+                    $op instanceof Op\Phi => self::anyIn($op->vars, $copies) ? [$op->result] : [],
+                    default => [],
+                };
+
+                foreach ($into as $operand) {
+                    if (! isset($copies[spl_object_id($operand)])) {
+                        $copies[spl_object_id($operand)] = true;
+                        $added = true;
+                    }
+                }
+            }
+        } while ($added);
+
+        return $copies;
+    }
+
+    /**
+     * @param array<array-key, mixed> $operands
+     * @param array<int, true>        $copies
+     */
+    private static function anyIn(array $operands, array $copies): bool
+    {
+        foreach ($operands as $operand) {
+            if ($operand instanceof Operand && isset($copies[spl_object_id($operand)])) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @return list<Operand>
+     */
+    private static function operandsIn(mixed $slot): array
+    {
+        if ($slot instanceof Operand) {
+            return [$slot];
+        }
+
+        return is_array($slot) ? array_values(array_filter($slot, static fn ($o): bool => $o instanceof Operand)) : [];
+    }
+
+    /**
+     * Whether a parameter in this slot of this op only picks an element, or
+     * is copied, so the copy's own uses decide.
+     */
+    private static function picks(Op $op, string $slot, Operand $operand): bool
+    {
+        return match (true) {
+            $op instanceof Op\Expr\ArrayDimFetch => $slot === 'dim',
+            $op instanceof Op\Expr\Assign, $op instanceof Op\Expr\Assertion => $slot === 'expr',
+            $op instanceof Op\Phi,
+            $op instanceof Op\Expr\Isset_,
+            $op instanceof Op\Expr\Empty_,
+            $op instanceof Op\Expr\BinaryOp\Identical,
+            $op instanceof Op\Expr\BinaryOp\NotIdentical,
+            $op instanceof Op\Expr\BinaryOp\Equal,
+            $op instanceof Op\Expr\BinaryOp\NotEqual,
+            $op instanceof Op\Expr\BinaryOp\Concat,
+            $op instanceof Op\Expr\ConcatList => true,
+            $op instanceof Op\Expr\FuncCall,
+            $op instanceof Op\Expr\NsFuncCall => $slot === 'args' && ($op->args[0] ?? null) === $operand
+                && self::testsForKey($op),
+            default => false,
+        };
+    }
+
+    /**
+     * `array_key_exists( $prop, $this->data )`, which reads no element.
+     */
+    private static function testsForKey(Op\Expr\FuncCall|Op\Expr\NsFuncCall $call): bool
+    {
+        $name = OperandHelper::literalString($call->name);
+
+        return $name !== null
+            && in_array(strtolower(ltrim($name, '\\')), ['array_key_exists', 'key_exists'], true);
+    }
+
+    /**
      * @param array<string, list<int>> $glues
      *
      * @return array{array<int, true>, array<int, true>} the parameters used as a key, and the ones in a glue

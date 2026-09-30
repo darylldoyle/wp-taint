@@ -64,6 +64,15 @@ final class InterproceduralResolver
     private const MAX_VARIANTS = 16;
 
     /**
+     * How many literal variants a function may have when every key
+     * parameter only picks an element: see
+     * {@see FunctionSummary::$picksElements}. WooCommerce's
+     * `WC_Data::get_prop()` is called with 183 prop names. Past a cap of
+     * 16, each getter returned every prop, so a rating read as text.
+     */
+    private const MAX_PICKING_VARIANTS = 256;
+
+    /**
      * How many receiver variants one function may have: one per class or
      * allocation site it runs on, and per literal key. Past the cap a call
      * applies the summary it would apply on the method's own objects, with
@@ -259,7 +268,9 @@ final class InterproceduralResolver
                 // Past the cap a call applies a summary the function already
                 // has. While it waited for the variant, it left out that
                 // summary's property writes, so its callers run again.
-                if (count(array_keys($kinds[$base] ?? [], $kind, true)) >= self::capFor($kind)) {
+                $cap = self::capFor($kind, $summaries->get($functionKey));
+
+                if (count(array_keys($kinds[$base] ?? [], $kind, true)) >= $cap) {
                     if (! $summaries->isCapped($base, $kind)) {
                         $summaries->markCapped($base, $kind);
                         $changed = true;
@@ -545,9 +556,13 @@ final class InterproceduralResolver
         }
     }
 
-    private static function capFor(string $kind): int
+    private static function capFor(string $kind, ?FunctionSummary $summary): int
     {
-        return $kind === SummaryTable::RECEIVER_VARIANT ? self::MAX_RECEIVER_VARIANTS : self::MAX_VARIANTS;
+        if ($kind === SummaryTable::RECEIVER_VARIANT) {
+            return self::MAX_RECEIVER_VARIANTS;
+        }
+
+        return $summary !== null && $summary->picksElements ? self::MAX_PICKING_VARIANTS : self::MAX_VARIANTS;
     }
 
     private static function isMain(FunctionMeta|FunctionContext $function): bool
