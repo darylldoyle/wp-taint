@@ -1623,6 +1623,13 @@ final class FunctionAnalysis
 
     private function transfer(Op $op): bool
     {
+        // A call that voids escaping says so for its own result only. Left
+        // set, it voided whatever the next op wrote: the isset() check behind
+        // a `??` on the next pass took the escaped marker of a do_shortcode()
+        // argument from the end of the function.
+        $this->voidingCall = null;
+        $this->voidingOp = null;
+
         // An expression whose result is the target of an assignment is a write,
         // not a read: `$a['k'] = $v`, `$this->p = $v`, `self::$p = $v` all lower
         // to a fetch followed by an Assign onto the fetch's own result operand.
