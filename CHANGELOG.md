@@ -197,8 +197,12 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   still counts among that method's objects. A protected method that only
   subclasses call writes the objects of the subclass that calls it. Called
   through a callable such as `array_map( array( $this, 'm' ), ... )`, it
-  writes every object of its class. Anything else is an object of its class,
-  as before. See KNOWN_LIMITATIONS.md.
+  writes every object of its class. A `new` line in a method that runs on
+  objects of more than one class makes a different object for each class.
+  WooCommerce's six report Stats stores make their queries on one line of a
+  trait, and a WHERE clause the orders store wrote no longer reaches the
+  taxes store's queries. Anything else is an object of its class, as before.
+  See KNOWN_LIMITATIONS.md.
 - A call past a function's variant cap never saw the cap. It waited for its
   variant for good, so a write it passed a property reached nothing. Past
   the cap, a call now applies the function's own summary, and the

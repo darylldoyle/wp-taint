@@ -336,6 +336,16 @@ runs on the object its receiver is. The scan names an object in three ways.
   only a Stats subclass calls writes that subclass's objects, not its
   siblings'. A copy of `$this`, `$self = $this`, is the same object.
 
+A `new` line in a method that runs on objects of more than one class makes
+a different object for each class. Such a method is a trait method that two
+classes use, or a method that a descendant inherits. So the query a trait's
+`init_query()` makes for the orders store is not the one it makes for the
+taxes store. A class stands for its descendants here too. A write to the
+query made for a base class reaches the query made for each subclass, and a
+read of the base class's query sees each subclass's. All the objects of one
+class that the line makes are still one object. A method that runs on one
+class only, such as a trait method that one class uses, makes one object.
+
 Anything else is an object of its class, which stands for every object of
 that class and its descendants. A write through it reaches all of them, and a
 read through it sees all of them. That covers a parameter, a return value and
