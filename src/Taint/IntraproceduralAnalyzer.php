@@ -4,12 +4,11 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Taint;
 
-use PHPCfg\Func;
-
 use Enshrined\WpTaint\Cfg\IncludeGraph;
 use Enshrined\WpTaint\Hooks\RestRouteTable;
 use Enshrined\WpTaint\Registry\ArgumentSelector;
 use Enshrined\WpTaint\Registry\Registry;
+use PHPCfg\Func;
 
 /**
  * Runs the propagation loop over a single function body.

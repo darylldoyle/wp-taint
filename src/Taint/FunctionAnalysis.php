@@ -327,7 +327,6 @@ final class FunctionAnalysis
          */
         private readonly array $keyBindings = [],
     ) {
-
         $this->state = new TaintState();
         $this->restParameters = new RestParameterSanitizer($registry, $summaries);
         $this->types = new ClassTypeMap();
@@ -3116,7 +3115,6 @@ final class FunctionAnalysis
 
         foreach ($this->propertySlots($owner, $property) as $candidate) {
             $values[] = $this->properties->valueOf($candidate, $property);
-
         }
 
         $key = strtolower($owner) . '::' . $property;
@@ -3179,8 +3177,11 @@ final class FunctionAnalysis
         // `class#method`: the objects that method runs on. See receiverOf().
         $method = null;
 
-        if (str_contains($owner, '#')) {
-            [$owner, $method] = explode('#', $owner, 2);
+        $at = strpos($owner, '#');
+
+        if ($at !== false) {
+            $method = substr($owner, $at + 1);
+            $owner = substr($owner, 0, $at);
         }
 
         $slots = $hierarchy->lookupOrder($owner);
@@ -6340,7 +6341,6 @@ final class FunctionAnalysis
             $this->imprecise = true;
         }
 
-
         $summary = $this->variantOf($op, $call, $key, $summary);
         $result = $summary->introduces();
         $structure = $summary->introducesShape();
@@ -6500,7 +6500,6 @@ final class FunctionAnalysis
         $variantKey = FunctionSummary::variantKey($key, $bindings);
         $variant = $this->summaries->get($variantKey);
 
-
         if ($variant === null) {
             $this->summaries->request($variantKey, $key, $bindings);
 
@@ -6552,8 +6551,7 @@ final class FunctionAnalysis
             $op instanceof Op\Expr\MethodCall => OperandHelper::variableName($op->var) === 'this'
                 ? $this->receiverKey()
                 : $this->allocationKeyOf($op->var, 0),
-            $op instanceof Op\Expr\StaticCall => $this->isInstanceContext()
-                && in_array(strtolower(OperandHelper::literalString($op->class) ?? ''), ['self', 'static', 'parent'], true)
+            $op instanceof Op\Expr\StaticCall => $this->isInstanceContext() && self::namesOwnClass($op->class)
                 ? $this->receiverKey()
                 : null,
             $op instanceof Op\Expr\New_ => $this->allocationSiteOf($op),
@@ -6644,6 +6642,17 @@ final class FunctionAnalysis
     }
 
     /**
+     * Whether a static call's class is `self`, `static` or `parent`, which
+     * call on `$this` from an instance method.
+     */
+    private static function namesOwnClass(Operand $class): bool
+    {
+        $name = OperandHelper::literalString($class);
+
+        return $name !== null && in_array(strtolower($name), ['self', 'static', 'parent'], true);
+    }
+
+    /**
      * The allocation site of the object an operand holds, when the scan can
      * name it: `new Acme_Query()` followed through copies, or a property of
      * `$this` that the scan only ever gives new objects of one site.
@@ -6681,7 +6690,7 @@ final class FunctionAnalysis
         return ConstantTable::allocationSite(
             $class,
             $this->context->file->relativePath,
-            (int) $new->getAttribute('startLine'),
+            $new->getLine(),
         );
     }
 
@@ -6696,12 +6705,15 @@ final class FunctionAnalysis
         $table = $this->resolver->values()->constants();
         $holder = $this->receiverClass();
 
-        if ($name === null || $table === null || $holder === null || OperandHelper::variableName($fetch->var) !== 'this') {
+        if ($name === null || $table === null || $holder === null) {
+            return null;
+        }
+
+        if (OperandHelper::variableName($fetch->var) !== 'this') {
             return null;
         }
 
         $given = $table->allocationsOf($name);
-
 
         if ($given === null) {
             return null;
@@ -6710,7 +6722,7 @@ final class FunctionAnalysis
         [$allocated, $other] = $given;
         $sites = [];
 
-        foreach ($this->relatedClasses($holder) as $class => $_) {
+        foreach (array_keys($this->relatedClasses($holder)) as $class) {
             if (isset($other[$class])) {
                 return null;
             }

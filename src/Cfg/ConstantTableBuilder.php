@@ -403,10 +403,14 @@ final class ConstantTableBuilder
             return null;
         }
 
-        $writers = array_values(array_filter(
-            $fetch->result->ops,
-            static fn (Op $writer): bool => $writer !== $fetch,
-        ));
+        $writers = [];
+
+        foreach ($fetch->result->ops as $writer) {
+            if ($writer !== $fetch) {
+                $writers[] = $writer;
+            }
+        }
+
         $assign = $writers[0] ?? null;
 
         if (count($writers) !== 1 || ! $assign instanceof Op\Expr\Assign || $assign->var !== $fetch->result) {
@@ -414,13 +418,18 @@ final class ConstantTableBuilder
         }
 
         $new = OperandHelper::definingOp($assign->expr);
-        $class = $new instanceof Op\Expr\New_ ? OperandHelper::literalString($new->class) : null;
+
+        if (! $new instanceof Op\Expr\New_) {
+            return null;
+        }
+
+        $class = OperandHelper::literalString($new->class);
 
         if ($class === null || in_array(strtolower($class), ['self', 'static', 'parent'], true)) {
             return null;
         }
 
-        return ConstantTable::allocationSite($class, $context->file->relativePath, (int) $new->getAttribute('startLine'));
+        return ConstantTable::allocationSite($class, $context->file->relativePath, $new->getLine());
     }
 
     /**
