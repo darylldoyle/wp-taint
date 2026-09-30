@@ -365,6 +365,25 @@ final class Registry
     }
 
     /**
+     * The functions that join their elements with a glue, `implode()` and
+     * `join()`, with the glue's position. See {@see Propagator::$glueArgument}.
+     *
+     * @return array<string, int> lower-case function name => argument position
+     */
+    public function glueArguments(): array
+    {
+        $glues = [];
+
+        foreach ($this->propagators as $propagator) {
+            if ($propagator->glueArgument !== null && $propagator->matcher->kind === MatcherKind::Func) {
+                $glues[strtolower($propagator->matcher->name)] = $propagator->glueArgument;
+            }
+        }
+
+        return $glues;
+    }
+
+    /**
      * @return array<string, list<Sink>>
      */
     public function sinks(): array

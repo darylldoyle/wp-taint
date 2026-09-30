@@ -185,6 +185,14 @@ final class FunctionSummary
          * answers for another receiver.
          */
         public readonly ?ReceiverView $receiverView = null,
+        /**
+         * The key parameters that are part of the glue the function joins an
+         * array with: see {@see KeyParameters::inGlues()}. A call that leaves
+         * one out binds it to its literal default, so the glue is known text.
+         *
+         * @var list<int>
+         */
+        public readonly array $glueParameters = [],
     ) {
     }
 
@@ -401,6 +409,7 @@ final class FunctionSummary
             $sets($this->paramToReturnEach),
             $this->keyParameters,
             $this->receiverView,
+            $this->glueParameters,
         );
     }
 
@@ -441,6 +450,7 @@ final class FunctionSummary
             $this->paramToReturnEach,
             $this->keyParameters,
             $this->receiverView,
+            $this->glueParameters,
         );
     }
 
@@ -641,6 +651,7 @@ final class FunctionSummary
             $this->receiverView === null || $other->receiverView === null
                 ? null
                 : $this->receiverView->union($other->receiverView),
+            self::mergeKeyParameters($this->glueParameters, $other->glueParameters),
         );
     }
 
@@ -1088,7 +1099,11 @@ final class FunctionSummary
 
         // A key parameter a callee's summary adds is a variant this
         // function's callers may now ask for.
-        if ($this->parameterKeys !== $other->parameterKeys || $this->keyParameters !== $other->keyParameters) {
+        if (
+            $this->parameterKeys !== $other->parameterKeys
+            || $this->keyParameters !== $other->keyParameters
+            || $this->glueParameters !== $other->glueParameters
+        ) {
             return false;
         }
 

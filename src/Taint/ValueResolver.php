@@ -109,6 +109,27 @@ final class ValueResolver
     }
 
     /**
+     * Every constant string this operand can hold, with each parameter in
+     * `$bound` holding the literal a summary variant binds it to: see
+     * {@see keyStrings()}.
+     *
+     * @param array<int, string> $bound a parameter operand's object id => the literal it holds
+     *
+     * @return list<string> empty when any of its values cannot be pinned down
+     */
+    public function boundStrings(Operand $operand, array $bound): array
+    {
+        $previous = $this->bound;
+        $this->bound = $bound;
+
+        try {
+            return $this->resolve($operand, 0, false);
+        } finally {
+            $this->bound = $previous;
+        }
+    }
+
+    /**
      * The constant strings this operand can hold, where they can be followed.
      *
      * A join whose other branches will not fold still answers with the ones

@@ -69,6 +69,16 @@ final class IntraproceduralAnalyzer
     }
 
     /**
+     * The functions that join with a glue: see {@see Registry::glueArguments()}.
+     *
+     * @return array<string, int>
+     */
+    public function glueArguments(): array
+    {
+        return $this->registry->glueArguments();
+    }
+
+    /**
      * Whether a run's property writes stay out of the shared map.
      *
      * A variant bound to a caller's literal key is one caller's, not the

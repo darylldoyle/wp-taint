@@ -51,6 +51,21 @@ final class SummaryExtractor
      */
     private array $keyParameters = [];
 
+    /**
+     * Each function's parameters in a glue, which do not change between
+     * rounds.
+     *
+     * @var array<string, list<int>>
+     */
+    private array $glueParameters = [];
+
+    /**
+     * The functions that join with a glue, found once.
+     *
+     * @var array<string, int>|null
+     */
+    private ?array $glues = null;
+
     public function __construct(
         private readonly IntraproceduralAnalyzer $analyzer,
         private readonly AnalysisOptions $options,
@@ -196,7 +211,10 @@ final class SummaryExtractor
             ),
             $paramToReturnEach,
             self::keyParameters(
-                $this->keyParameters[$context->key] ??= KeyParameters::of($context->func),
+                $this->keyParameters[$context->key] ??= KeyParameters::of(
+                    $context->func,
+                    $this->glues ??= $this->analyzer->glueArguments(),
+                ),
                 [...array_keys($forwarded), ...$baseline->forwardedKeyParameters],
             ),
             // A write to `$this` needs a run on the receiver only when the
@@ -205,6 +223,10 @@ final class SummaryExtractor
             // receiver sees.
             $baseline->receiverView?->withWrites(
                 $baseline->receiverView->writes && $this->analyzer->holdsBackWrites($context, []),
+            ),
+            $this->glueParameters[$context->key] ??= KeyParameters::inGlues(
+                $context->func,
+                $this->glues ??= $this->analyzer->glueArguments(),
             ),
         );
     }

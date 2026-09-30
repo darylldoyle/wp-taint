@@ -9,7 +9,8 @@ use PHPCfg\Op;
 use PHPCfg\Operand;
 
 /**
- * The parameters a function uses as an array key.
+ * The parameters a function uses as an array key, or in the glue it joins
+ * an array with.
  *
  * ```php
  * public function add_sql_clause( $type, $clause ) {
@@ -23,7 +24,15 @@ use PHPCfg\Operand;
  * `$type` bound to `'where'`: see {@see FunctionSummary::variantKey()}.
  *
  * A parameter counts when it, or a copy of it, is the key of an element read
- * or write in the body.
+ * or write in the body. It counts too when it is part of the glue of an
+ * `implode()`, whose text decides whether the joined elements keep their
+ * quotes:
+ *
+ * ```php
+ * protected function get_status_subquery( $query_args, $operator = 'AND' ) {
+ *     return implode( " $operator ", $subqueries );
+ * }
+ * ```
  */
 final class KeyParameters
 {
@@ -31,9 +40,42 @@ final class KeyParameters
     private const MAX_HOPS = 16;
 
     /**
+     * @param array<string, int> $glues the functions that join with a glue, and its position: see
+     *                                  {@see \Enshrined\WpTaint\Registry\Registry::glueArguments()}
+     *
      * @return list<int> parameter indexes, ascending
      */
-    public static function of(Func $func): array
+    public static function of(Func $func, array $glues = []): array
+    {
+        [$keys, $inGlues] = self::found($func, $glues);
+        $list = array_keys($keys + $inGlues);
+        sort($list);
+
+        return $list;
+    }
+
+    /**
+     * The parameters that are part of a glue, which a call that leaves one
+     * out binds to its default. See {@see FunctionSummary::$glueParameters}.
+     *
+     * @param array<string, int> $glues
+     *
+     * @return list<int> parameter indexes, ascending
+     */
+    public static function inGlues(Func $func, array $glues): array
+    {
+        $list = array_keys(self::found($func, $glues)[1]);
+        sort($list);
+
+        return $list;
+    }
+
+    /**
+     * @param array<string, int> $glues
+     *
+     * @return array{array<int, true>, array<int, true>} the parameters used as a key, and the ones in a glue
+     */
+    private static function found(Func $func, array $glues): array
     {
         $indexes = [];
 
@@ -44,13 +86,20 @@ final class KeyParameters
         }
 
         if ($indexes === []) {
-            return [];
+            return [[], []];
         }
 
-        $found = [];
+        $keys = [];
+        $inGlues = [];
 
         foreach (BlockOrder::of($func->cfg) as $block) {
             foreach ($block->children as $op) {
+                foreach (self::glueOf($op, $glues) as $glue) {
+                    foreach (self::parametersIn($glue, $indexes, 0) as $index) {
+                        $inGlues[$index] = true;
+                    }
+                }
+
                 if (! $op instanceof Op\Expr\ArrayDimFetch || ! $op->dim instanceof Operand) {
                     continue;
                 }
@@ -58,15 +107,69 @@ final class KeyParameters
                 $index = self::parameterOf($op->dim, $indexes);
 
                 if ($index !== null) {
-                    $found[$index] = true;
+                    $keys[$index] = true;
                 }
             }
         }
 
-        $list = array_keys($found);
-        sort($list);
+        return [$keys, $inGlues];
+    }
 
-        return $list;
+    /**
+     * The glue a call joins with, when it is one of `$glues` and has an array
+     * to join. A lone argument is the array itself.
+     *
+     * @param array<string, int> $glues
+     *
+     * @return list<Operand>
+     */
+    private static function glueOf(Op $op, array $glues): array
+    {
+        if (! $op instanceof Op\Expr\FuncCall && ! $op instanceof Op\Expr\NsFuncCall) {
+            return [];
+        }
+
+        $name = OperandHelper::literalString($op->name);
+        $at = $name === null ? null : ($glues[strtolower(ltrim($name, '\\'))] ?? null);
+        $glue = $at === null || count($op->args) < 2 ? null : ($op->args[$at] ?? null);
+
+        return $glue instanceof Operand ? [$glue] : [];
+    }
+
+    /**
+     * The parameters a string is built from: the parameter itself, a copy
+     * of it, or any part of a concatenation or interpolation of them.
+     *
+     * @param array<int, int> $indexes a parameter operand's object id => its index
+     *
+     * @return list<int>
+     */
+    private static function parametersIn(Operand $operand, array $indexes, int $hops): array
+    {
+        if ($hops > self::MAX_HOPS) {
+            return [];
+        }
+
+        if (isset($indexes[spl_object_id($operand)])) {
+            return [$indexes[spl_object_id($operand)]];
+        }
+
+        $op = OperandHelper::definingOp($operand);
+        $parts = match (true) {
+            $op instanceof Op\Expr\Assign => [$op->expr],
+            $op instanceof Op\Expr\ConcatList => $op->list,
+            $op instanceof Op\Expr\BinaryOp\Concat => [$op->left, $op->right],
+            default => [],
+        };
+        $found = [];
+
+        foreach ($parts as $part) {
+            if ($part instanceof Operand) {
+                array_push($found, ...self::parametersIn($part, $indexes, $hops + 1));
+            }
+        }
+
+        return $found;
     }
 
     /**

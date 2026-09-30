@@ -6166,7 +6166,9 @@ final class FunctionAnalysis
     }
 
     /**
-     * The one string an operand is known to hold, or null.
+     * The one string an operand is known to hold, or null. In a variant, a
+     * parameter bound to a literal holds that literal: see
+     * {@see KeyParameters}.
      */
     private function knownText(?Operand $operand): ?string
     {
@@ -6180,7 +6182,10 @@ final class FunctionAnalysis
             return $literal;
         }
 
-        $folded = $this->resolver->values()->strings($operand);
+        $values = $this->resolver->values();
+        $folded = $this->keyBindings === []
+            ? $values->strings($operand)
+            : $values->boundStrings($operand, $this->boundOperands());
 
         return count($folded) === 1 ? $folded[0] : null;
     }
@@ -6596,7 +6601,18 @@ final class FunctionAnalysis
         foreach ($keyParameters as $index) {
             $argument = $call->argument($index);
 
+            // Left out, a parameter in a glue holds its default. A literal
+            // one is a glue the call names as surely as one it passes.
             if ($argument === null) {
+                $default = $call->positional && $call->argumentCount() <= $index
+                    && in_array($index, $summary->glueParameters, true)
+                    ? ($this->functions->get($key)->defaults[$index] ?? null)
+                    : null;
+
+                if ($default !== null) {
+                    $literals[$index] = $default;
+                }
+
                 continue;
             }
 
