@@ -32,8 +32,22 @@ namespace Enshrined\WpTaint\Taint;
 final class ReceiverView
 {
     /**
-     * @param array<string, array{Shape, bool, bool|null}> $properties each property read through `$this`
-     *        and what the read saw: see {@see PropertyTaintMap::viewOf()}
+     * The answers a read of a property gives, as {@see PropertyTaintMap::viewOf()}
+     * returns them: the value, whether every write was anchored, and whether
+     * the tracked slots hold nothing. A view keeps an answer only when the run
+     * read it. Only {@see LiteralAnchor} reads the second and only
+     * {@see OriginClassifier} the third, and a WPForms field's `$defaults`,
+     * clean everywhere, differed in both from one field class to the next.
+     */
+    public const VALUE = 0;
+
+    public const ANCHORED = 1;
+
+    public const CLEAN = 2;
+
+    /**
+     * @param array<string, array<int, Shape|bool|null>> $properties each property read through `$this`, and
+     *        each answer the run read from it: see {@see VALUE}
      * @param array<string, array{string, array<int, int|string>, string|null}> $calls each method called on
      *        `$this`, by call signature: its key, the literals it was called with, and the key of the
      *        summary the call applied, or null when the call applied one it was still waiting to replace
@@ -72,18 +86,31 @@ final class ReceiverView
     }
 
     /**
-     * Whether a property read on another receiver saw the same as this run.
+     * Whether a read of the property on another receiver gives each answer
+     * this run read from it.
      *
-     * @param array{Shape, bool, bool|null} $seen
+     * @param array<int, Shape|bool|null> $seen every answer the read gives there
      */
     public function sawSame(string $property, array $seen): bool
     {
         $mine = $this->properties[$property] ?? null;
 
-        return $mine !== null
-            && $mine[1] === $seen[1]
-            && $mine[2] === $seen[2]
-            && $mine[0]->equals($seen[0]);
+        if ($mine === null) {
+            return false;
+        }
+
+        foreach ($mine as $answer => $value) {
+            $there = $seen[$answer] ?? null;
+            $same = $value instanceof Shape
+                ? $there instanceof Shape && $value->equals($there)
+                : array_key_exists($answer, $seen) && $there === $value;
+
+            if (! $same) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     public function equals(?self $other): bool
@@ -107,7 +134,9 @@ final class ReceiverView
         }
 
         foreach ($other->properties as $property => $seen) {
-            if (! $this->sawSame($property, $seen)) {
+            $mine = $this->properties[$property] ?? [];
+
+            if (array_keys($seen) !== array_keys($mine) || ! $this->sawSame($property, $seen)) {
                 return false;
             }
         }
@@ -126,7 +155,9 @@ final class ReceiverView
         $properties = $this->properties;
 
         foreach ($other->properties as $property => $seen) {
-            if (isset($properties[$property]) && ! $this->sawSame($property, $seen)) {
+            if (isset($properties[$property]) && array_keys($properties[$property]) !== array_keys($seen)) {
+                $opaque = true;
+            } elseif (isset($properties[$property]) && ! $this->sawSame($property, $seen)) {
                 $opaque = true;
             }
 

@@ -21,9 +21,8 @@ final class SummaryTable
     public const LITERAL_VARIANT = 'literal';
 
     /**
-     * A variant a method call on another object asked for: one bound to that
-     * receiver, or the literal variant the call applies there. Each kind has
-     * its own cap: see {@see InterproceduralResolver}.
+     * A variant a method call on another object asked for, bound to that
+     * receiver. Each kind has its own cap: see {@see InterproceduralResolver}.
      */
     public const RECEIVER_VARIANT = 'receiver';
 

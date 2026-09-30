@@ -449,3 +449,34 @@ it('keeps the receiver variants going past the literal cap', function (): void {
         }
         PHP))->toBe([]);
 });
+
+// A literal variant a call on `$this` asks for counts against the literal
+// cap. Past it the base summary stands in, and the write still lands on the
+// object the call runs on.
+
+it('keeps each object\'s write apart past the literal cap', function (): void {
+    $stores = '';
+
+    for ($i = 0; $i < 17; $i++) {
+        $stores .= "class Acme_Store_{$i} extends Acme_Query {\n"
+            . "    public function run() { \$this->add( 'key{$i}', 'x' ); }\n"
+            . "}\n";
+    }
+
+    expect(perObjectFindings(perObjectQuery() . "\n" . $stores . <<<'PHP'
+        class Acme_Reader extends Acme_Query {
+            public function run() {
+                global $wpdb;
+                $this->add( 'select', 'id' );
+                return $wpdb->get_results( $this->statement() );
+            }
+        }
+        class Acme_Writer extends Acme_Query {
+            public function run() {
+                global $wpdb;
+                $this->add( 'limit', 'LIMIT ' . $_GET['n'] );
+                return $wpdb->get_results( $this->statement() );
+            }
+        }
+        PHP))->toBe(['wp.sqli.wpdb-query@74']);
+});

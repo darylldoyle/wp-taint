@@ -124,10 +124,11 @@ final class FunctionAnalysis
     private array $scopesReached = [];
 
     /**
-     * The properties this run read through `$this`, when it records a
-     * {@see ReceiverView}: see {@see recordsReceiver()}.
+     * The properties this run read through `$this`, and which answers it read
+     * from each, when it records a {@see ReceiverView}: see
+     * {@see recordsReceiver()}.
      *
-     * @var array<string, true>
+     * @var array<string, array<int, true>>
      */
     private array $receiverReads = [];
 
@@ -399,7 +400,7 @@ final class FunctionAnalysis
                 $properties,
                 $receivers,
                 $functions->classHierarchy(),
-                $this->propertySlotsOf(...),
+                fn (Op\Expr\PropertyFetch $fetch): ?array => $this->propertySlotsOf($fetch, ReceiverView::CLEAN),
             ),
             $resolver->values(),
         );
@@ -411,7 +412,7 @@ final class FunctionAnalysis
             $context,
             $this->types,
             $registry,
-            $this->propertySlotsOf(...),
+            fn (Op\Expr\PropertyFetch $fetch): ?array => $this->propertySlotsOf($fetch, ReceiverView::ANCHORED),
         );
         $this->guards = new GuardAnalyzer($resolver->values());
         $this->capabilityGuards = new CapabilityGuard($registry, $callGraph);
@@ -548,12 +549,13 @@ final class FunctionAnalysis
     {
         $receiver = (string) $this->receiverKey();
         $properties = [];
-        $reads = array_keys($this->receiverReads);
-        sort($reads);
+        $reads = $this->receiverReads;
+        ksort($reads);
 
-        foreach ($reads as $property) {
+        foreach ($reads as $property => $asked) {
             $property = (string) $property;
-            $properties[$property] = $this->properties->viewOf($this->propertySlots($receiver, $property), $property);
+            $seen = $this->properties->viewOf($this->propertySlots($receiver, $property), $property);
+            $properties[$property] = array_intersect_key($seen, $asked);
         }
 
         $calls = $this->receiverCalls;
@@ -3134,7 +3136,7 @@ final class FunctionAnalysis
         $owner = $this->propertyOwnerClass($op);
 
         if ($this->readsThis($op)) {
-            $this->receiverReads[$property] = true;
+            $this->receiverReads[$property][ReceiverView::VALUE] = true;
         }
 
         // A table name or prefix on the database handle is not data. WordPress
@@ -3247,9 +3249,11 @@ final class FunctionAnalysis
      * The slots a read of this property sees, for the rules that ask where a
      * property's value came from. Null for a name computed at run time.
      *
+     * @param int $asks which answer the rule reads from the slots: see {@see ReceiverView::ANCHORED}
+     *
      * @return list<string|null>|null
      */
-    private function propertySlotsOf(Op\Expr\PropertyFetch $fetch): ?array
+    private function propertySlotsOf(Op\Expr\PropertyFetch $fetch, int $asks): ?array
     {
         $property = OperandHelper::literalString($fetch->name);
 
@@ -3260,7 +3264,8 @@ final class FunctionAnalysis
         $owner = $this->propertyOwnerClass($fetch);
 
         if ($this->readsThis($fetch)) {
-            $this->receiverReads[$property] = true;
+            $this->receiverReads[$property][ReceiverView::VALUE] = true;
+            $this->receiverReads[$property][$asks] = true;
         }
 
         return $owner === null ? [null] : $this->propertySlots($owner, $property);
@@ -6674,7 +6679,8 @@ final class FunctionAnalysis
      * variant bound to the receiver when it does not.
      *
      * The summary on the method's own objects is the base summary, or the
-     * variant for the call's literal keys. It answers for the receiver when
+     * variant for the call's literal keys, or the base summary again past
+     * the literal cap. It answers for the receiver when
      * the method would read and call the same there: see
      * {@see ReceiverView}. Its writes to `$this` then land on the receiver.
      * One summary serves every receiver it answers for, where a variant per
@@ -6706,22 +6712,18 @@ final class FunctionAnalysis
         $capped = $this->summaries->isCapped($key, SummaryTable::RECEIVER_VARIANT);
         $own = $literals === [] ? $summary : $this->summaries->get(FunctionSummary::variantKey($key, $literals));
 
-        if ($own === null) {
-            if ($capped) {
-                return [$summary, $receiver, false];
-            }
-
-            // The literal variant first: it may answer for this receiver and
-            // every other.
-            $this->summaries->request(
-                FunctionSummary::variantKey($key, $literals),
-                $key,
-                $literals,
-                SummaryTable::RECEIVER_VARIANT,
-            );
+        // The literal variant first: it may answer for this receiver and
+        // every other. It is a literal variant like any other, so past the
+        // literal cap the base summary stands in for it, as it does for a
+        // call that names no receiver. Site Kit's `Resource::call()` is
+        // called with 95 method names, and a variant per name ran 570 times.
+        if ($own === null && ! $this->summaries->isCapped($key)) {
+            $this->summaries->request(FunctionSummary::variantKey($key, $literals), $key, $literals);
 
             return [FunctionSummary::empty($summary->key, $summary->displayName), $runsOn, false];
         }
+
+        $own ??= $summary;
 
         if ($this->answersFor($own, $receiver)) {
             return [$own, $receiver, true];
@@ -6831,7 +6833,8 @@ final class FunctionAnalysis
     {
         $own = $literals === []
             ? $this->summaries->get($callee)
-            : $this->summaries->get(FunctionSummary::variantKey($callee, $literals));
+            : $this->summaries->get(FunctionSummary::variantKey($callee, $literals))
+                ?? ($this->summaries->isCapped($callee) ? $this->summaries->get($callee) : null);
 
         if ($this->bindsNoReceiver($callee, $receiver)) {
             return $own;

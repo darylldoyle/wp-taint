@@ -65,10 +65,9 @@ final class InterproceduralResolver
 
     /**
      * How many receiver variants one function may have: one per class or
-     * allocation site it runs on, and per literal key. The literal variants
-     * a call on another object applies there count here too. Past the cap a
-     * call applies the summary it would apply on the method's own objects,
-     * with its writes to `$this` on the receiver.
+     * allocation site it runs on, and per literal key. Past the cap a call
+     * applies the summary it would apply on the method's own objects, with
+     * its writes to `$this` on the receiver.
      */
     private const MAX_RECEIVER_VARIANTS = 512;
 
