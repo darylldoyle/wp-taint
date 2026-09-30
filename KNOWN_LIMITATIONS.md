@@ -237,6 +237,17 @@ of rows with each row's `'label'` apart from its `'raw'`. A value the function
 builds from a computed read of the parameter, `array( 'x' => $a[ $k ] )`, still
 takes every element the read could see. **Direction:** over-reports there.
 
+**A function that returns one element or the whole array joins the two.**
+Elementor's `Base_Object::get_items( $haystack, $needle = null )` returns
+`$haystack[ $needle ]` when a caller names a key, and `$haystack` when it
+names none. A caller that names no key still gets both. A loop over the
+result then takes each field of one element as if it were a whole element.
+So `$feature['name']` also sees the stored `state` string of each feature,
+and Elementor's experiments screen is reported at
+`core/experiments/manager.php:663` and `:668`. Keeping the two apart needs a
+variant for the missing key that skips the `if ( $needle )` branch.
+**Direction:** over-reports.
+
 **A key carries its collection's own taint and what the code used as a key.**
 A `foreach` key over `$_GET` is request data. After `$rows[ $_GET['k'] ] = 1`,
 the `$k` in `foreach ( $rows as $k => $v )` is request data too, and `$v` is
