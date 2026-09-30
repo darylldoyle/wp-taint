@@ -177,10 +177,12 @@ function = "mb_substr"
 [[propagators]]
 function = "str_replace"
 reads_escapes = true
+quote_args = [0, 1]
 note = "Taint flows from both the subject and the replacement."
 
 [[propagators]]
 function = "str_ireplace"
+quote_args = [0, 1]
 
 # preg_replace() is a sanitizer or a propagator depending on its pattern, and no
 # static entry can say which. `clears_by` names the strategy that reads the

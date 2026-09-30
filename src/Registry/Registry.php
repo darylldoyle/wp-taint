@@ -365,18 +365,27 @@ final class Registry
     }
 
     /**
-     * The functions that join their elements with a glue, `implode()` and
-     * `join()`, with the glue's position. See {@see Propagator::$glueArgument}.
+     * The functions whose arguments decide whether an escaped value keeps
+     * its quotes, by lower-case name, with those arguments: `implode()`'s
+     * glue, and `str_replace()`'s search and replacement.
      *
-     * @return array<string, int> lower-case function name => argument position
+     * @return array<string, list<int>>
      */
     public function glueArguments(): array
     {
         $glues = [];
 
         foreach ($this->propagators as $propagator) {
-            if ($propagator->glueArgument !== null && $propagator->matcher->kind === MatcherKind::Func) {
-                $glues[strtolower($propagator->matcher->name)] = $propagator->glueArgument;
+            if ($propagator->matcher->kind !== MatcherKind::Func) {
+                continue;
+            }
+
+            $positions = $propagator->glueArgument === null
+                ? $propagator->quoteArguments
+                : [$propagator->glueArgument];
+
+            if ($positions !== []) {
+                $glues[strtolower($propagator->matcher->name)] = $positions;
             }
         }
 

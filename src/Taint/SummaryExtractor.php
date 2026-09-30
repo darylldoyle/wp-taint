@@ -55,7 +55,7 @@ final class SummaryExtractor
     /**
      * The functions that join with a glue, found once.
      *
-     * @var array<string, int>|null
+     * @var array<string, list<int>>|null
      */
     private ?array $glues = null;
 

@@ -45,7 +45,7 @@ final class KeyParameters
      * {@see FunctionSummary::$glueParameters}. One walk of the body finds
      * both.
      *
-     * @param array<string, int> $glues the functions that join with a glue, and its position: see
+     * @param array<string, list<int>> $glues the functions that join with a glue, and its position: see
      *                                  {@see \Enshrined\WpTaint\Registry\Registry::glueArguments()}
      *
      * @return array{list<int>, list<int>} parameter indexes, ascending
@@ -62,7 +62,7 @@ final class KeyParameters
     }
 
     /**
-     * @param array<string, int> $glues
+     * @param array<string, list<int>> $glues
      *
      * @return array{array<int, true>, array<int, true>} the parameters used as a key, and the ones in a glue
      */
@@ -110,7 +110,7 @@ final class KeyParameters
      * The glue a call joins with, when it is one of `$glues` and has an array
      * to join. A lone argument is the array itself.
      *
-     * @param array<string, int> $glues
+     * @param array<string, list<int>> $glues
      *
      * @return list<Operand>
      */
@@ -121,10 +121,21 @@ final class KeyParameters
         }
 
         $name = OperandHelper::literalString($op->name);
-        $at = $name === null ? null : ($glues[strtolower(ltrim($name, '\\'))] ?? null);
-        $glue = $at === null || count($op->args) < 2 ? null : ($op->args[$at] ?? null);
+        $positions = $name === null ? [] : ($glues[strtolower(ltrim($name, '\\'))] ?? []);
 
-        return $glue instanceof Operand ? [$glue] : [];
+        if (count($op->args) < 2) {
+            return [];
+        }
+
+        $found = [];
+
+        foreach ($positions as $at) {
+            if (($op->args[$at] ?? null) instanceof Operand) {
+                $found[] = $op->args[$at];
+            }
+        }
+
+        return $found;
     }
 
     /**

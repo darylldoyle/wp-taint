@@ -6313,11 +6313,53 @@ final class FunctionAnalysis
             return $glues !== [] && $breaks === [];
         }
 
+        if ($propagator->quoteArguments !== []) {
+            return $this->quoteFreeArguments($call, $propagator->quoteArguments);
+        }
+
         if (! $propagator->keepsResiduals) {
             return false;
         }
 
         return $propagator->maskArgument === null || $call->argument($propagator->maskArgument) === null;
+    }
+
+    /**
+     * Whether every string these arguments can hold is free of quotes,
+     * backticks and backslashes: `str_replace( 'date_created', 'timestamp',
+     * $clause )`. Replacing such text with such text cannot move an escaped
+     * value out of its quotes, or undo its escaping. An argument the scan
+     * cannot read, or an array it cannot read every string of, may.
+     *
+     * @param list<int> $positions
+     */
+    private function quoteFreeArguments(CallTarget $call, array $positions): bool
+    {
+        foreach ($positions as $at) {
+            $argument = $call->argument($at);
+
+            if ($argument === null) {
+                return false;
+            }
+
+            $known = $this->knownText($argument);
+            $strings = $known !== null
+                ? [$known]
+                : ($this->literalStrings($argument)
+                    ?? $this->resolver->values()->choiceStrings($argument, $this->boundOperands()));
+
+            if ($strings === []) {
+                return false;
+            }
+
+            foreach ($strings as $string) {
+                if (strpbrk($string, "'\"`\\") !== false) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     /**

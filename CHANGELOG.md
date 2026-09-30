@@ -225,6 +225,11 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   glue to a function's glue parameter, `get_status_subquery( $query_args,
   $operator )`, runs the function once for each string and gets what either
   run does.
+- `str_replace()` with a search and a replacement that hold no quote,
+  backtick or backslash keeps an escaped value's escaping. It turned every
+  escaped value it touched back into raw SQL. WooCommerce's Downloads Stats
+  store renames a column in its clauses with `str_replace_clause(
+  'where_time', 'date_created', 'timestamp' )`.
 - A write into an element of a property went nowhere, as a write two keys
   deep into a local array did before. `$this->opts['name'] = $_GET['n']` in
   one method left `echo $this->opts['name']` clean in another. It now reaches

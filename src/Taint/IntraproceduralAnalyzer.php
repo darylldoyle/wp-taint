@@ -71,7 +71,7 @@ final class IntraproceduralAnalyzer
     /**
      * The functions that join with a glue: see {@see Registry::glueArguments()}.
      *
-     * @return array<string, int>
+     * @return array<string, list<int>>
      */
     public function glueArguments(): array
     {

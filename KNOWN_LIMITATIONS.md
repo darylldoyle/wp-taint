@@ -955,7 +955,13 @@ when every one of them does: `implode( " {$operator} ", $clauses )`, where
 `get_match_operator()` returns `'AND'` or `'OR'`. A function's return counts
 as a few known strings when every `return` folds to them. Passed to a glue
 parameter, up to four such strings run the function once each, and the call
-gets what any run does; more than four read as a glue the scan cannot read. A fragment that is not written as
+gets what any run does; more than four read as a glue the scan cannot read.
+`str_replace()` is read the same way: a search and a replacement that hold no
+quote, backtick or backslash leave the escaping in place, so
+`str_replace( 'date_created', 'timestamp', $clause )` keeps it. A public method
+that does the replacing still runs on its own objects with arguments no caller
+names, since code outside the scan may call it, and there it undoes the
+escaping. A fragment that is not written as
 a literal still counts when it folds to exactly one string. One that folds to
 several, or to none, is taken to hold no quote: `$c ? "'" : $x` could hold
 anything.
