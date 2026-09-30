@@ -45,19 +45,12 @@ final class SummaryExtractor
     private ?array $keyKeepers = null;
 
     /**
-     * Each function's key parameters, which do not change between rounds.
+     * Each function's key parameters, and the ones among them in a glue,
+     * which do not change between rounds.
      *
-     * @var array<string, list<int>>
+     * @var array<string, array{list<int>, list<int>}>
      */
     private array $keyParameters = [];
-
-    /**
-     * Each function's parameters in a glue, which do not change between
-     * rounds.
-     *
-     * @var array<string, list<int>>
-     */
-    private array $glueParameters = [];
 
     /**
      * The functions that join with a glue, found once.
@@ -201,6 +194,11 @@ final class SummaryExtractor
             $probeReads,
         );
 
+        [$keys, $glued] = $this->keyParameters[$context->key] ??= KeyParameters::of(
+            $context->func,
+            $this->glues ??= $this->analyzer->glueArguments(),
+        );
+
         return new FunctionSummary(
             $keyBindings === [] ? $context->key : FunctionSummary::variantKey($context->key, $keyBindings),
             $context->displayName,
@@ -230,13 +228,7 @@ final class SummaryExtractor
                 ARRAY_FILTER_USE_KEY,
             ),
             $paramToReturnEach,
-            self::keyParameters(
-                $this->keyParameters[$context->key] ??= KeyParameters::of(
-                    $context->func,
-                    $this->glues ??= $this->analyzer->glueArguments(),
-                ),
-                [...array_keys($forwarded), ...$baseline->forwardedKeyParameters],
-            ),
+            self::keyParameters($keys, [...array_keys($forwarded), ...$baseline->forwardedKeyParameters]),
             // A write to `$this` needs a run on the receiver only when the
             // method's own run holds its writes back. Otherwise that run
             // wrote the method's own objects, which every read of the
@@ -245,10 +237,7 @@ final class SummaryExtractor
                 $baseline->receiverView->writes
                     && $this->analyzer->holdsBackReceiverWrites($context, [], $summaries),
             ),
-            $this->glueParameters[$context->key] ??= KeyParameters::inGlues(
-                $context->func,
-                $this->glues ??= $this->analyzer->glueArguments(),
-            ),
+            $glued,
         );
     }
 

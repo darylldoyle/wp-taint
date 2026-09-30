@@ -187,7 +187,7 @@ final class FunctionSummary
         public readonly ?ReceiverView $receiverView = null,
         /**
          * The key parameters that are part of the glue the function joins an
-         * array with: see {@see KeyParameters::inGlues()}. A call that leaves
+         * array with: see {@see KeyParameters::of()}. A call that leaves
          * one out binds it to its literal default, so the glue is known text.
          *
          * @var list<int>

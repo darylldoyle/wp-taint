@@ -16,8 +16,12 @@ use Enshrined\WpTaint\Finding\TraceStep;
  *
  * Not path-sensitive. A slot is an object the scan can name, an allocation
  * site such as `foo@file.php:12`, or a class, which stands for every object of
- * it the scan cannot name. A tainted `Foo::$value` taints every read of
- * `$value` on any `Foo` but those objects. Recorded in KNOWN_LIMITATIONS.md.
+ * it the scan cannot name. A write through an object of unknown origin lands
+ * on the class slot, and that could be any object of the class. So a read on
+ * an allocation site sees its own slot and the slots of its class and its
+ * ancestors, and a tainted `Foo::$value` taints every read of `$value` on any
+ * `Foo`. A write on an allocation site reaches only reads that can be on that
+ * object. Recorded in KNOWN_LIMITATIONS.md.
  *
  * Each entry carries the trace of the write that tainted it, so a finding whose
  * flow enters through a property read still shows where the value came from. A

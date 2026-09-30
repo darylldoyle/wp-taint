@@ -180,6 +180,7 @@ final class FunctionAnalysis
      */
     private array $assumed = [];
 
+    /** Whether this run records a {@see ReceiverView}, once asked: see {@see recordsReceiver()}. */
     private ?bool $recordsReceiver = null;
 
     private TaintState $state;
@@ -8516,10 +8517,6 @@ final class FunctionAnalysis
     }
 
     /**
-     * Record that the seeded parameter reached a sink, for the caller's
-     * benefit. Only meaningful while summarising.
-     */
-    /**
      * The class a summary records a write to `$target` under: the class the
      * write landed on, or {@see FunctionSummary::THIS} for `$this->name` in a
      * method, which the call site resolves to the object the call runs on.
@@ -8552,6 +8549,9 @@ final class FunctionAnalysis
     }
 
     /**
+     * Record that the seeded parameter reached a sink, for the caller's
+     * benefit. Only meaningful while summarising.
+     *
      * @param int $parts the parts of the seeded parameter that carry the
      *                   sink's kind here: see {@see TaintSet::partsOf()}
      */

@@ -40,34 +40,25 @@ final class KeyParameters
     private const MAX_HOPS = 16;
 
     /**
+     * The key parameters, and the ones among them that are part of a glue,
+     * which a call that leaves one out binds to its default. See
+     * {@see FunctionSummary::$glueParameters}. One walk of the body finds
+     * both.
+     *
      * @param array<string, int> $glues the functions that join with a glue, and its position: see
      *                                  {@see \Enshrined\WpTaint\Registry\Registry::glueArguments()}
      *
-     * @return list<int> parameter indexes, ascending
+     * @return array{list<int>, list<int>} parameter indexes, ascending
      */
     public static function of(Func $func, array $glues = []): array
     {
         [$keys, $inGlues] = self::found($func, $glues);
         $list = array_keys($keys + $inGlues);
         sort($list);
+        $glued = array_keys($inGlues);
+        sort($glued);
 
-        return $list;
-    }
-
-    /**
-     * The parameters that are part of a glue, which a call that leaves one
-     * out binds to its default. See {@see FunctionSummary::$glueParameters}.
-     *
-     * @param array<string, int> $glues
-     *
-     * @return list<int> parameter indexes, ascending
-     */
-    public static function inGlues(Func $func, array $glues): array
-    {
-        $list = array_keys(self::found($func, $glues)[1]);
-        sort($list);
-
-        return $list;
+        return [$list, $glued];
     }
 
     /**
