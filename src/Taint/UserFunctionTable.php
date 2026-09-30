@@ -39,6 +39,9 @@ final class UserFunctionTable
     /** @var array<string, array{list<string>, array<string, true>}> receiver key => see classSlotsOf() */
     private array $classSlots = [];
 
+    /** @var array<string, bool> class and method => see runsOnSeveralClasses() */
+    private array $several = [];
+
     /** @var array<string, array<string, true>> class => see relatedClasses() */
     private array $related = [];
 
@@ -228,6 +231,7 @@ final class UserFunctionTable
         $this->callGraph = $callGraph;
         $this->receivers = [];
         $this->classSlots = [];
+        $this->several = [];
     }
 
     /**
@@ -346,6 +350,32 @@ final class UserFunctionTable
         $below[strtolower($class)] = true;
 
         return $this->classSlots[$owner] = [$slots, $below];
+    }
+
+    /**
+     * Whether a method runs on objects of more than one class: the classes
+     * that use a trait, or a class and a descendant that inherits the method
+     * or calls it through `parent::`. A trait has no objects of its own, so
+     * a trait method that one class uses runs on that class only.
+     */
+    public function runsOnSeveralClasses(string $class, string $method): bool
+    {
+        $key = $class . '::' . $method;
+
+        if (isset($this->several[$key])) {
+            return $this->several[$key];
+        }
+
+        [, $below] = $this->classSlotsOf($this->receiverOf($class, $method));
+        $classes = 0;
+
+        foreach (array_keys($below) as $each) {
+            if (! $this->hierarchy->isTrait((string) $each) && ++$classes > 1) {
+                return $this->several[$key] = true;
+            }
+        }
+
+        return $this->several[$key] = false;
     }
 
     /**

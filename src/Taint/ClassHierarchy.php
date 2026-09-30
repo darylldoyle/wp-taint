@@ -54,6 +54,9 @@ final class ClassHierarchy
     /** @var array<string, list<string>> class or trait => traits it uses, in declaration order */
     private array $traits = [];
 
+    /** @var array<string, true> the traits the scan declares */
+    private array $declaredTraits = [];
+
     /**
      * Classes already recorded, so a duplicate declaration cannot append its
      * traits to the first one's list. First wins, deterministically, exactly
@@ -102,6 +105,10 @@ final class ClassHierarchy
 
             $this->seen[$name] = true;
 
+            if ($node instanceof Node\Stmt\Trait_) {
+                $this->declaredTraits[$name] = true;
+            }
+
             if ($node instanceof Node\Stmt\Class_ && $node->extends instanceof Node\Name) {
                 $this->parents[$name] = self::normalize($node->extends->toString());
             }
@@ -121,6 +128,15 @@ final class ClassHierarchy
     public function parentOf(string $class): ?string
     {
         return $this->parents[self::normalize($class)] ?? null;
+    }
+
+    /**
+     * Whether the scan declares this name as a trait, which has no objects
+     * of its own.
+     */
+    public function isTrait(string $class): bool
+    {
+        return isset($this->declaredTraits[self::normalize($class)]);
     }
 
     /**
