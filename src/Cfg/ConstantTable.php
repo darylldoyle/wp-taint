@@ -59,6 +59,9 @@ final class ConstantTable
     /** @var array<string, array<string, array<string, true>>> property => owner class => allocation sites */
     private array $allocations = [];
 
+    /** @var array<string, array{string, string}> allocation site => the class and method its `new` is in */
+    private array $makers = [];
+
     /** @var array<string, array<string, true>> property or '*' => owner class or '*' => true */
     private array $notAllocated = [];
 
@@ -168,14 +171,81 @@ final class ConstantTable
     }
 
     /**
+     * The key of the objects one `new` line makes while its method runs on
+     * an object of `$holder`: see {@see holderOf()}.
+     */
+    public static function siteFor(string $site, string $holder): string
+    {
+        return $site . '^' . strtolower(ltrim($holder, '\\'));
+    }
+
+    /**
+     * The class an allocation site's key is for, or null for a key that
+     * names none and for a class key.
+     *
+     * A `new` in a method that runs on objects of more than one class makes
+     * a different object for each class. Its key then ends in the class the
+     * run is on. The class stands for its descendants too, as a class key
+     * does.
+     *
+     * ```php
+     * trait Stats_Queries {
+     *     protected function init() { $this->query = new Sql_Query(); }
+     * }
+     * class Orders_Stats { use Stats_Queries; }
+     * class Taxes_Stats { use Stats_Queries; }
+     * ```
+     *
+     * `init()` makes one query for an Orders_Stats object and another for a
+     * Taxes_Stats object. Their keys end `^orders_stats` and `^taxes_stats`.
+     */
+    public static function holderOf(string $key): ?string
+    {
+        // A class name holds no `:`, so a class follows the line number.
+        $line = strrpos($key, ':');
+        $at = $line === false ? false : strpos($key, '^', $line);
+
+        return $at === false || ! str_contains($key, '@') ? null : substr($key, $at + 1);
+    }
+
+    /**
+     * An allocation site's key without the class {@see holderOf()} names.
+     */
+    public static function unqualifiedSite(string $key): string
+    {
+        $holder = self::holderOf($key);
+
+        return $holder === null ? $key : substr($key, 0, -strlen($holder) - 1);
+    }
+
+    /**
      * `$this->subquery = new SqlQuery( ... )`, seen in a method of `$owner`.
      *
      * The allocation site is the object, for a property only ever given a new
-     * object of a named class: see {@see allocationsOf()}.
+     * object of a named class: see {@see allocationsOf()}. `$method` is the
+     * instance method the `new` is in, and null for a closure or a static
+     * method: see {@see makerOf()}.
      */
-    public function recordPropertyAllocation(string $owner, string $name, string $site): void
+    public function recordPropertyAllocation(string $owner, string $name, string $site, ?string $method = null): void
     {
         $this->allocations[$name][strtolower($owner)][$site] = true;
+
+        if ($method !== null) {
+            $this->makers[$site] ??= [$owner, $method];
+        }
+    }
+
+    /**
+     * The class and instance method an allocation site's `new` is in, when a
+     * property is given its object there. Whether the method runs on objects
+     * of more than one class decides whether the site's key names the class
+     * the run is on: see {@see holderOf()}.
+     *
+     * @return array{string, string}|null
+     */
+    public function makerOf(string $site): ?array
+    {
+        return $this->makers[$site] ?? null;
     }
 
     /**

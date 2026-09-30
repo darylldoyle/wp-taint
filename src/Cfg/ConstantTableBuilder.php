@@ -7,6 +7,7 @@ namespace Enshrined\WpTaint\Cfg;
 use Enshrined\WpTaint\Taint\BlockOrder;
 use Enshrined\WpTaint\Taint\FunctionContext;
 use Enshrined\WpTaint\Taint\OperandHelper;
+use Enshrined\WpTaint\Taint\ThisReceiver;
 use Enshrined\WpTaint\Taint\ValueResolver;
 use PHPCfg\Op;
 use PHPCfg\Operand;
@@ -368,7 +369,10 @@ final class ConstantTableBuilder
                 $site = $context === null ? null : self::allocationAssigned($op, $context);
 
                 if ($site !== null && $name !== null && $context?->className !== null) {
-                    $table->recordPropertyAllocation($context->className, $name, $site);
+                    $method = ThisReceiver::inInstanceMethod($context) && ! $context->isClosure()
+                        ? $context->func->name
+                        : null;
+                    $table->recordPropertyAllocation($context->className, $name, $site, $method);
                 } else {
                     $onThis = OperandHelper::variableName($op->var) === 'this';
 

@@ -693,23 +693,22 @@ it('reads no property through get_object_vars(), a cast, a loop or a closure', f
 // A new allocation site's slot is one more slot a read through the class
 // sees, so the read runs again when the first write lands there.
 
-it('lets a read through the class see an allocation site written later', function (): void {
+/**
+ * The findings of a scan of these files, with every round analysing every
+ * function, and with each round analysing only what moved.
+ *
+ * @param array<string, string> $files name => code
+ *
+ * @return array{list<string>, list<string>}
+ */
+function perObjectRounds(array $files): array
+{
     $directory = sys_get_temp_dir() . '/wp-taint-per-object-' . bin2hex(random_bytes(6));
     mkdir($directory, 0o755, true);
-    file_put_contents($directory . '/a.php', "<?php\n" . perObjectQuery() . "\n" . <<<'PHP'
-        function acme_render( Acme_Query $query ) {
-            global $wpdb;
-            return $wpdb->get_results( $query->statement() );
-        }
-        PHP);
-    file_put_contents($directory . '/b.php', <<<'PHP'
-        <?php
-        function acme_limited() {
-            $query = new Acme_Query();
-            $query->add( 'limit', 'LIMIT ' . $_GET['n'] );
-            return $query;
-        }
-        PHP);
+
+    foreach ($files as $name => $code) {
+        file_put_contents($directory . '/' . $name, $code);
+    }
 
     $scan = static fn (bool $incremental): array => findingSignatures((new Scanner(
         testRegistry(),
@@ -718,14 +717,59 @@ it('lets a read through the class see an allocation site written later', functio
     ))->scan((new FileFinder())->find([$directory])));
 
     try {
-        $full = $scan(false);
-        $incremental = $scan(true);
+        return [$scan(false), $scan(true)];
     } finally {
         array_map('unlink', glob($directory . '/*.php') ?: []);
         rmdir($directory);
     }
+}
+
+it('lets a read through the class see an allocation site written later', function (): void {
+    [$full, $incremental] = perObjectRounds([
+        'a.php' => "<?php\n" . perObjectQuery() . "\n" . <<<'PHP'
+            function acme_render( Acme_Query $query ) {
+                global $wpdb;
+                return $wpdb->get_results( $query->statement() );
+            }
+            PHP,
+        'b.php' => <<<'PHP'
+            <?php
+            function acme_limited() {
+                $query = new Acme_Query();
+                $query->add( 'limit', 'LIMIT ' . $_GET['n'] );
+                return $query;
+            }
+            PHP,
+    ]);
 
     expect($incremental)->toBe($full)->toBe(['wp.sqli.wpdb-query@14']);
+});
+
+it('lets a read for a class see the object made for a descendant written later', function (): void {
+    [$full, $incremental] = perObjectRounds([
+        'a.php' => "<?php\n" . perObjectQuery() . "\n" . <<<'PHP'
+            class Acme_Report {
+                protected $query;
+                public function __construct() {
+                    $this->query = new Acme_Query();
+                }
+                public function run() {
+                    global $wpdb;
+                    return $wpdb->get_results( $this->query->statement() );
+                }
+            }
+            PHP,
+        'b.php' => <<<'PHP'
+            <?php
+            class Acme_Stats_Report extends Acme_Report {
+                public function limit() {
+                    $this->query->add( 'limit', 'LIMIT ' . $_GET['n'] );
+                }
+            }
+            PHP,
+    ]);
+
+    expect($incremental)->toBe($full)->toBe(['wp.sqli.wpdb-query@19']);
 });
 
 // Literal variants and receiver variants have a cap each. Sixteen literal
@@ -792,3 +836,183 @@ it('keeps each object\'s write apart past the literal cap', function (): void {
         }
         PHP))->toBe(['wp.sqli.wpdb-query@74']);
 });
+
+// A `new` in a method that runs on more than one class makes a different
+// object for each. WooCommerce's six report Stats stores make their queries
+// on one line of a trait, and a WHERE clause the orders store wrote reached
+// the other five stores' queries.
+
+it('keeps the object a trait method makes for one class off another class\'s', function (): void {
+    expect(perObjectFindings(perObjectQuery() . "\n" . <<<'PHP'
+        trait Acme_Queries {
+            protected $query;
+            protected function init_query() {
+                $this->query = new Acme_Query();
+            }
+        }
+        class Acme_Orders {
+            use Acme_Queries;
+            public function run() {
+                global $wpdb;
+                $this->init_query();
+                $this->query->add( 'limit', 'LIMIT ' . $_GET['n'] );
+                return $wpdb->get_results( $this->query->statement() );
+            }
+        }
+        class Acme_Taxes {
+            use Acme_Queries;
+            public function run() {
+                global $wpdb;
+                $this->init_query();
+                $this->query->add( 'select', 'id' );
+                return $wpdb->get_results( $this->query->statement() );
+            }
+        }
+        PHP))->toBe(['wp.sqli.wpdb-query@24']);
+});
+
+it('keeps the object a base class method makes for one subclass off another subclass\'s', function (): void {
+    expect(perObjectFindings(perObjectQuery() . "\n" . <<<'PHP'
+        abstract class Acme_Report {
+            protected $query;
+            protected function init_query() {
+                $this->query = new Acme_Query();
+            }
+        }
+        class Acme_Orders extends Acme_Report {
+            public function run() {
+                global $wpdb;
+                $this->init_query();
+                $this->query->add( 'limit', 'LIMIT ' . $_GET['n'] );
+                return $wpdb->get_results( $this->query->statement() );
+            }
+        }
+        class Acme_Taxes extends Acme_Report {
+            public function run() {
+                global $wpdb;
+                $this->init_query();
+                $this->query->add( 'select', 'id' );
+                return $wpdb->get_results( $this->query->statement() );
+            }
+        }
+        PHP))->toBe(['wp.sqli.wpdb-query@23']);
+});
+
+// A class stands for its objects and its descendants' objects. So a write
+// to the object made for a class reaches the object made for each
+// descendant, and a read of the one made for a class sees each descendant's.
+
+it('lets a subclass read the object a base class method wrote', function (): void {
+    expect(perObjectFindings(perObjectQuery() . "\n" . <<<'PHP'
+        class Acme_Report {
+            protected $query;
+            public function __construct() {
+                $this->query = new Acme_Query();
+            }
+            public function limit() {
+                $this->query->add( 'limit', 'LIMIT ' . $_GET['n'] );
+            }
+        }
+        class Acme_Stats_Report extends Acme_Report {
+            public function run() {
+                global $wpdb;
+                return $wpdb->get_results( $this->query->statement() );
+            }
+        }
+        PHP))->toBe(['wp.sqli.wpdb-query@24']);
+});
+
+it('lets a base class method read the object a subclass wrote', function (): void {
+    expect(perObjectFindings(perObjectQuery() . "\n" . <<<'PHP'
+        class Acme_Report {
+            protected $query;
+            public function __construct() {
+                $this->query = new Acme_Query();
+            }
+            public function run() {
+                global $wpdb;
+                return $wpdb->get_results( $this->query->statement() );
+            }
+        }
+        class Acme_Stats_Report extends Acme_Report {
+            public function limit() {
+                $this->query->add( 'limit', 'LIMIT ' . $_GET['n'] );
+            }
+        }
+        PHP))->toBe(['wp.sqli.wpdb-query@19']);
+});
+
+it('lets a base class method read the object a trait of a subclass wrote', function (): void {
+    // The trait is not an ancestor or a descendant of the base class. The
+    // two share the subclasses' objects.
+    expect(perObjectFindings(perObjectQuery() . "\n" . <<<'PHP'
+        abstract class Acme_Report {
+            protected $query;
+            public function run() {
+                global $wpdb;
+                return $wpdb->get_results( $this->query->statement() );
+            }
+        }
+        trait Acme_Limits {
+            public function init_query() {
+                $this->query = new Acme_Query();
+            }
+            public function limit() {
+                $this->query->add( 'limit', 'LIMIT ' . $_GET['n'] );
+            }
+        }
+        class Acme_Stats_Report extends Acme_Report {
+            use Acme_Limits;
+        }
+        class Acme_Other_Report extends Acme_Report {
+            use Acme_Limits;
+        }
+        PHP))->toBe(['wp.sqli.wpdb-query@16']);
+});
+
+it('keeps one object for a method that runs on one class only', function (string $maker, int $line): void {
+    expect(perObjectFindings(perObjectQuery() . "\n" . <<<PHP
+        class Acme_Reader {
+            private \$query;
+            public function __construct() {
+                \$this->query = new Acme_Query();
+            }
+            public function run() {
+                global \$wpdb;
+                \$this->query->add( 'select', 'id' );
+                return \$wpdb->get_results( \$this->query->statement() );
+            }
+        }
+        {$maker}
+        PHP))->toBe(['wp.sqli.wpdb-query@' . $line]);
+})->with([
+    'a class' => [<<<'PHP'
+        class Acme_Orders {
+            private $query;
+            public function __construct() {
+                $this->query = new Acme_Query();
+            }
+            public function run() {
+                global $wpdb;
+                $this->query->add( 'limit', 'LIMIT ' . $_GET['n'] );
+                return $wpdb->get_results( $this->query->statement() );
+            }
+        }
+        PHP, 31],
+    'a trait one class uses' => [<<<'PHP'
+        trait Acme_Queries {
+            private $query;
+            public function __construct() {
+                $this->query = new Acme_Query();
+            }
+        }
+        class Acme_Orders {
+            use Acme_Queries;
+            public function run() {
+                global $wpdb;
+                $this->query->add( 'limit', 'LIMIT ' . $_GET['n'] );
+                return $wpdb->get_results( $this->query->statement() );
+            }
+        }
+        PHP, 34],
+]);

@@ -3329,7 +3329,9 @@ final class FunctionAnalysis
      *
      * An allocation site's objects are of one class: the site's own slot,
      * and the slots of that class and its ancestors, which writes through a
-     * receiver typed as one of them could have reached. A class stands for
+     * receiver typed as one of them could have reached. A site whose key
+     * names the class the run is on sees more of the line's keys: see
+     * {@see heldSites()}. A class stands for
      * any object of it or of a descendant: those classes' slots, its
      * ancestors', and every allocation site of one of them.
      *
@@ -3340,7 +3342,10 @@ final class FunctionAnalysis
         $allocated = ConstantTable::allocatedClass($owner);
 
         if ($allocated !== null) {
-            return [$owner, ...$this->functions->classHierarchy()->lookupOrder($allocated)];
+            $holder = ConstantTable::holderOf($owner);
+            $sites = $holder === null ? [$owner] : $this->heldSites(strtolower($owner), $holder, $property);
+
+            return [...$sites, ...$this->functions->classHierarchy()->lookupOrder($allocated)];
         }
 
         [$slots, $below] = $this->functions->classSlotsOf($owner);
@@ -3355,6 +3360,44 @@ final class FunctionAnalysis
         }
 
         return $slots;
+    }
+
+    /**
+     * The keys of one `new` line that a read for an object of `$holder`
+     * sees. The line has a key for each class its method runs on. The read
+     * sees the key for `$holder`, and the key for each class that can share
+     * an object with `$holder`. Those are the classes and traits `$holder`
+     * inherits from, its descendants, and theirs.
+     *
+     * ```php
+     * abstract class Report { function run() { $this->query->get(); } }
+     * trait Limits { function init() { $this->query = new Query(); } }
+     * class Stats_Report extends Report { use Limits; }
+     * ```
+     *
+     * The query `init()` makes for Limits is one that `run()` reads for
+     * Report, since a Stats_Report object is both.
+     *
+     * @return list<string>
+     */
+    private function heldSites(string $owner, string $holder, string $property): array
+    {
+        $site = ConstantTable::unqualifiedSite($owner);
+        $related = $this->functions->relatedClasses($holder);
+        $sites = [$owner];
+
+        // Read on every call, as for a class key in propertySlots().
+        foreach ($this->properties->allocatedOwners($property) as $each) {
+            if (
+                $each !== $owner
+                && isset($related[(string) ConstantTable::holderOf($each)])
+                && ConstantTable::unqualifiedSite($each) === $site
+            ) {
+                $sites[] = $each;
+            }
+        }
+
+        return $sites;
     }
 
     /**
@@ -7181,11 +7224,33 @@ final class FunctionAnalysis
             return null;
         }
 
-        return ConstantTable::allocationSite(
+        $site = ConstantTable::allocationSite(
             $class,
             $this->context->file->relativePath,
             $new->getLine(),
         );
+        $maker = $this->isInstanceContext() && ! $this->context->isClosure()
+            ? [(string) $this->context->className, $this->context->func->name]
+            : null;
+
+        return $this->siteOn($site, $maker, $this->receiverClass());
+    }
+
+    /**
+     * An allocation site's key in a run on an object of `$holder`. The
+     * method the `new` is in may run on objects of more than one class.
+     * Each class then gets its own objects from the line, so the key names
+     * the class: see {@see ConstantTable::holderOf()}.
+     *
+     * @param array{string, string}|null $maker the class and instance method the `new` is in
+     */
+    private function siteOn(string $site, ?array $maker, ?string $holder): string
+    {
+        if ($maker === null || $holder === null || ! $this->functions->runsOnSeveralClasses(...$maker)) {
+            return $site;
+        }
+
+        return ConstantTable::siteFor($site, $holder);
     }
 
     /**
@@ -7213,12 +7278,16 @@ final class FunctionAnalysis
 
     /**
      * The one allocation site `$this->name` holds on an object of `$class`:
-     * see {@see ConstantTable::allocationFor()}.
+     * see {@see ConstantTable::allocationFor()}. Its key names `$class`
+     * when {@see siteOn()} says so, as the `new` there named the class the
+     * run was on.
      */
     private function allocationOn(string $class, string $name): ?string
     {
-        return $this->resolver->values()->constants()
-            ?->allocationFor($class, $name, $this->functions->relatedClasses($class));
+        $table = $this->resolver->values()->constants();
+        $site = $table?->allocationFor($class, $name, $this->functions->relatedClasses($class));
+
+        return $table === null || $site === null ? null : $this->siteOn($site, $table->makerOf($site), $class);
     }
 
     /**
