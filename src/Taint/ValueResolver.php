@@ -90,6 +90,12 @@ final class ValueResolver
     private array $bound = [];
 
     /**
+     * Whether a call folds to every string its function can return, not only
+     * to the one it always returns: see {@see choiceStrings()}.
+     */
+    private bool $choices = false;
+
+    /**
      * The constants this resolver folds names through, for the property
      * allocations recorded beside them.
      */
@@ -169,6 +175,28 @@ final class ValueResolver
             return $this->resolve($operand, 0, false);
         } finally {
             [$this->loops, $this->bound] = $previous;
+        }
+    }
+
+    /**
+     * Every string an operand can hold, a call's included when its function
+     * returns one of a few known strings. For a glue check only: a glue in
+     * `' AND '` or `' OR '` leaves every quote as it found it, and knowing
+     * that is all the answer is used for.
+     *
+     * @param array<int, string> $bound see {@see keyStrings()}
+     *
+     * @return list<string> empty when any of its values cannot be pinned down
+     */
+    public function choiceStrings(Operand $operand, array $bound = []): array
+    {
+        $previous = $this->choices;
+        $this->choices = true;
+
+        try {
+            return $this->keyStrings($operand, $bound);
+        } finally {
+            $this->choices = $previous;
         }
     }
 
@@ -292,6 +320,12 @@ final class ValueResolver
 
             if ($folded !== []) {
                 return $folded;
+            }
+
+            $choices = $this->choices && $name !== null ? $this->returns?->choicesFor($name) : null;
+
+            if ($choices !== null) {
+                return $choices;
             }
         }
 
@@ -507,7 +541,17 @@ final class ValueResolver
 
         $value = $this->returns->forUniqueMethod($method);
 
-        return $value === null ? [] : [$value];
+        if ($value !== null) {
+            return [$value];
+        }
+
+        if (! $this->choices) {
+            return [];
+        }
+
+        return ($qualified === null ? null : $this->returns->choicesFor($qualified . '::' . $method))
+            ?? $this->returns->choicesForUniqueMethod($method)
+            ?? [];
     }
 
     /**

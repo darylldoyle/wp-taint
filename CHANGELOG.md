@@ -213,6 +213,11 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   literal default, and a call that passes one literal binds that, so the
   glue is known text. A glue that can hold a quote still turns the values
   back into SQL.
+- A glue that can be one of a few known strings keeps the escaping when every
+  one of them leaves the quotes as it found them. WooCommerce's report
+  stores join their clauses with `implode( " {$operator} ", ... )`, where
+  `get_match_operator()` returns `'AND'` or `'OR'`, and the escaped order
+  statuses in those clauses counted as raw SQL.
 - A write into an element of a property went nowhere, as a write two keys
   deep into a local array did before. `$this->opts['name'] = $_GET['n']` in
   one method left `echo $this->opts['name']` clean in another. It now reaches

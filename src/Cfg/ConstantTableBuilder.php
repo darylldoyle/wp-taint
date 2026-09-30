@@ -120,6 +120,12 @@ final class ConstantTableBuilder
             return;
         }
 
+        $choices = self::choicesOf($resolver, $context);
+
+        if ($choices !== null && count($choices) > 1) {
+            $returns->recordChoices($context->key, $choices);
+        }
+
         $values = [];
         $templates = [];
 
@@ -177,6 +183,40 @@ final class ConstantTableBuilder
         if (count($unique) === 1) {
             $returns->record($context->key, reset($unique));
         }
+    }
+
+    /**
+     * Every string a function can return, when each of its returns folds to
+     * a known few: `$operator = 'AND'; ... $operator = 'OR'; return
+     * $operator;`. Null when any return may hand back something else, a bare
+     * `return;` included.
+     *
+     * @return list<string>|null
+     */
+    private static function choicesOf(ValueResolver $resolver, FunctionContext $context): ?array
+    {
+        $choices = [];
+
+        foreach (BlockOrder::of($context->func->cfg) as $block) {
+            foreach ($block->children as $op) {
+                if (! $op instanceof Op\Terminal\Return_) {
+                    continue;
+                }
+
+                $strings = $op->expr === null ? [] : $resolver->keyStrings($op->expr);
+
+                if ($strings === []) {
+                    return null;
+                }
+
+                $choices = [...$choices, ...$strings];
+            }
+        }
+
+        $choices = array_values(array_unique($choices));
+        sort($choices);
+
+        return $choices === [] ? null : $choices;
     }
 
     /**

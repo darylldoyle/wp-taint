@@ -6239,14 +6239,29 @@ final class FunctionAnalysis
      *
      * Only one the catalogue says cannot undo the escaping, called without the
      * argument that could, and for `implode()` a glue that leaves the quotes as
-     * it found them: `','` or `"', '"`, not `"'"`.
+     * it found them: `','` or `"', '"`, not `"'"`. A glue that can be one of a
+     * few known strings counts when every one of them does.
      */
     private function keepsResiduals(CallTarget $call, Propagator $propagator): bool
     {
         if ($propagator->glueArgument !== null) {
-            $glue = $call->argumentCount() === 1 ? '' : $this->knownText($call->argument($propagator->glueArgument));
+            if ($call->argumentCount() === 1) {
+                return true;
+            }
 
-            return $glue !== null && self::keepsQuotes($glue);
+            $argument = $call->argument($propagator->glueArgument);
+            $glue = $this->knownText($argument);
+
+            if ($glue !== null) {
+                return self::keepsQuotes($glue);
+            }
+
+            // A glue of a few known strings, `" $operator "` where
+            // get_match_operator() returns 'AND' or 'OR', keeps the quotes
+            // when every one of them does.
+            $glues = $argument === null ? [] : $this->resolver->values()->choiceStrings($argument, $this->boundOperands());
+
+            return $glues !== [] && array_filter($glues, static fn (string $each): bool => ! self::keepsQuotes($each)) === [];
         }
 
         if (! $propagator->keepsResiduals) {
