@@ -124,3 +124,32 @@ it('keeps an element under its key through a function that keeps keys', function
         }
         PHP)))->toBe(['wp.xss.unescaped-output@6']);
 });
+
+// Every `->query_vars` on an object of unknown class is one slot. A read of
+// one key named the first write under any key as where the value came from,
+// though only the write under its own key reached it.
+
+it('traces a property element to the write under its own key', function (): void {
+    expect(elementTraceFindings(<<<'PHP'
+        function acme_search( $wp ) {
+            $wp->query_vars['post__in'] = explode( ',', $_GET['s'] );
+        }
+        function acme_serve() {
+            global $wp;
+            $wp->query_vars['file'] = $_GET['file'];
+            echo $wp->query_vars['file'];
+        }
+        PHP))->toBe([['rule' => 'wp.xss.unescaped-output', 'line' => 8, 'first' => 'source@7']]);
+});
+
+it('keeps a write under one key of a property off a read of another', function (): void {
+    expect(elementTraceFindings(<<<'PHP'
+        function acme_search( $wp ) {
+            $wp->query_vars['post__in'] = explode( ',', $_GET['s'] );
+        }
+        function acme_serve() {
+            global $wp;
+            echo $wp->query_vars['file'];
+        }
+        PHP))->toBe([]);
+});

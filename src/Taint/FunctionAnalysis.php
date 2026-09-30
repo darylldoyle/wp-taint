@@ -3254,8 +3254,48 @@ final class FunctionAnalysis
         // Elements only ever grow, so a value this read already put on its
         // result adds nothing when it comes back unchanged.
         if (($this->propertyReads[$id] ?? null) !== $stored) {
+            $changed = $this->readElements($op, $owner, $property, $stored, $from) || $changed;
             $changed = $this->state->addShape($op->result, $stored->structure(), $provenance) || $changed;
             $this->propertyReads[$id] = $stored;
+        }
+
+        return $changed;
+    }
+
+    /**
+     * Put each element a write under its literal key tainted on the fetch,
+     * with that write's trace ahead of the read. The rest of the value then
+     * takes the trace of the property's own write, which could be under
+     * another key.
+     *
+     * @param list<Operand> $from
+     */
+    private function readElements(
+        Op\Expr\PropertyFetch|Op\Expr\StaticPropertyFetch $op,
+        ?string $owner,
+        string $property,
+        Shape $stored,
+        array $from,
+    ): bool {
+        $changed = false;
+
+        foreach ($stored->elements() as $key => $element) {
+            $origin = $element->flatten()->isEmpty() ? [] : $this->storedElementOrigin($owner, $property, $key);
+
+            if ($origin === []) {
+                continue;
+            }
+
+            $changed = $this->state->addShape($op->result, Shape::element($key, $element), new Provenance(
+                TraceVerb::Propagate,
+                $op,
+                sprintf(
+                    $op instanceof Op\Expr\PropertyFetch ? 'Read from property $%s.' : 'Read from static property $%s.',
+                    $property,
+                ),
+                $from,
+                prefix: $origin,
+            )) || $changed;
         }
 
         return $changed;
@@ -3338,9 +3378,49 @@ final class FunctionAnalysis
      * any object of it or of a descendant: those classes' slots, its
      * ancestors', and every allocation site of one of them.
      *
-     * @return list<string>
+     * The object an `(object)` cast makes also sees the slot of objects of
+     * unknown class, as it did when it was one of them. Code hands such an
+     * object to functions whose parameter names no class, and a write there
+     * lands on that slot. So does a stdClass object the scan knows only by
+     * its class, which can be one a cast made.
+     *
+     * @return list<string|null>
      */
     private function propertySlots(string $owner, string $property): array
+    {
+        $slots = $this->classKnownSlots($owner, $property);
+
+        if ($this->readsUnknownSlot($owner)) {
+            $slots[] = null;
+        }
+
+        return $slots;
+    }
+
+    /**
+     * Whether a read on `$owner` sees the slot of objects of unknown class:
+     * see {@see propertySlots()}.
+     */
+    private function readsUnknownSlot(string $owner): bool
+    {
+        if (strcasecmp(self::classOfReceiver($owner), 'stdClass') !== 0) {
+            return false;
+        }
+
+        if (ConstantTable::allocatedClass($owner) === null) {
+            return true;
+        }
+
+        return $this->resolver->values()->constants()?->isCastSite(ConstantTable::unqualifiedSite($owner)) ?? false;
+    }
+
+    /**
+     * The slots of {@see propertySlots()} that belong to a class the scan
+     * knows.
+     *
+     * @return list<string>
+     */
+    private function classKnownSlots(string $owner, string $property): array
     {
         $allocated = ConstantTable::allocatedClass($owner);
 
@@ -3389,7 +3469,7 @@ final class FunctionAnalysis
         $related = $this->functions->relatedClasses($holder);
         $sites = [$owner];
 
-        // Read on every call, as for a class key in propertySlots().
+        // Read on every call, as for a class key in classKnownSlots().
         foreach ($this->properties->allocatedOwners($property) as $each) {
             if (
                 $each !== $owner
@@ -3414,6 +3494,25 @@ final class FunctionAnalysis
         foreach ($owner === null ? [null] : $this->propertySlots($owner, $property) as $candidate) {
             if ($this->properties->isTracked($candidate, $property)) {
                 return $this->properties->originOf($candidate, $property);
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * The recorded origin of one literal key of a property, from the first
+     * slot that has one: see {@see PropertyTaintMap::elementOriginOf()}.
+     *
+     * @return list<TraceStep>
+     */
+    private function storedElementOrigin(?string $owner, string $property, int|string $key): array
+    {
+        foreach ($owner === null ? [null] : $this->propertySlots($owner, $property) as $candidate) {
+            $origin = $this->properties->elementOriginOf($candidate, $property, $key);
+
+            if ($origin !== []) {
+                return $origin;
             }
         }
 
@@ -7318,9 +7417,34 @@ final class FunctionAnalysis
         return match (true) {
             $op instanceof Op\Expr\Assign => $this->allocationKeyOf($op->expr, $hops + 1),
             $op instanceof Op\Expr\New_ => $this->allocationSiteOf($op),
+            $op instanceof Op\Expr\Cast\Object_ => $this->castSiteOf($op, $hops),
             $op instanceof Op\Expr\PropertyFetch => $this->propertyAllocation($op),
+            $op instanceof Op\Expr\FuncCall,
+            $op instanceof Op\Expr\NsFuncCall,
+            $op instanceof Op\Expr\StaticCall => $this->returnedSiteOf($op),
             default => null,
         };
+    }
+
+    /**
+     * The allocation site of the object a call returns, when the callee
+     * hands back the object one line in it makes: see
+     * {@see ConstantTable::recordReturnedSite()}. Only for a function or a
+     * static method. An instance method's `new` can make a different object
+     * for each class it runs on: see {@see siteOn()}.
+     */
+    private function returnedSiteOf(Op\Expr $call): ?string
+    {
+        $table = $this->resolver->values()->constants();
+        $target = $table === null ? null : $this->resolver->resolve($call, $this->context, $this->types);
+        $key = $target === null || $target->dynamic ? null : $target->userFunctionKey;
+        $callee = $key === null ? null : $this->functions->get($key);
+
+        if ($table === null || $key === null || ($callee?->className !== null && ! $callee->isStatic)) {
+            return null;
+        }
+
+        return $table->returnedSite($key);
     }
 
     private function allocationSiteOf(Op\Expr\New_ $new): ?string
@@ -7331,10 +7455,39 @@ final class FunctionAnalysis
             return null;
         }
 
+        return $this->siteOf($class, $new);
+    }
+
+    /**
+     * The object an `(object)` cast gives: a new stdClass object, made at
+     * the cast's line, as `new stdClass()` there would make.
+     *
+     * A cast of an object hands back that object. So a value the scan can
+     * name keeps its own key, and a value of a known class is left to
+     * {@see ReceiverResolver::propertyOwnerOf()}. The scan takes any other
+     * value to be an array or a scalar. That is what code casts in practice:
+     * `(object) wp_parse_args( $args, $defaults )`.
+     */
+    private function castSiteOf(Op\Expr\Cast\Object_ $cast, int $hops): ?string
+    {
+        $named = $this->allocationKeyOf($cast->expr, $hops + 1);
+
+        if ($named !== null || $this->receivers->propertyOwnerOf($cast->expr, $this->context, $this->types) !== null) {
+            return $named;
+        }
+
+        return $this->siteOf('stdClass', $cast);
+    }
+
+    /**
+     * The key of the objects that `$op` makes, an object of `$class`.
+     */
+    private function siteOf(string $class, Op\Expr $op): string
+    {
         $site = ConstantTable::allocationSite(
             $class,
             $this->context->file->relativePath,
-            $new->getLine(),
+            $op->getLine(),
         );
         $maker = $this->isInstanceContext() && ! $this->context->isClosure()
             ? [(string) $this->context->className, $this->context->func->name]

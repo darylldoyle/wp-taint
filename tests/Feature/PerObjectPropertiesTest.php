@@ -73,6 +73,41 @@ it('keeps a write to one new object away from another', function (): void {
         PHP))->toBe(['wp.sqli.wpdb-query@19']);
 });
 
+// Redirection makes an IP object from a request header on one line, and one
+// from each saved proxy address on another. With one slot for the class, the
+// header reached the saved options and every redirect built from them.
+
+it('keeps what two new lines hand one constructor apart', function (): void {
+    expect(findingSignatures(scanCode(<<<'PHP'
+        <?php
+        class Acme_IP {
+            private $ip = '';
+            public function __construct( $ip = '' ) {
+                $this->ip = $ip;
+            }
+            public function get() {
+                return $this->ip;
+            }
+        }
+        function acme_client_ip( $header ) {
+            $ip = new Acme_IP( $_SERVER[ $header ] );
+            return $ip->get();
+        }
+        function acme_saved_ips( $ips ) {
+            return array_map( function ( $each ) {
+                $ip = new Acme_IP( sanitize_text_field( $each ) );
+                return $ip->get();
+            }, $ips );
+        }
+        function acme_redirect() {
+            $proxies = acme_saved_ips( array( '127.0.0.1' ) );
+            wp_redirect( 'https://example.org/?via=' . $proxies[0] );
+            wp_redirect( 'https://example.org/?ip=' . acme_client_ip( 'HTTP_X_FORWARDED_FOR' ) );
+        }
+        add_action( 'init', 'acme_redirect' );
+        PHP)))->toBe(['wp.redirect.open-redirect@24']);
+});
+
 it('keeps a protected helper\'s write on the subclass that calls it', function (): void {
     expect(perObjectFindings(perObjectQuery() . "\n" . <<<'PHP'
         class Acme_Store extends Acme_Query {
@@ -1015,4 +1050,132 @@ it('keeps one object for a method that runs on one class only', function (string
             }
         }
         PHP, 34],
+]);
+
+/**
+ * @return list<string> rule@line for each high XSS finding
+ */
+function perObjectOutput(string $body): array
+{
+    return array_values(array_filter(
+        findingSignatures(scanCode("<?php\n" . $body)),
+        static fn (string $finding): bool => str_starts_with($finding, 'wp.xss.unescaped-output@'),
+    ));
+}
+
+// An `(object)` cast makes a stdClass object, one per line. WooCommerce
+// casts each cart fee's arguments and writes the fee's id. With the cast on
+// the slot every object of unknown class shares, a report row's `$item->id`
+// read that id.
+
+it('keeps a write to a cast object off an object of unknown class', function (): void {
+    expect(perObjectOutput(<<<'PHP'
+        function acme_add_fee( $args ) {
+            $fee = (object) wp_parse_args( $args, array( 'id' => '', 'name' => '' ) );
+            $fee->id = $args['name'];
+            echo $fee->id;
+            return $fee->id;
+        }
+        function acme_column( $item ) {
+            echo $item->id;
+        }
+        acme_add_fee( array( 'name' => $_GET['n'] ) );
+        PHP))->toBe(['wp.xss.unescaped-output@5']);
+});
+
+it('keeps the writes to two cast lines apart', function (): void {
+    expect(perObjectOutput(<<<'PHP'
+        function acme_page() {
+            $own = (object) array();
+            $own->name = $_GET['name'];
+            $clean = (object) array( 'name' => 'x' );
+            echo $clean->name;
+            echo $own->name;
+        }
+        add_action( 'init', 'acme_page' );
+        PHP))->toBe(['wp.xss.unescaped-output@7']);
+});
+
+it('lets a cast object read what a function it was handed writes, and not a new line\'s object', function (): void {
+    expect(perObjectOutput(<<<'PHP'
+        function acme_fill( $bag ) {
+            $bag->title = $_GET['title'];
+            $bag->opts['label'] = $_GET['label'];
+        }
+        function acme_page() {
+            $bag = (object) array( 'title' => '', 'opts' => array() );
+            acme_fill( $bag );
+            echo $bag->title;
+            echo $bag->opts['label'];
+            $made = new stdClass();
+            acme_fill( $made );
+            echo $made->title;
+        }
+        add_action( 'init', 'acme_page' );
+        PHP))->toBe(['wp.xss.unescaped-output@9', 'wp.xss.unescaped-output@10']);
+});
+
+it('reads the object a function returns where the function made it', function (string $made, string $call): void {
+    expect(perObjectOutput(<<<PHP
+        class Acme_Box {
+            public \$name;
+            public static function make() {
+                \$made = new Acme_Box();
+                \$made->name = \$_GET['name'];
+                return \$made;
+            }
+        }
+        function acme_make() {
+            \$made = {$made};
+            \$made->name = \$_GET['name'];
+            return \$made;
+        }
+        function acme_page() {
+            \$made = {$call};
+            echo \$made->name;
+        }
+        add_action( 'init', 'acme_page' );
+        PHP))->toBe(['wp.xss.unescaped-output@17']);
+})->with([
+    'a new line' => ['new Acme_Box()', 'acme_make()'],
+    'a cast' => ['(object) array( \'name\' => \'\' )', 'acme_make()'],
+    'a static method' => ['new Acme_Box()', 'Acme_Box::make()'],
+]);
+
+// The object a call returns is named only when every return of the callee
+// hands back the one object a line in it makes. Anything else is an object
+// of unknown class, as a return value was before, and misses the write.
+
+it('names no object for a call that can return more than one', function (string $maker, string $call): void {
+    expect(perObjectOutput(<<<PHP
+        class Acme_Box {
+            public \$name;
+        }
+        {$maker}
+        function acme_page() {
+            \$made = {$call};
+            echo \$made->name;
+        }
+        add_action( 'init', 'acme_page' );
+        PHP))->toBe([]);
+})->with([
+    'two lines' => [<<<'PHP'
+        function acme_make( $fresh ) {
+            if ( $fresh ) {
+                $made = new Acme_Box();
+                $made->name = $_GET['name'];
+                return $made;
+            }
+            return new Acme_Box();
+        }
+        PHP, 'acme_make( true )'],
+    'an instance method' => [<<<'PHP'
+        class Acme_Factory {
+            public function make() {
+                $made = new Acme_Box();
+                $made->name = $_GET['name'];
+                return $made;
+            }
+        }
+        PHP, '( new Acme_Factory() )->make()'],
 ]);

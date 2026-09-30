@@ -68,6 +68,12 @@ final class ConstantTable
     /** @var array<string, string|null> holder class and property => its one site, see allocationFor() */
     private array $allocationFor = [];
 
+    /** @var array<string, string|null> function key => the allocation site of the object it returns */
+    private array $returnedSites = [];
+
+    /** @var array<string, true> the allocation sites of `(object)` cast lines */
+    private array $castSites = [];
+
     private bool $anyPropertyWritten = false;
 
     /**
@@ -246,6 +252,54 @@ final class ConstantTable
     public function makerOf(string $site): ?array
     {
         return $this->makers[$site] ?? null;
+    }
+
+    /**
+     * A function whose every `return` hands back the object one `new` line
+     * or `(object)` cast in it makes.
+     *
+     * ```php
+     * function acme_make_row() {
+     *     $row = (object) array( 'title' => '' );
+     *     $row->title = $_GET['t'];
+     *     return $row;
+     * }
+     * ```
+     */
+    public function recordReturnedSite(string $function, string $site): void
+    {
+        $key = strtolower($function);
+
+        // Two declarations of one function that return different objects
+        // return neither for sure.
+        $this->returnedSites[$key] = array_key_exists($key, $this->returnedSites)
+            && $this->returnedSites[$key] !== $site ? null : $site;
+    }
+
+    /**
+     * The allocation site of the object a function returns: see
+     * {@see recordReturnedSite()}.
+     */
+    public function returnedSite(string $function): ?string
+    {
+        return $this->returnedSites[strtolower($function)] ?? null;
+    }
+
+    /**
+     * An `(object)` cast line, as the allocation site of the stdClass
+     * objects it makes.
+     */
+    public function recordCastSite(string $site): void
+    {
+        $this->castSites[$site] = true;
+    }
+
+    /**
+     * Whether an allocation site is an `(object)` cast line.
+     */
+    public function isCastSite(string $site): bool
+    {
+        return isset($this->castSites[$site]);
     }
 
     /**

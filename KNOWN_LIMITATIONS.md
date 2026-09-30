@@ -63,6 +63,7 @@ badge:
 | [An array read or write with a computed key sees the whole array](#array-element-taint-is-per-key-when-both-ends-name-a-constant-key) | Over-reports |
 | [A parameter read through more than 61 parts is read whole past them](#array-element-taint-is-per-key-when-both-ends-name-a-constant-key) | Over-reports |
 | [A property of an object the scan cannot name is shared by its class](#object-properties-are-per-object-where-the-scan-can-tell-which-one) | Over-reports |
+| [A parameter that names no class misses writes to an object of a known class](#object-properties-are-per-object-where-the-scan-can-tell-which-one) | Misses |
 | [`get_object_vars( $this )`, a cast, a loop over `$this` or a closure reads no property](#object-properties-are-per-object-where-the-scan-can-tell-which-one) | Misses |
 | [A protected method called through a callable writes every object of its class](#object-properties-are-per-object-where-the-scan-can-tell-which-one) | Over-reports |
 | [A call waiting for its variant on another object applies nothing for a round](#object-properties-are-per-object-where-the-scan-can-tell-which-one) | Misses |
@@ -317,11 +318,19 @@ $wpdb->get_results( $plain->statement() );   // not reported
 ```
 
 A property's value is kept per object the scan can name, and a method call
-runs on the object its receiver is. The scan names an object in three ways.
+runs on the object its receiver is. The scan names an object in five ways.
 
 - **A `new` expression.** Every object one `new` line makes is one object, so
   two `new Acme_Query()` lines are two objects, and a loop that runs one line
   ten times makes one.
+- **An `(object)` cast.** A cast line makes a stdClass object, as a
+  `new stdClass()` line there would. A cast of an object hands back that
+  object. The scan takes any value it cannot tell is an object to be an
+  array or a scalar, which is what code casts.
+- **A call to a function that makes one.** A function or static method
+  whose every `return` hands back the object one `new` line or cast in it
+  makes returns that object. So `$row = acme_make_row(); echo $row->title;`
+  reads what `acme_make_row()` wrote there.
 - **A property that holds one.** `$this->sub = new Acme_Query()` in the
   constructor gives `$this->sub` that object, when it is the one `new` line
   that gives a property of that name an object in that class, its ancestors
@@ -410,11 +419,25 @@ call names.
 A property on an object whose class the scan cannot tell has one slot per
 name, shared across the whole scan. A read of `$obj->name` on any such object
 sees every `->name` written on any other. The class is known for `$this`, an
-object made with `new`, a declared parameter, property or return type, and a
-value that one of PHP's own methods is declared to return. For a property,
-that holds through a join when every way in agrees on the class, or brings a
-literal, `null`, an array or a local nothing else can set. A value from a
-function or method that declares nothing shares the slot.
+object made with `new` or an `(object)` cast, a declared parameter, property
+or return type, and a value that one of PHP's own methods is declared to
+return. For a property, that holds through a join when every way in agrees on
+the class, or brings a literal, `null`, an array or a local nothing else can
+set. A value from a function or method that declares nothing shares the slot,
+unless the function makes the object it returns, as above.
+
+An object of a known class does not read that slot, and a write to it does not
+land there. So a cart fee cast from its arguments keeps its `id` off a report
+row read through an untyped parameter. A cast object is the one exception on
+the read side, as is a stdClass object the scan knows only by its class. Code
+hands such an object to a function whose parameter names no class, and a write
+there lands on the slot. So a read of a cast object sees the slot too. An
+object from `new stdClass()` does not, as for any other `new` line.
+
+The other way round is not followed. A function whose parameter names no class
+reads the slot, so it misses a write made to an object of a known class
+before the object was handed to it. That includes a cast object.
+**Direction:** misses.
 
 A property keeps its value's elements apart, as a local array does, to four
 levels. `$this->opts = array( 'name' => $_GET['n'], 'mode' => 'grid' )` in one
@@ -426,7 +449,10 @@ what was saved.
 The trace does reach back to the source: the map records the trace of the write
 that tainted a property, and a read splices it in ahead of its own step. Without
 that, roughly a fifth of corpus findings had traces that began "read from
-property `$x`" and stopped, which is not something a reviewer can act on.
+property `$x`" and stopped, which is not something a reviewer can act on. The
+map also keeps a trace for each literal key a write put taint under. So a read
+of `$wp->query_vars['file']` names the write under `'file'`, and not a write
+under `'post__in'` to another object that shares the slot.
 
 **Direction:** over-reports, and misses for the four ways of reading `$this`
 above.
