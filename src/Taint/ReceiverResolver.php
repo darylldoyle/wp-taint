@@ -86,6 +86,15 @@ final class ReceiverResolver
             return is_string($agreed) ? $agreed : null;
         }
 
+        // A cast of an object hands back that object. The scan takes any
+        // other value to be an array or a scalar, which the cast makes into
+        // a new stdClass object.
+        if ($definition instanceof Op\Expr\Cast\Object_) {
+            return $this->classOf($definition->expr, $context, $types)
+                ?? $this->internalClassOf($definition->expr, $context, $types, $depth + 1)
+                ?? 'stdClass';
+        }
+
         $class = null;
 
         if ($definition instanceof Op\Expr\MethodCall || $definition instanceof Op\Expr\StaticCall) {

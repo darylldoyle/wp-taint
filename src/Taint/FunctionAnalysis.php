@@ -3338,9 +3338,30 @@ final class FunctionAnalysis
      * any object of it or of a descendant: those classes' slots, its
      * ancestors', and every allocation site of one of them.
      *
-     * @return list<string>
+     * A stdClass object also sees the slot of objects of unknown class.
+     * Code hands such an object to functions whose parameter names no
+     * class, and a write there lands on that slot.
+     *
+     * @return list<string|null>
      */
     private function propertySlots(string $owner, string $property): array
+    {
+        $slots = $this->classKnownSlots($owner, $property);
+
+        if (strcasecmp(self::classOfReceiver($owner), 'stdClass') === 0) {
+            $slots[] = null;
+        }
+
+        return $slots;
+    }
+
+    /**
+     * The slots of {@see propertySlots()} that belong to a class the scan
+     * knows.
+     *
+     * @return list<string>
+     */
+    private function classKnownSlots(string $owner, string $property): array
     {
         $allocated = ConstantTable::allocatedClass($owner);
 
@@ -3389,7 +3410,7 @@ final class FunctionAnalysis
         $related = $this->functions->relatedClasses($holder);
         $sites = [$owner];
 
-        // Read on every call, as for a class key in propertySlots().
+        // Read on every call, as for a class key in classKnownSlots().
         foreach ($this->properties->allocatedOwners($property) as $each) {
             if (
                 $each !== $owner
@@ -7318,9 +7339,34 @@ final class FunctionAnalysis
         return match (true) {
             $op instanceof Op\Expr\Assign => $this->allocationKeyOf($op->expr, $hops + 1),
             $op instanceof Op\Expr\New_ => $this->allocationSiteOf($op),
+            $op instanceof Op\Expr\Cast\Object_ => $this->castSiteOf($op, $hops),
             $op instanceof Op\Expr\PropertyFetch => $this->propertyAllocation($op),
+            $op instanceof Op\Expr\FuncCall,
+            $op instanceof Op\Expr\NsFuncCall,
+            $op instanceof Op\Expr\StaticCall => $this->returnedSiteOf($op),
             default => null,
         };
+    }
+
+    /**
+     * The allocation site of the object a call returns, when the callee
+     * hands back the object one line in it makes: see
+     * {@see ConstantTable::recordReturnedSite()}. Only for a function or a
+     * static method. An instance method's `new` can make a different object
+     * for each class it runs on: see {@see siteOn()}.
+     */
+    private function returnedSiteOf(Op\Expr $call): ?string
+    {
+        $table = $this->resolver->values()->constants();
+        $target = $table === null ? null : $this->resolver->resolve($call, $this->context, $this->types);
+        $key = $target === null || $target->dynamic ? null : $target->userFunctionKey;
+        $callee = $key === null ? null : $this->functions->get($key);
+
+        if ($table === null || $key === null || ($callee?->className !== null && ! $callee->isStatic)) {
+            return null;
+        }
+
+        return $table->returnedSite($key);
     }
 
     private function allocationSiteOf(Op\Expr\New_ $new): ?string
@@ -7331,10 +7377,39 @@ final class FunctionAnalysis
             return null;
         }
 
+        return $this->siteOf($class, $new);
+    }
+
+    /**
+     * The object an `(object)` cast gives: a new stdClass object, made at
+     * the cast's line, as `new stdClass()` there would make.
+     *
+     * A cast of an object hands back that object. So a value the scan can
+     * name keeps its own key, and a value of a known class is left to
+     * {@see ReceiverResolver::propertyOwnerOf()}. The scan takes any other
+     * value to be an array or a scalar. That is what code casts in practice:
+     * `(object) wp_parse_args( $args, $defaults )`.
+     */
+    private function castSiteOf(Op\Expr\Cast\Object_ $cast, int $hops): ?string
+    {
+        $named = $this->allocationKeyOf($cast->expr, $hops + 1);
+
+        if ($named !== null || $this->receivers->propertyOwnerOf($cast->expr, $this->context, $this->types) !== null) {
+            return $named;
+        }
+
+        return $this->siteOf('stdClass', $cast);
+    }
+
+    /**
+     * The key of the objects that `$op` makes, an object of `$class`.
+     */
+    private function siteOf(string $class, Op\Expr $op): string
+    {
         $site = ConstantTable::allocationSite(
             $class,
             $this->context->file->relativePath,
-            $new->getLine(),
+            $op->getLine(),
         );
         $maker = $this->isInstanceContext() && ! $this->context->isClosure()
             ? [(string) $this->context->className, $this->context->func->name]

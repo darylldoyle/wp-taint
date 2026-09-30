@@ -203,6 +203,15 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   trait, and a WHERE clause the orders store wrote no longer reaches the
   taxes store's queries. Anything else is an object of its class, as before.
   See KNOWN_LIMITATIONS.md.
+- A write to an object made by an `(object)` cast reached every object whose
+  class the scan could not tell. WooCommerce casts each cart fee's arguments
+  and writes the fee's id, and a stock report row's `$item->id` read that id.
+  A cast line now makes a stdClass object, as `new stdClass()` there would.
+  A function whose every `return` hands back the object one `new` line or
+  cast in it makes returns that object, so its caller still reads what it
+  wrote there. A stdClass object still reads the slot of objects of unknown
+  class, since code hands such objects to functions whose parameter names no
+  class.
 - A call past a function's variant cap never saw the cap. It waited for its
   variant for good, so a write it passed a property reached nothing. Past
   the cap, a call now applies the function's own summary, and the

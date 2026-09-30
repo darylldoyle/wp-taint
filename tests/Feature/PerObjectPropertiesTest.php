@@ -1051,3 +1051,84 @@ it('keeps one object for a method that runs on one class only', function (string
         }
         PHP, 34],
 ]);
+
+/**
+ * @return list<string> rule@line for each high XSS finding
+ */
+function perObjectOutput(string $body): array
+{
+    return array_values(array_filter(
+        findingSignatures(scanCode("<?php\n" . $body)),
+        static fn (string $finding): bool => str_starts_with($finding, 'wp.xss.unescaped-output@'),
+    ));
+}
+
+// An `(object)` cast makes a stdClass object, one per line. WooCommerce
+// casts each cart fee's arguments and writes the fee's id. With the cast on
+// the slot every object of unknown class shares, a report row's `$item->id`
+// read that id.
+
+it('keeps a write to a cast object off an object of unknown class', function (): void {
+    expect(perObjectOutput(<<<'PHP'
+        function acme_add_fee( $args ) {
+            $fee = (object) wp_parse_args( $args, array( 'id' => '', 'name' => '' ) );
+            $fee->id = $args['name'];
+            echo $fee->id;
+            return $fee->id;
+        }
+        function acme_column( $item ) {
+            echo $item->id;
+        }
+        acme_add_fee( array( 'name' => $_GET['n'] ) );
+        PHP))->toBe(['wp.xss.unescaped-output@5']);
+});
+
+it('keeps the writes to two cast lines apart', function (): void {
+    expect(perObjectOutput(<<<'PHP'
+        function acme_page() {
+            $own = (object) array();
+            $own->name = $_GET['name'];
+            $clean = (object) array( 'name' => 'x' );
+            echo $clean->name;
+            echo $own->name;
+        }
+        add_action( 'init', 'acme_page' );
+        PHP))->toBe(['wp.xss.unescaped-output@7']);
+});
+
+it('lets a cast object read what a function it was handed writes', function (): void {
+    expect(perObjectOutput(<<<'PHP'
+        function acme_fill( $bag ) {
+            $bag->title = $_GET['title'];
+            $bag->opts['label'] = $_GET['label'];
+        }
+        function acme_page() {
+            $bag = (object) array( 'title' => '', 'opts' => array() );
+            acme_fill( $bag );
+            echo $bag->title;
+            echo $bag->opts['label'];
+        }
+        add_action( 'init', 'acme_page' );
+        PHP))->toBe(['wp.xss.unescaped-output@9', 'wp.xss.unescaped-output@10']);
+});
+
+it('reads the object a function returns where the function made it', function (string $made): void {
+    expect(perObjectOutput(<<<PHP
+        class Acme_Box {
+            public \$name;
+        }
+        function acme_make() {
+            \$made = {$made};
+            \$made->name = \$_GET['name'];
+            return \$made;
+        }
+        function acme_page() {
+            \$made = acme_make();
+            echo \$made->name;
+        }
+        add_action( 'init', 'acme_page' );
+        PHP))->toBe(['wp.xss.unescaped-output@12']);
+})->with([
+    'a new line' => ['new Acme_Box()'],
+    'a cast' => ['(object) array( \'name\' => \'\' )'],
+]);

@@ -68,6 +68,9 @@ final class ConstantTable
     /** @var array<string, string|null> holder class and property => its one site, see allocationFor() */
     private array $allocationFor = [];
 
+    /** @var array<string, string> function key => the allocation site of the object it returns */
+    private array $returnedSites = [];
+
     private bool $anyPropertyWritten = false;
 
     /**
@@ -246,6 +249,32 @@ final class ConstantTable
     public function makerOf(string $site): ?array
     {
         return $this->makers[$site] ?? null;
+    }
+
+    /**
+     * A function whose every `return` hands back the object one `new` line
+     * or `(object)` cast in it makes.
+     *
+     * ```php
+     * function acme_make_row() {
+     *     $row = (object) array( 'title' => '' );
+     *     $row->title = $_GET['t'];
+     *     return $row;
+     * }
+     * ```
+     */
+    public function recordReturnedSite(string $function, string $site): void
+    {
+        $this->returnedSites[strtolower($function)] = $site;
+    }
+
+    /**
+     * The allocation site of the object a function returns: see
+     * {@see recordReturnedSite()}.
+     */
+    public function returnedSite(string $function): ?string
+    {
+        return $this->returnedSites[strtolower($function)] ?? null;
     }
 
     /**

@@ -41,6 +41,9 @@ final class ConstantTableBuilder
 {
     private const PASSES = 2;
 
+    /** How many copies a returned object is followed back through. */
+    private const MAX_RETURN_HOPS = 16;
+
     public function __construct(private readonly ValueResolver $values)
     {
     }
@@ -96,6 +99,12 @@ final class ConstantTableBuilder
                 }
 
                 $this->collectReturn($nextReturns, $resolver, $context);
+
+                $returned = self::returnedSiteOf($context);
+
+                if ($returned !== null) {
+                    $next->recordReturnedSite($context->key, $returned);
+                }
             }
 
             $table = $next;
@@ -474,6 +483,82 @@ final class ConstantTableBuilder
         }
 
         return ConstantTable::allocationSite($class, $context->file->relativePath, $new->getLine());
+    }
+
+    /**
+     * The allocation site of the object every `return` of a function hands
+     * back, when that is one object: see
+     * {@see ConstantTable::recordReturnedSite()}. Null for anything else,
+     * a bare `return;` included.
+     */
+    private static function returnedSiteOf(FunctionContext $context): ?string
+    {
+        if ($context->isMain()) {
+            return null;
+        }
+
+        $site = null;
+
+        foreach (BlockOrder::of($context->func->cfg) as $block) {
+            foreach ($block->children as $op) {
+                if (! $op instanceof Op\Terminal\Return_) {
+                    continue;
+                }
+
+                $each = $op->expr === null ? null : self::siteMaking($op->expr, $context);
+
+                if ($each === null || ($site !== null && $site !== $each)) {
+                    return null;
+                }
+
+                $site = $each;
+            }
+        }
+
+        return $site;
+    }
+
+    /**
+     * The allocation site of the object a value is, when a `new` line with a
+     * named class or an `(object)` cast of an array literal made it in this
+     * body. A cast of anything else could hand back an object the value
+     * already was.
+     */
+    private static function siteMaking(Operand $value, FunctionContext $context): ?string
+    {
+        $op = self::writerOf($value);
+
+        if ($op instanceof Op\Expr\New_) {
+            $class = OperandHelper::literalString($op->class);
+
+            return $class === null || in_array(strtolower($class), ['self', 'static', 'parent'], true)
+                ? null
+                : ConstantTable::allocationSite($class, $context->file->relativePath, $op->getLine());
+        }
+
+        if ($op instanceof Op\Expr\Cast\Object_ && self::writerOf($op->expr) instanceof Op\Expr\Array_) {
+            return ConstantTable::allocationSite('stdClass', $context->file->relativePath, $op->getLine());
+        }
+
+        return null;
+    }
+
+    /**
+     * The op that gives a value, followed back through copies.
+     */
+    private static function writerOf(Operand $value): ?Op
+    {
+        for ($hops = 0; $hops < self::MAX_RETURN_HOPS; $hops++) {
+            $op = OperandHelper::definingOp($value);
+
+            if (! $op instanceof Op\Expr\Assign) {
+                return $op;
+            }
+
+            $value = $op->expr;
+        }
+
+        return null;
     }
 
     /**
