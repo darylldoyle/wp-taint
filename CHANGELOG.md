@@ -212,6 +212,11 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   wrote there. A stdClass object still reads the slot of objects of unknown
   class, since code hands such objects to functions whose parameter names no
   class.
+- A read of a property under a literal key named the first write under any
+  key as its source. WooCommerce's transient file engine reads
+  `$wp->query_vars['wc-transient-file-name']`, and its trace began at the
+  orders list table's write under `'post__in'`, which never reached it. The
+  trace now begins at the write under the key the read names.
 - A call past a function's variant cap never saw the cap. It waited for its
   variant for good, so a write it passed a property reached nothing. Past
   the cap, a call now applies the function's own summary, and the

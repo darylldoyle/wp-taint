@@ -91,6 +91,15 @@ final class PropertyTaintMap
     private array $origins = [];
 
     /**
+     * The trace of the write that put taint under each literal key of a
+     * property, so a read of `$wp->query_vars['file']` names the write under
+     * `'file'`, not the first write under any key.
+     *
+     * @var array<string, array<array-key, list<TraceStep>>>
+     */
+    private array $elementOrigins = [];
+
+    /**
      * Shared with every copy made by clone or {@see sealed()}: a probe run
      * reads through a sealed copy, and those reads are the function's too.
      */
@@ -233,6 +242,19 @@ final class PropertyTaintMap
     }
 
     /**
+     * The trace of the write that tainted one literal key of a property, or
+     * none when no write under that key carried taint.
+     *
+     * @return list<TraceStep>
+     */
+    public function elementOriginOf(?string $class, string $property, int|string $element): array
+    {
+        $this->log?->record('p:' . self::key($class, $property));
+
+        return $this->elementOrigins[self::key($class, $property)][$element] ?? [];
+    }
+
+    /**
      * Was every value ever written to this property anchored by a literal?
      *
      * A property nothing was recorded for answers true: not knowing is not the
@@ -315,6 +337,15 @@ final class PropertyTaintMap
 
         if ($origin !== []) {
             $this->origins[$key] = self::preferredOrigin($this->origins[$key] ?? [], $origin);
+
+            foreach ($value->elements() as $element => $part) {
+                if (! $part->flatten()->isEmpty()) {
+                    $this->elementOrigins[$key][$element] = self::preferredOrigin(
+                        $this->elementOrigins[$key][$element] ?? [],
+                        $origin,
+                    );
+                }
+            }
         }
 
         $existing = $this->taint[$key] ?? Shape::empty();
@@ -387,6 +418,19 @@ final class PropertyTaintMap
             if (self::signature($preferred) !== self::signature($current)) {
                 $this->origins[$key] = $preferred;
                 $changed[$key] = true;
+            }
+        }
+
+        foreach ($other->elementOrigins as $key => $elements) {
+            foreach ($elements as $element => $origin) {
+                $current = $this->elementOrigins[$key][$element] ?? [];
+                $preferred = self::preferredOrigin($current, $origin);
+
+                // By signature, as for a property's own origin above.
+                if (self::signature($preferred) !== self::signature($current)) {
+                    $this->elementOrigins[$key][$element] = $preferred;
+                    $changed[$key] = true;
+                }
             }
         }
 

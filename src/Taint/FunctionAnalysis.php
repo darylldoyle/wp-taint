@@ -3254,8 +3254,48 @@ final class FunctionAnalysis
         // Elements only ever grow, so a value this read already put on its
         // result adds nothing when it comes back unchanged.
         if (($this->propertyReads[$id] ?? null) !== $stored) {
+            $changed = $this->readElements($op, $owner, $property, $stored, $from) || $changed;
             $changed = $this->state->addShape($op->result, $stored->structure(), $provenance) || $changed;
             $this->propertyReads[$id] = $stored;
+        }
+
+        return $changed;
+    }
+
+    /**
+     * Put each element a write under its literal key tainted on the fetch,
+     * with that write's trace ahead of the read. The rest of the value then
+     * takes the trace of the property's own write, which could be under
+     * another key.
+     *
+     * @param list<Operand> $from
+     */
+    private function readElements(
+        Op\Expr\PropertyFetch|Op\Expr\StaticPropertyFetch $op,
+        ?string $owner,
+        string $property,
+        Shape $stored,
+        array $from,
+    ): bool {
+        $changed = false;
+
+        foreach ($stored->elements() as $key => $element) {
+            $origin = $element->flatten()->isEmpty() ? [] : $this->storedElementOrigin($owner, $property, $key);
+
+            if ($origin === []) {
+                continue;
+            }
+
+            $changed = $this->state->addShape($op->result, Shape::element($key, $element), new Provenance(
+                TraceVerb::Propagate,
+                $op,
+                sprintf(
+                    $op instanceof Op\Expr\PropertyFetch ? 'Read from property $%s.' : 'Read from static property $%s.',
+                    $property,
+                ),
+                $from,
+                prefix: $origin,
+            )) || $changed;
         }
 
         return $changed;
@@ -3435,6 +3475,25 @@ final class FunctionAnalysis
         foreach ($owner === null ? [null] : $this->propertySlots($owner, $property) as $candidate) {
             if ($this->properties->isTracked($candidate, $property)) {
                 return $this->properties->originOf($candidate, $property);
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * The recorded origin of one literal key of a property, from the first
+     * slot that has one: see {@see PropertyTaintMap::elementOriginOf()}.
+     *
+     * @return list<TraceStep>
+     */
+    private function storedElementOrigin(?string $owner, string $property, int|string $key): array
+    {
+        foreach ($owner === null ? [null] : $this->propertySlots($owner, $property) as $candidate) {
+            $origin = $this->properties->elementOriginOf($candidate, $property, $key);
+
+            if ($origin !== []) {
+                return $origin;
             }
         }
 

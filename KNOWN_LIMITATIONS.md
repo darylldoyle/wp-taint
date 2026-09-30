@@ -448,7 +448,10 @@ what was saved.
 The trace does reach back to the source: the map records the trace of the write
 that tainted a property, and a read splices it in ahead of its own step. Without
 that, roughly a fifth of corpus findings had traces that began "read from
-property `$x`" and stopped, which is not something a reviewer can act on.
+property `$x`" and stopped, which is not something a reviewer can act on. The
+map also keeps a trace for each literal key a write put taint under. So a read
+of `$wp->query_vars['file']` names the write under `'file'`, and not a write
+under `'post__in'` to another object that shares the slot.
 
 **Direction:** over-reports, and misses for the four ways of reading `$this`
 above.
