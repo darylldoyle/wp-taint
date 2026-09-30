@@ -198,6 +198,9 @@ final class InterproceduralResolver
             /** @var array<string, true> $moved ReadLog entries that changed this round */
             $moved = [];
 
+            /** @var array<string, array{string, array<int, int|string>, string}> $requests */
+            $requests = [];
+
             // Merged in shard order, then in the order each shard produced
             // them. Both are fixed, so the merge is deterministic.
             foreach ($shards as $shardResult) {
@@ -235,33 +238,41 @@ final class InterproceduralResolver
                     $readsOf[$key] = $entries;
                 }
 
-                // A variant a call asked for is analysed next round, next to
-                // the function it varies, up to the cap.
-                foreach ($shardResult['requests'] as $variantKey => [$functionKey, $bindings, $kind]) {
-                    $base = strtolower($functionKey);
-
-                    if (isset($variants[$base][$variantKey])) {
-                        continue;
-                    }
-
-                    // Past the cap a call applies a summary the function
-                    // already has, property writes included, which it held
-                    // back while it waited. Its callers run again to do so.
-                    if (count(array_keys($kinds[$base] ?? [], $kind, true)) >= self::capFor($kind)) {
-                        if (! $summaries->isCapped($base, $kind)) {
-                            $summaries->markCapped($base, $kind);
-                            $changed = true;
-                            $moved['c:' . $base] = true;
-                        }
-
-                        continue;
-                    }
-
-                    $variants[$base][$variantKey] = $bindings;
-                    $kinds[$base][$variantKey] = $kind;
-                    $newVariants[$variantKey] = true;
-                    $changed = true;
+                foreach ($shardResult['requests'] as $variantKey => $request) {
+                    $requests[$variantKey] ??= $request;
                 }
+            }
+
+            // A variant a call asked for is analysed next round, next to the
+            // function it varies, up to the cap. In order of variant key, so
+            // which ones a cap admits does not depend on how the functions
+            // were split across workers.
+            ksort($requests, SORT_STRING);
+
+            foreach ($requests as $variantKey => [$functionKey, $bindings, $kind]) {
+                $base = strtolower($functionKey);
+
+                if (isset($variants[$base][$variantKey])) {
+                    continue;
+                }
+
+                // Past the cap a call applies a summary the function already
+                // has. While it waited for the variant, it left out that
+                // summary's property writes, so its callers run again.
+                if (count(array_keys($kinds[$base] ?? [], $kind, true)) >= self::capFor($kind)) {
+                    if (! $summaries->isCapped($base, $kind)) {
+                        $summaries->markCapped($base, $kind);
+                        $changed = true;
+                        $moved['c:' . $base] = true;
+                    }
+
+                    continue;
+                }
+
+                $variants[$base][$variantKey] = $bindings;
+                $kinds[$base][$variantKey] = $kind;
+                $newVariants[$variantKey] = true;
+                $changed = true;
             }
 
             // Every function must have a summary once the first round is done.

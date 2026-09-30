@@ -53,7 +53,7 @@ final class PropertyTaintMap
 
     /**
      * The allocation sites each property was written on, kept as writes are
-     * tracked. See {@see allocatedOwners()}.
+     * tracked, in sorted order. See {@see allocatedOwners()}.
      *
      * @var array<string, list<string>>
      */
@@ -486,8 +486,11 @@ final class PropertyTaintMap
             return null;
         }
 
+        // Sorted, so the first slot a read finds tracked, and the origin it
+        // gives, does not depend on the order the workers' maps merged in.
         $property = substr($key, $at + 2);
         $this->allocated[$property][] = substr($key, 0, $at);
+        sort($this->allocated[$property], SORT_STRING);
 
         return $property;
     }
