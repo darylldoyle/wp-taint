@@ -64,6 +64,8 @@ badge:
 | [A parameter read through more than 61 parts is read whole past them](#array-element-taint-is-per-key-when-both-ends-name-a-constant-key) | Over-reports |
 | [A property of an object the scan cannot name is shared by its class](#object-properties-are-per-object-where-the-scan-can-tell-which-one) | Over-reports |
 | [`get_object_vars( $this )`, a cast, a loop over `$this` or a closure reads no property](#object-properties-are-per-object-where-the-scan-can-tell-which-one) | Misses |
+| [A protected method called through a callable writes every object of its class](#object-properties-are-per-object-where-the-scan-can-tell-which-one) | Over-reports |
+| [A call waiting for its variant on another object applies nothing for a round](#object-properties-are-per-object-where-the-scan-can-tell-which-one) | Misses |
 | [A guard on a container is not followed](#a-guard-clause-is-followed-a-guard-on-a-container-is-not) | Over-reports |
 | [A value of unknown origin, with `--no-unknown-provenance`](#unknown-provenance-is-reported-by-default) | Misses |
 | [A context in a rebound or parameter-fed variable is not judged](#escaping-is-judged-against-its-context-but-not-a-computed-one) | Misses |
@@ -321,15 +323,18 @@ runs on the object its receiver is. The scan names an object in three ways.
   two `new Acme_Query()` lines are two objects, and a loop that runs one line
   ten times makes one.
 - **A property that holds one.** `$this->sub = new Acme_Query()` in the
-  constructor gives `$this->sub` that object, when the scan only ever gives a
-  property of that name new objects in that class, its ancestors and its
-  descendants. One other assignment anywhere, a copy or a reference, and the
-  property holds an object of its class, as below.
+  constructor gives `$this->sub` that object, when it is the one `new` line
+  that gives a property of that name an object in that class, its ancestors
+  and its descendants. A second `new` line, or one other assignment anywhere,
+  a copy or a reference, and the property holds an object of its class, as
+  below.
 - **`$this`.** A method runs on the objects of its class, and of each
-  descendant that inherits the method rather than declaring its own. A call to
-  `$this->helper()` runs the helper on the caller's objects, so a protected
-  helper in a base class that only a Stats subclass calls writes that
-  subclass's objects, not its siblings'.
+  descendant that inherits the method rather than declaring its own. A
+  descendant that declares its own still counts when one of its methods calls
+  this one, as `parent::get_data()` does. A call to `$this->helper()` runs the
+  helper on the caller's objects, so a protected helper in a base class that
+  only a Stats subclass calls writes that subclass's objects, not its
+  siblings'. A copy of `$this`, `$self = $this`, is the same object.
 
 Anything else is an object of its class, which stands for every object of
 that class and its descendants. A write through it reaches all of them, and a
@@ -347,10 +352,38 @@ A call on another object applies the method's own summary when the method
 would read and call the same there, with its writes to `$this` on that
 object. Otherwise the method runs again as a variant for that object. A
 method has up to 512 such variants. Past that, a call applies the method's
-own summary, which reads every object of its class, and its writes to `$this`
-still land on the object. A variant for a literal key the call passes counts
-against the cap of 16 that every literal variant has, and past that the
-method's own summary is the one the call applies or runs again.
+own summary, which reads every object of its class. The writes the summary
+carries from a parameter land on the object the call names. The method's own
+run then writes its own objects, as a public method's does, so a write from
+the body reaches every object of its class. A variant for a literal key the
+call passes counts against the cap of 16 that every literal variant has, and
+past that the method's own summary is the one the call applies or runs
+again.
+
+A call on another object that waits for its variant applies nothing until a
+round analyses the variant: no return value, no sink and no write. So a
+pending variant delays the call's effects by a round, and an object held in
+another object's property takes at least a round per level. Past 32 rounds
+the scan warns that summaries did not converge, and an effect still waiting
+is missed. **Direction:** misses.
+
+A protected or private method can keep back its own writes to `$this`. It
+does so when only other classes' methods call it, and each call names the
+method. When the method writes `$this`, each call then runs it again as a
+variant on the object the call names. A call on an object the scan cannot
+name, such as a parameter, runs it on the method's own objects. The own run
+keeps back two kinds of write: to `$this`, and to an object a property of
+`$this` holds, since that object depends on `$this` too. The variants make
+those writes. The own run still makes the method's other writes, such as an
+option, a static property, or an object made with `new` or handed in.
+
+A dispatcher can call the method through a callable instead. Examples are
+`call_user_func( array( $this, 'm' ) )`, `array_map()`, `array_walk()` and
+`$cb()`. Such a call names no object, so the method keeps nothing back. A
+write from its body then reaches every object of its class.
+**Direction:** over-reports. The scan sees no call at all in a dispatch whose
+callable it cannot name. A protected method that such a dispatch runs still
+keeps its writes back. **Direction:** misses.
 
 An object handed to a call by reference could come back as another object. The
 scan assumes it does not, as WordPress code does not pass objects that way. A
@@ -361,6 +394,8 @@ hold a value, not a new object.
 `(array) $this`, `foreach ( $this as $value )` and a closure in a method that
 reads `$this->name` see nothing any method wrote, on any object. A copy of
 `$this`, `$that = $this`, reads the object the call runs on, as `$this` does.
+A method that reads through a copy runs again as a variant for each object a
+call names.
 
 A property on an object whose class the scan cannot tell has one slot per
 name, shared across the whole scan. A read of `$obj->name` on any such object

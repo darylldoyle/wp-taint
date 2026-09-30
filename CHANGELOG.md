@@ -187,13 +187,19 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the objects a method runs on through `$this`. A method called on another
   object runs on that object's properties. When it would read and call the
   same there, its own summary applies, with its writes to `$this` on that
-  object. Anything else is an object of its class, as before. See
-  KNOWN_LIMITATIONS.md.
+  object. A subclass that overrides a method and calls it through `parent::`
+  still counts among that method's objects. A protected method that only
+  subclasses call writes the objects of the subclass that calls it. Called
+  through a callable such as `array_map( array( $this, 'm' ), ... )`, it
+  writes every object of its class. Anything else is an object of its class,
+  as before. See KNOWN_LIMITATIONS.md.
 - A call past a function's variant cap never saw the cap. It waited for its
   variant for good, so a write it passed a property reached nothing. Past
-  the cap, a call now applies the function's own summary, property writes
-  included. Literal variants and variants for another object are capped
-  apart, at 16 and 512.
+  the cap, a call now applies the function's own summary, and the
+  function's own run writes every object of its class. Literal variants and
+  variants for another object are capped apart, at 16 and 512. Calls reach
+  the cap in order of the variant they ask for. How `--jobs` splits the
+  functions no longer decides that order.
 - A glue built from a parameter turned the escaped values `implode()` joined
   back into SQL. WooCommerce joins its report status clauses with
   `implode( " $operator ", $subqueries )`, where `$operator` defaults to
