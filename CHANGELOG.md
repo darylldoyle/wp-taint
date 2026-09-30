@@ -221,7 +221,10 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   one of them leaves the quotes as it found them. WooCommerce's report
   stores join their clauses with `implode( " {$operator} ", ... )`, where
   `get_match_operator()` returns `'AND'` or `'OR'`, and the escaped order
-  statuses in those clauses counted as raw SQL.
+  statuses in those clauses counted as raw SQL. A call that passes such a
+  glue to a function's glue parameter, `get_status_subquery( $query_args,
+  $operator )`, runs the function once for each string and gets what either
+  run does.
 - A write into an element of a property went nowhere, as a write two keys
   deep into a local array did before. `$this->opts['name'] = $_GET['n']` in
   one method left `echo $this->opts['name']` clean in another. It now reaches

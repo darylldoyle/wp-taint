@@ -54,6 +54,9 @@ final class FunctionAnalysis
     /** How far {@see throughAssignments} follows `$a = $b = $c` before giving up. */
     private const MAX_ASSIGNMENT_HOPS = 16;
 
+    /** How many strings a glue argument may be one of for a call to run each: see variantOf(). */
+    private const MAX_GLUE_CHOICES = 4;
+
     /**
      * How deep {@see answersFor()} follows calls on `$this` before it answers
      * no, and the call runs a variant instead.
@@ -6762,6 +6765,7 @@ final class FunctionAnalysis
     private function variantOf(Op\Expr $op, CallTarget $call, string $key, FunctionSummary $summary): array
     {
         $literals = [];
+        $choices = null;
         $keyParameters = $call->positional ? $summary->keyParameters : [];
 
         foreach ($keyParameters as $index) {
@@ -6790,6 +6794,19 @@ final class FunctionAnalysis
                 continue;
             }
 
+            // A glue the call passes as one of a few known strings, `$operator`
+            // from get_match_operator(): the call runs the function once for
+            // each of them, and gets what either run does.
+            if ($choices === null && in_array($index, $summary->glueParameters, true)) {
+                $strings = $this->resolver->values()->choiceStrings($argument, $this->boundOperands());
+
+                if (count($strings) > 1 && count($strings) <= self::MAX_GLUE_CHOICES) {
+                    $choices = [$index, $strings];
+
+                    continue;
+                }
+            }
+
             // Handed on from this function's own parameter, the key is one
             // this function's callers can name.
             $own = $this->parameterIndexOf($argument);
@@ -6800,6 +6817,10 @@ final class FunctionAnalysis
         }
 
         $receiver = $this->receiverBindingFor($op, $key) ?? $this->heldBackReceiverOf($key, $summary);
+
+        if ($choices !== null) {
+            return $this->eachGlueVariantOf($key, $summary, $literals, $receiver, $choices);
+        }
 
         [$applied, $runsOn, $settled] = $receiver === null
             ? $this->literalVariantOf($key, $summary, $literals)
@@ -6816,6 +6837,50 @@ final class FunctionAnalysis
         }
 
         return [$applied, $runsOn];
+    }
+
+    /**
+     * The function's summaries for each string a glue parameter can hold,
+     * joined, once a round has analysed every one of them, and its own
+     * summary until then. Each one applies as it would for a call that passed
+     * that string.
+     *
+     * @param array<int, int|string>             $literals
+     * @param array{int, list<string>}           $choices  the glue parameter and its strings
+     *
+     * @return array{FunctionSummary, string|null}
+     */
+    private function eachGlueVariantOf(
+        string $key,
+        FunctionSummary $summary,
+        array $literals,
+        ?string $receiver,
+        array $choices,
+    ): array {
+        [$index, $strings] = $choices;
+        $joined = null;
+        $waiting = null;
+        $runsOn = null;
+
+        // Every string's variant is asked for in the same round, so none
+        // waits a round for the one before it.
+        foreach ($strings as $string) {
+            $bound = $literals + [$index => $string];
+            [$applied, $on, $settled] = $receiver === null
+                ? $this->literalVariantOf($key, $summary, $bound)
+                : $this->receiverVariantOf($key, $summary, $bound, $receiver);
+
+            if (! $settled) {
+                $waiting ??= [$applied, $on];
+
+                continue;
+            }
+
+            $joined = $joined === null ? $applied : $joined->union($applied);
+            $runsOn ??= $on;
+        }
+
+        return $waiting ?? [$joined ?? $summary, $runsOn];
     }
 
     /**

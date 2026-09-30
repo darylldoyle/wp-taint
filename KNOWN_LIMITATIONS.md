@@ -953,7 +953,9 @@ locations with a glue built from a number and an escaped value, and that line
 is reported. A glue that can be one of a few known strings keeps the quotes
 when every one of them does: `implode( " {$operator} ", $clauses )`, where
 `get_match_operator()` returns `'AND'` or `'OR'`. A function's return counts
-as a few known strings when every `return` folds to them. A fragment that is not written as
+as a few known strings when every `return` folds to them. Passed to a glue
+parameter, up to four such strings run the function once each, and the call
+gets what any run does; more than four read as a glue the scan cannot read. A fragment that is not written as
 a literal still counts when it folds to exactly one string. One that folds to
 several, or to none, is taken to hold no quote: `$c ? "'" : $x` could hold
 anything.

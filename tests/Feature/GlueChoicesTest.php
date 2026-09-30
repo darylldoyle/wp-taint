@@ -48,3 +48,39 @@ it('still reports a glue one of whose strings moves the quotes', function (): vo
 it('still reports a glue that may be anything', function (): void {
     expect(glueChoiceFindings("return \$args['match'];"))->toBe(['wp.sqli.wpdb-query@13']);
 });
+
+/**
+ * @return list<string> rule@line for each SQL injection finding
+ */
+function glueChoiceArgumentFindings(string $second): array
+{
+    return array_values(array_filter(
+        findingSignatures(scanCode("<?php\n" . <<<PHP
+            class Acme_Store {
+                protected function get_match_operator( \$args ) {
+                    return isset( \$args['match'] ) ? {$second} : 'AND';
+                }
+                protected function status_clause( \$operator = 'AND' ) {
+                    \$statuses  = array_map( 'esc_sql', (array) get_option( 'acme_statuses' ) );
+                    \$clauses   = array();
+                    \$clauses[] = "status NOT IN ( '" . implode( "','", \$statuses ) . "' )";
+                    \$clauses[] = 'id > 0';
+                    return implode( " \$operator ", \$clauses );
+                }
+                public function run( \$args ) {
+                    global \$wpdb;
+                    \$wpdb->query( 'SELECT id FROM t WHERE ' . \$this->status_clause( \$this->get_match_operator( \$args ) ) );
+                }
+            }
+            PHP)),
+        static fn (string $finding): bool => str_starts_with($finding, 'wp.sqli.wpdb-query@'),
+    ));
+}
+
+it('runs a glue parameter as each of the few strings a call passes', function (): void {
+    expect(glueChoiceArgumentFindings("'OR'"))->toBe([]);
+});
+
+it('still reports a glue parameter one of whose strings moves the quotes', function (): void {
+    expect(glueChoiceArgumentFindings("\"' OR \""))->toBe(['wp.sqli.wpdb-query@15']);
+});
