@@ -338,6 +338,7 @@ final class Scanner
 
         $callGraph = (new CallGraphBuilder($this->registry, $functions, $values, $receivers, $callables, $hooks))
             ->build($contexts);
+        $functions->useCallGraph($callGraph);
         $ruleContext = $ruleContext->withGraphs($callGraph, $hooks)
             ->withDeclaredTypes($functions->declaredTypes())
             ->withFunctionTable($functions);

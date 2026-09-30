@@ -110,6 +110,29 @@ it('reads a method\'s own objects, not a subclass that overrides it', function (
         PHP))->toBe(['wp.sqli.wpdb-query@22']);
 });
 
+it('reads a subclass that overrides a method and calls it through parent::', function (): void {
+    expect(perObjectFindings(perObjectQuery() . "\n" . <<<'PHP'
+        class Acme_Store extends Acme_Query {
+            public function get_data() {
+                global $wpdb;
+                return $wpdb->get_results( $this->statement() );
+            }
+        }
+        class Acme_Stats_Store extends Acme_Store {
+            public function get_data() {
+                $this->add( 'limit', 'LIMIT ' . $_GET['n'] );
+                return parent::get_data();
+            }
+        }
+        class Acme_Plain_Store extends Acme_Store {
+            public function get_data() {
+                global $wpdb;
+                return $wpdb->get_results( $this->statement() );
+            }
+        }
+        PHP))->toBe(['wp.sqli.wpdb-query@15']);
+});
+
 it('keeps the objects two classes hold in a property of one name apart', function (): void {
     expect(perObjectFindings(perObjectQuery() . "\n" . <<<'PHP'
         class Acme_Stats {
