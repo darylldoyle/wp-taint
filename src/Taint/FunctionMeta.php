@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Taint;
 
+use PHPCfg\Func;
 use PHPCfg\Op;
 
 /**
@@ -36,6 +37,7 @@ final class FunctionMeta
         public readonly bool $isMain,
         public readonly bool $isClosure,
         public readonly array $parameters,
+        public readonly bool $isStatic = false,
     ) {
     }
 
@@ -64,6 +66,7 @@ final class FunctionMeta
             $context->isMain(),
             $context->isClosure(),
             $parameters,
+            ($context->func->flags & Func::FLAG_STATIC) !== 0,
         );
     }
 

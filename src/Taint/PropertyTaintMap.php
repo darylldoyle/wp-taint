@@ -49,10 +49,13 @@ final class PropertyTaintMap
     /** @var array<string, bool> */
     private array $anchored = [];
 
-    /** @var array<string, list<string>> property => allocation sites, see allocatedOwners() */
+    /**
+     * The allocation sites each property was written on, kept as writes are
+     * tracked. See {@see allocatedOwners()}.
+     *
+     * @var array<string, list<string>>
+     */
     private array $allocated = [];
-
-    private int $allocatedFor = -1;
 
     /**
      * Each property's value as a shape: its own taint on top and, for an
@@ -122,20 +125,6 @@ final class PropertyTaintMap
     public function allocatedOwners(string $property): array
     {
         $this->log?->record('p*:' . $property);
-
-        if ($this->allocatedFor !== count($this->tracked)) {
-            $this->allocated = [];
-
-            foreach (array_keys($this->tracked) as $key) {
-                $at = strrpos($key, '::');
-
-                if ($at !== false && str_contains(substr($key, 0, $at), '@')) {
-                    $this->allocated[substr($key, $at + 2)][] = substr($key, 0, $at);
-                }
-            }
-
-            $this->allocatedFor = count($this->tracked);
-        }
 
         return $this->allocated[$property] ?? [];
     }
@@ -238,7 +227,7 @@ final class PropertyTaintMap
             return;
         }
 
-        $this->tracked[self::key($class, $property)] = true;
+        $this->startTracking(self::key($class, $property));
     }
 
     /**
@@ -318,7 +307,7 @@ final class PropertyTaintMap
 
         foreach (array_keys($other->tracked) as $key) {
             if (! isset($this->tracked[$key])) {
-                $this->tracked[$key] = true;
+                $this->startTracking($key);
                 $changed[$key] = true;
             }
         }
@@ -416,6 +405,25 @@ final class PropertyTaintMap
         }
 
         return implode("\0", $parts);
+    }
+
+    /**
+     * Track a `class::property` key, and index it by property when its owner
+     * is an allocation site. Rebuilding the index from every tracked key
+     * whenever one was added cost up to 10.8 seconds a scan.
+     */
+    private function startTracking(string $key): void
+    {
+        if (isset($this->tracked[$key])) {
+            return;
+        }
+
+        $this->tracked[$key] = true;
+        $at = strrpos($key, '::');
+
+        if ($at !== false && str_contains(substr($key, 0, $at), '@')) {
+            $this->allocated[substr($key, $at + 2)][] = substr($key, 0, $at);
+        }
     }
 
     private static function key(?string $class, string $property): string

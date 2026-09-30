@@ -3167,38 +3167,17 @@ final class FunctionAnalysis
      */
     private function propertySlots(string $owner, string $property): array
     {
-        $hierarchy = $this->functions->classHierarchy();
         $allocated = ConstantTable::allocatedClass($owner);
 
         if ($allocated !== null) {
-            return [$owner, ...$hierarchy->lookupOrder($allocated)];
+            return [$owner, ...$this->functions->classHierarchy()->lookupOrder($allocated)];
         }
 
-        // `class#method`: the objects that method runs on. See receiverOf().
-        $method = null;
+        [$slots, $below] = $this->functions->classSlotsOf($owner);
 
-        $at = strpos($owner, '#');
-
-        if ($at !== false) {
-            $method = substr($owner, $at + 1);
-            $owner = substr($owner, 0, $at);
-        }
-
-        $slots = $hierarchy->lookupOrder($owner);
-        $below = [];
-        $declared = $method === null ? null : $this->functions->resolveMethodKey($owner, $method);
-
-        foreach ($hierarchy->descendantsOf($owner) as $descendant) {
-            if ($method !== null && $this->functions->resolveMethodKey($descendant, $method) !== $declared) {
-                continue;
-            }
-
-            $slots[] = $descendant;
-            $below[strtolower($descendant)] = true;
-        }
-
-        $below[strtolower($owner)] = true;
-
+        // Read on every call, not kept with the class slots: a site first
+        // written this round is one the read must see, and the read log
+        // must say so.
         foreach ($this->properties->allocatedOwners($property) as $site) {
             if (isset($below[(string) ConstantTable::allocatedClass($site)])) {
                 $slots[] = $site;
@@ -6547,6 +6526,11 @@ final class FunctionAnalysis
             return null;
         }
 
+        // A static method has no `$this`, so every object runs it alike.
+        if ($this->functions->get($calleeKey)->isStatic ?? false) {
+            return null;
+        }
+
         $receiver = match (true) {
             $op instanceof Op\Expr\MethodCall => OperandHelper::variableName($op->var) === 'this'
                 ? $this->receiverKey()
@@ -6565,7 +6549,7 @@ final class FunctionAnalysis
         $receiver = strtolower($receiver);
 
         // The callee's own run already runs on exactly these objects.
-        if ($receiver === $this->receiverOf(substr($calleeKey, 0, $at), substr($calleeKey, $at + 2))) {
+        if ($receiver === $this->functions->receiverOf(substr($calleeKey, 0, $at), substr($calleeKey, $at + 2))) {
             return null;
         }
 
@@ -6588,34 +6572,7 @@ final class FunctionAnalysis
             return $this->context->className;
         }
 
-        return $this->receiverOf($this->context->className, $this->context->func->name);
-    }
-
-    /**
-     * The objects a method runs on, as a receiver key: its class, which
-     * stands for every object of it or of a descendant, or `class#method`
-     * when a descendant declares its own method of that name and so never
-     * runs this one.
-     *
-     * ```php
-     * class Coupons_Store extends Data_Store { function get_data() { ... } }
-     * class Coupons_Stats extends Coupons_Store { function get_data() { ... } }
-     * ```
-     *
-     * `Coupons_Store::get_data()` never runs on a `Coupons_Stats` object, so
-     * the LIMIT that object's own `get_data()` writes is not one it reads.
-     */
-    private function receiverOf(string $class, string $method): string
-    {
-        $declared = $this->functions->resolveMethodKey($class, $method);
-
-        foreach ($this->functions->classHierarchy()->descendantsOf($class) as $descendant) {
-            if ($this->functions->resolveMethodKey($descendant, $method) !== $declared) {
-                return strtolower(ltrim($class, '\\')) . '#' . strtolower($method);
-            }
-        }
-
-        return strtolower(ltrim($class, '\\'));
+        return $this->functions->receiverOf($this->context->className, $this->context->func->name);
     }
 
     /**
@@ -6713,44 +6670,7 @@ final class FunctionAnalysis
             return null;
         }
 
-        $given = $table->allocationsOf($name);
-
-        if ($given === null) {
-            return null;
-        }
-
-        [$allocated, $other] = $given;
-        $sites = [];
-
-        foreach (array_keys($this->relatedClasses($holder)) as $class) {
-            if (isset($other[$class])) {
-                return null;
-            }
-
-            $sites += $allocated[$class] ?? [];
-        }
-
-        return count($sites) === 1 ? (string) array_key_first($sites) : null;
-    }
-
-    /**
-     * A class, the classes and traits it inherits from, and every descendant
-     * with theirs: the classes whose methods can run on an object of it.
-     *
-     * @return array<string, true> lower-case names
-     */
-    private function relatedClasses(string $class): array
-    {
-        $hierarchy = $this->functions->classHierarchy();
-        $related = [];
-
-        foreach ([$class, ...$hierarchy->descendantsOf($class)] as $each) {
-            foreach ($hierarchy->lookupOrder($each) as $inherited) {
-                $related[strtolower($inherited)] = true;
-            }
-        }
-
-        return $related;
+        return $table->allocationFor($holder, $name, $this->functions->relatedClasses($holder));
     }
 
     /**

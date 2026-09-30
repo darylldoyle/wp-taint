@@ -62,6 +62,9 @@ final class ConstantTable
     /** @var array<string, array<string, true>> property or '*' => owner class or '*' => true */
     private array $notAllocated = [];
 
+    /** @var array<string, string|null> holder class and property => its one site, see allocationFor() */
+    private array $allocationFor = [];
+
     private bool $anyPropertyWritten = false;
 
     /**
@@ -205,6 +208,55 @@ final class ConstantTable
         }
 
         return [$this->allocations[$name] ?? [], $other];
+    }
+
+    /**
+     * The one allocation site `$this->name` can hold on an object of
+     * `$holder`: the sites the scan gives a property of that name from a
+     * method of one of `$related`. Null when there are several, or when one
+     * of them gives the property anything else.
+     *
+     * `$related` is the classes whose methods can run on such an object:
+     * see {@see \Enshrined\WpTaint\Taint\UserFunctionTable::relatedClasses()}.
+     * It depends on `$holder` alone, so the answer is kept per holder and
+     * property.
+     *
+     * @param array<string, true> $related lower-case class names
+     */
+    public function allocationFor(string $holder, string $name, array $related): ?string
+    {
+        $key = strtolower($holder) . '::' . $name;
+
+        if (array_key_exists($key, $this->allocationFor)) {
+            return $this->allocationFor[$key];
+        }
+
+        return $this->allocationFor[$key] = $this->onlyAllocation($name, $related);
+    }
+
+    /**
+     * @param array<string, true> $related
+     */
+    private function onlyAllocation(string $name, array $related): ?string
+    {
+        $given = $this->allocationsOf($name);
+
+        if ($given === null) {
+            return null;
+        }
+
+        [$allocated, $other] = $given;
+        $sites = [];
+
+        foreach (array_keys($related) as $class) {
+            if (isset($other[$class])) {
+                return null;
+            }
+
+            $sites += $allocated[$class] ?? [];
+        }
+
+        return count($sites) === 1 ? (string) array_key_first($sites) : null;
     }
 
     public function defineClassConstant(string $class, string $name, ?string $value): void
