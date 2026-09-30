@@ -368,8 +368,11 @@ final class InterproceduralResolver
             $analyse = $dirty === null || isset($dirty[$key]);
             $varying = [];
 
+            // A variant runs again only when it is new or something it read
+            // moved. Its reads are logged under its own key, so the base
+            // function's own reads moving says nothing about it.
             foreach ($variants[strtolower($key)] ?? [] as $variantKey => $bindings) {
-                if ($analyse || isset($newVariants[$variantKey]) || isset($dirty[$variantKey])) {
+                if ($dirty === null || isset($newVariants[$variantKey]) || isset($dirty[$variantKey])) {
                     $varying[$variantKey] = $bindings;
                 }
             }
@@ -429,23 +432,6 @@ final class InterproceduralResolver
                     $dirty,
                     $produced,
                 );
-
-                // A receiver variant's body runs on that receiver, so its
-                // property writes land, as the function's own run's do.
-                if (isset($bindings[FunctionSummary::RECEIVER])) {
-                    foreach ($contexts as $context) {
-                        $this->analyzer->analyze(
-                            $context,
-                            $visible,
-                            $roundProperties,
-                            $roundScopes,
-                            null,
-                            false,
-                            [],
-                            $bindings,
-                        );
-                    }
-                }
             }
         }
 
