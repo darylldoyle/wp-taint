@@ -55,8 +55,9 @@ final class ReceiverView
      *        and the one allocation site it held, or null for none
      * @param bool $opaque the run reached `$this` through a copy, `$that = $this`, where a read or a
      *        call no longer says which object it is on
-     * @param bool $writes the run wrote a property of `$this`, and the method's own run holds its
-     *        writes back: see {@see IntraproceduralAnalyzer::holdsBackWrites()}
+     * @param bool $writes the run wrote a property of `$this`, or of an object a property of `$this`
+     *        holds, and the method's own run holds such writes back: see
+     *        {@see IntraproceduralAnalyzer::holdsBackReceiverWrites()}
      */
     public function __construct(
         public readonly array $properties = [],

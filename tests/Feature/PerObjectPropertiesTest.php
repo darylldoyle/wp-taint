@@ -299,6 +299,204 @@ it('keeps a held-back helper\'s own write on the subclass that calls it', functi
         PHP))->toBe(['wp.sqli.wpdb-query@15']);
 });
 
+// A method's own run holds back its writes to `$this` only when every call
+// to it runs it on the caller's object. A call through a callable runs the
+// method's own summary, which cannot carry a write the body makes itself.
+
+/**
+ * @return list<string> rule@line for each finding of one rule
+ */
+function perObjectRule(string $rule, string $body): array
+{
+    return array_values(array_filter(
+        findingSignatures(scanCode("<?php\n" . $body)),
+        static fn (string $finding): bool => str_starts_with($finding, $rule . '@'),
+    ));
+}
+
+/** A base class whose protected `load_term()` only a subclass calls, with `$call` making the call. */
+function perObjectHeldBack(string $call): string
+{
+    return <<<PHP
+        abstract class Acme_Base {
+            protected \$term = '';
+            protected function load_term() {
+                \$this->term = wp_unslash( \$_GET['term'] );
+            }
+        }
+        class Acme_Search extends Acme_Base {
+            public \$keys = array( 'a' );
+            public function __construct() {
+                add_action( 'wp', array( \$this, 'init' ) );
+                add_action( 'wp_footer', array( \$this, 'query' ) );
+            }
+            public function init() {
+        {$call}
+            }
+            public function query() {
+                global \$wpdb;
+                \$wpdb->get_results( "SELECT * FROM {\$wpdb->posts} WHERE post_title = '" . \$this->term . "'" );
+            }
+        }
+        new Acme_Search();
+        PHP;
+}
+
+it('lands the write of a protected method a subclass calls through a callable', function (string $call): void {
+    expect(perObjectFindings(perObjectHeldBack($call)))->toBe(['wp.sqli.wpdb-query@19']);
+})->with([
+    'a copy of $this' => ["\$self = \$this; \$self->load_term();"],
+    'a callable variable' => ["\$cb = array( \$this, 'load_term' ); \$cb();"],
+    'array_walk()' => ["array_walk( \$this->keys, array( \$this, 'load_term' ) );"],
+]);
+
+it('lands the write of a protected method a subclass calls on an object it was handed', function (): void {
+    expect(perObjectFindings(<<<'PHP'
+        abstract class Acme_Base {
+            protected $term = '';
+            protected function load_term() {
+                $this->term = wp_unslash( $_GET['term'] );
+            }
+        }
+        class Acme_Search extends Acme_Base {
+            public function load_from( Acme_Base $other ) {
+                $other->load_term();
+            }
+            public function query() {
+                global $wpdb;
+                $wpdb->get_results( "SELECT * FROM {$wpdb->posts} WHERE post_title = '" . $this->term . "'" );
+            }
+        }
+        PHP))->toBe(['wp.sqli.wpdb-query@14']);
+});
+
+it('lands a held-back method\'s write to an object a property holds', function (): void {
+    expect(perObjectFindings(perObjectQuery() . "\n" . <<<'PHP'
+        class Acme_Report {
+            protected $sub;
+            public function __construct() {
+                $this->sub = new Acme_Query();
+            }
+            protected function add_limit() {
+                $this->sub->add( 'limit', 'LIMIT ' . $_GET['n'] );
+            }
+            public function run() {
+                global $wpdb;
+                return $wpdb->get_results( $this->sub->statement() );
+            }
+        }
+        class Acme_Stats_Report extends Acme_Report {
+            public function limited() {
+                $this->add_limit();
+            }
+        }
+        PHP))->toBe(['wp.sqli.wpdb-query@22']);
+});
+
+it('keeps a held-back method\'s write to a property\'s object on the subclass that calls it', function (): void {
+    // The base class's own run cannot tell which object `$this->sub` holds,
+    // so a write it made would reach every Acme_Query.
+    expect(perObjectFindings(perObjectQuery() . "\n" . <<<'PHP'
+        abstract class Acme_Report {
+            protected $sub;
+            protected function add_limit() {
+                $this->sub->add( 'limit', 'LIMIT ' . $_GET['n'] );
+            }
+        }
+        class Acme_Stats_Report extends Acme_Report {
+            public function __construct() {
+                $this->sub = new Acme_Query();
+            }
+            public function limited() {
+                global $wpdb;
+                $this->add_limit();
+                return $wpdb->get_results( $this->sub->statement() );
+            }
+        }
+        class Acme_Plain_Report extends Acme_Report {
+            public function __construct() {
+                $this->sub = new Acme_Query();
+            }
+            public function run() {
+                global $wpdb;
+                return $wpdb->get_results( $this->sub->statement() );
+            }
+        }
+        PHP))->toBe(['wp.sqli.wpdb-query@25']);
+});
+
+it('lands the write of a protected method a subclass calls through call_user_func()', function (): void {
+    expect(perObjectRule('wp.xss.unescaped-output', <<<'PHP'
+        abstract class Acme_Base {
+            protected $term = '';
+            protected function load_term() {
+                $this->term = wp_unslash( $_GET['term'] );
+            }
+        }
+        class Acme_Search extends Acme_Base {
+            public function __construct() {
+                add_action( 'wp', array( $this, 'init' ) );
+                add_action( 'wp_footer', array( $this, 'query' ) );
+            }
+            public function init() {
+                call_user_func( array( $this, 'load_term' ) );
+            }
+            public function query() {
+                echo '<p>' . $this->term . '</p>';
+            }
+        }
+        new Acme_Search();
+        PHP))->toBe(['wp.xss.unescaped-output@17']);
+});
+
+it('lands the write of a protected method a subclass calls through array_map()', function (): void {
+    expect(perObjectRule('wp.xss.unescaped-output', <<<'PHP'
+        abstract class Acme_Base {
+            protected $values = array();
+            protected function read_field( $k ) {
+                $this->values[ $k ] = $_POST[ $k ];
+            }
+            public function show() {
+                foreach ( $this->values as $v ) {
+                    echo '<td>' . $v . '</td>';
+                }
+            }
+        }
+        class Acme_Form extends Acme_Base {
+            public function save() {
+                array_map( array( $this, 'read_field' ), array( 'title', 'body' ) );
+            }
+        }
+        function acme_form() {
+            $f = new Acme_Form();
+            $f->save();
+            $f->show();
+        }
+        add_action( 'admin_init', 'acme_form' );
+        PHP))->toBe(['wp.xss.unescaped-output@9']);
+});
+
+it('lands an option a held-back method writes', function (): void {
+    // Stored data carries no `url`, so only the write makes the redirect a
+    // finding.
+    expect(perObjectRule('wp.redirect.open-redirect', <<<'PHP'
+        abstract class Acme_Base {
+            protected function save_target() {
+                update_option( 'acme_target', $_GET['target'] );
+            }
+        }
+        class Acme_Settings extends Acme_Base {
+            public function save() {
+                $this->save_target();
+            }
+        }
+        function acme_go() {
+            wp_redirect( get_option( 'acme_target' ) );
+            exit;
+        }
+        PHP))->toBe(['wp.redirect.open-redirect@13']);
+});
+
 // The ways a method can reach its own object other than `$this->name`. A
 // copy of `$this` reaches the object the call runs on, so a call on another
 // object runs the method there. The others do not read the property map

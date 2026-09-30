@@ -49,15 +49,33 @@ final class CallGraphBuilder
                         continue;
                     }
 
+                    // A dispatcher's callee is a target of the op too, and it
+                    // runs on no object the call names. Only the method the
+                    // op names does.
+                    $named = $op instanceof Op\Expr\MethodCall
+                        || $op instanceof Op\Expr\StaticCall
+                        || $op instanceof Op\Expr\New_
+                        ? $this->resolver->resolve($op, $context, $types)?->userFunctionKey
+                        : null;
+
                     foreach ($this->resolver->resolveAll($op, $context, $types) as $target) {
                         if ($target->dynamic) {
                             $graph->markImprecise($context->key);
+
+                            foreach ($target->candidates as $candidate) {
+                                $graph->addUnboundCandidate($context->key, $candidate);
+                            }
 
                             continue;
                         }
 
                         if ($target->userFunctionKey !== null) {
-                            $graph->addEdge($context->key, $target->userFunctionKey, $target->viaHook);
+                            $graph->addEdge(
+                                $context->key,
+                                $target->userFunctionKey,
+                                $target->viaHook,
+                                $named !== null && $target->userFunctionKey === $named,
+                            );
                         }
 
                         if ($target->matcher !== null) {

@@ -222,7 +222,8 @@ final class SummaryExtractor
             // wrote the method's own objects, which every read of the
             // receiver sees.
             $baseline->receiverView?->withWrites(
-                $baseline->receiverView->writes && $this->analyzer->holdsBackWrites($context, []),
+                $baseline->receiverView->writes
+                    && $this->analyzer->holdsBackReceiverWrites($context, [], $summaries),
             ),
             $this->glueParameters[$context->key] ??= KeyParameters::inGlues(
                 $context->func,

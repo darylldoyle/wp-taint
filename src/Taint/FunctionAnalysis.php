@@ -151,7 +151,10 @@ final class FunctionAnalysis
     /** This run reached `$this` through a copy: see {@see ReceiverView::$opaque}. */
     private bool $receiverOpaque = false;
 
-    /** This run wrote a property of its receiver: see {@see ReceiverView::$writes}. */
+    /**
+     * This run wrote a property of its receiver, or of an object a property
+     * of its receiver holds: see {@see ReceiverView::$writes}.
+     */
     private bool $receiverWritten = false;
 
     /**
@@ -388,6 +391,13 @@ final class FunctionAnalysis
          * @var array<int, int|string>
          */
         private readonly array $keyBindings = [],
+        /**
+         * Whether this run keeps its writes to `$this`, and to the objects
+         * the properties of `$this` hold, out of the property map: see
+         * {@see IntraproceduralAnalyzer::holdsBackReceiverWrites()}. Its
+         * other writes land.
+         */
+        private readonly bool $holdsBackReceiver = false,
     ) {
         $this->state = new TaintState();
         $this->restParameters = new RestParameterSanitizer($registry, $summaries);
@@ -1848,8 +1858,11 @@ final class FunctionAnalysis
 
                 // Noted from the op, not from the map: a run whose writes are
                 // held back writes nothing there, and still writes `$this`.
-                $this->receiverWritten = $this->receiverWritten || $this->readsThis($target);
-                $this->properties->track($owner, $property);
+                $this->receiverWritten = $this->receiverWritten || $this->writesThroughThis($target);
+
+                if (! $this->holdsBack($target)) {
+                    $this->properties->track($owner, $property);
+                }
 
                 // Only when something reached it, and with what did. A probe
                 // run seeds one parameter with every kind, so the kinds here
@@ -1863,7 +1876,9 @@ final class FunctionAnalysis
                 // `'acme_' . $id` from one holding the request verbatim.
                 // Recorded on every write, clean ones included: an anchor is a
                 // property of the value, not of its taint.
-                $this->properties->recordAnchor($owner, $property, $this->anchors->has($op->expr));
+                if (! $this->holdsBack($target)) {
+                    $this->properties->recordAnchor($owner, $property, $this->anchors->has($op->expr));
+                }
             }
         }
 
@@ -1927,6 +1942,10 @@ final class FunctionAnalysis
         if ($property === null) {
             $this->imprecise = true;
 
+            return false;
+        }
+
+        if ($this->holdsBack($target)) {
             return false;
         }
 
@@ -2035,7 +2054,12 @@ final class FunctionAnalysis
             ? $this->propertyOwnerClass($fetch)
             : $this->staticOwnerClass($fetch);
 
-        $this->receiverWritten = $this->receiverWritten || $this->readsThis($fetch);
+        $this->receiverWritten = $this->receiverWritten || $this->writesThroughThis($fetch);
+
+        if ($this->holdsBack($fetch)) {
+            return false;
+        }
+
         $this->properties->track($owner, $property);
         $this->properties->recordAnchor($owner, $property, $this->anchors->has($op->expr));
 
@@ -3413,6 +3437,39 @@ final class FunctionAnalysis
 
         return $this->allocationKeyOf($fetch->var, 0)
             ?? $this->receivers->propertyOwnerOf($fetch->var, $this->context, $this->types);
+    }
+
+    /**
+     * Whether a write to this property is one this run holds back: see
+     * {@see IntraproceduralAnalyzer::holdsBackReceiverWrites()}.
+     */
+    private function holdsBack(Op\Expr\PropertyFetch|Op\Expr\StaticPropertyFetch $target): bool
+    {
+        return $this->holdsBackReceiver && $this->writesThroughThis($target);
+    }
+
+    /**
+     * Whether a fetch is a property of an object that depends on the one
+     * the run is on: `$this`, a copy of it, or an object a property of
+     * `$this` holds. See {@see ThisReceiver::reachedThrough()}.
+     */
+    private function writesThroughThis(Op\Expr\PropertyFetch|Op\Expr\StaticPropertyFetch $fetch): bool
+    {
+        return $fetch instanceof Op\Expr\PropertyFetch
+            && $this->isInstanceContext()
+            && ThisReceiver::reachedThrough($fetch->var);
+    }
+
+    /**
+     * Whether a call runs on an object that depends on the one the run is
+     * on, as {@see writesThroughThis()} asks of a write.
+     */
+    private function callsThroughThis(Op\Expr $op): bool
+    {
+        return $this->callsThis($op)
+            || ($op instanceof Op\Expr\MethodCall
+                && $this->isInstanceContext()
+                && ThisReceiver::reachedThrough($op->var));
     }
 
     /**
@@ -5095,12 +5152,22 @@ final class FunctionAnalysis
         $reverts = $summary->revertedResidualsFor($index);
 
         foreach ($summary->propertiesFor($index) as [$class, $property, $reached]) {
+            // A write to `$this` in a call on `$this`, or on an object a
+            // property of `$this` holds, depends on this run's object. A
+            // held-back run keeps it out of the map.
+            $throughThis = $class === FunctionSummary::THIS && $this->callsThroughThis($op);
+
             if ($class === FunctionSummary::THIS) {
                 $class = $receiver;
             }
 
             $this->receiverWritten = $this->receiverWritten
+                || $throughThis
                 || ($class !== null && $class === $this->receiverKey());
+
+            if ($throughThis && $this->holdsBackReceiver) {
+                continue;
+            }
 
             // Only what survives the body, part by part. The kinds were
             // recorded by the probe run, whose seed carried every kind: what
@@ -6633,7 +6700,7 @@ final class FunctionAnalysis
             }
         }
 
-        $receiver = $this->receiverBindingFor($op, $key);
+        $receiver = $this->receiverBindingFor($op, $key) ?? $this->heldBackReceiverOf($key, $summary);
 
         [$applied, $runsOn, $settled] = $receiver === null
             ? $this->literalVariantOf($key, $summary, $literals)
@@ -6928,6 +6995,24 @@ final class FunctionAnalysis
     }
 
     /**
+     * The receiver a call that names none runs a method on, when the
+     * method's own run holds back its writes to `$this`: the method's own
+     * objects. The call graph lets a method hold them back when every call
+     * names the method. A call on an object the scan cannot name, such as
+     * a parameter, still names no receiver, and the own summary carries
+     * none of those writes. A variant on the method's own objects lands
+     * them there, as an own run that held nothing back would.
+     */
+    private function heldBackReceiverOf(string $calleeKey, FunctionSummary $summary): ?string
+    {
+        if (! ($summary->receiverView->writes ?? false)) {
+            return null;
+        }
+
+        return $this->ownReceiverOf($calleeKey);
+    }
+
+    /**
      * Whether a call to `$calleeKey` on `$receiver` runs the method's own
      * run: a static method has no `$this`, so every object runs it alike,
      * and a receiver the method's own run is already on needs no variant.
@@ -6939,16 +7024,22 @@ final class FunctionAnalysis
     }
 
     /**
-     * Whether a call runs on `$this`: `$this->m()`, or `self::m()`,
-     * `static::m()` and `parent::m()` in a method.
+     * Whether a call runs on `$this`: see {@see ThisReceiver::isCalledOn()}.
+     * A call on a copy of `$this`, `$self->m()`, runs on the same object. The
+     * copy still makes the run opaque, since a read through it is not one
+     * the run records.
      */
     private function callsThis(Op\Expr $op): bool
     {
-        return match (true) {
-            $op instanceof Op\Expr\MethodCall => OperandHelper::variableName($op->var) === 'this',
-            $op instanceof Op\Expr\StaticCall => $this->isInstanceContext() && self::namesOwnClass($op->class),
-            default => false,
-        };
+        if (! ThisReceiver::isCalledOn($op, $this->context)) {
+            return false;
+        }
+
+        if ($op instanceof Op\Expr\MethodCall && ThisReceiver::isCopy($op->var)) {
+            $this->receiverOpaque = $this->receiverOpaque || $this->isInstanceContext();
+        }
+
+        return true;
     }
 
     /**
@@ -6994,19 +7085,7 @@ final class FunctionAnalysis
 
     private function isInstanceContext(): bool
     {
-        return $this->context->className !== null
-            && ($this->context->func->flags & \PHPCfg\Func::FLAG_STATIC) === 0;
-    }
-
-    /**
-     * Whether a static call's class is `self`, `static` or `parent`, which
-     * call on `$this` from an instance method.
-     */
-    private static function namesOwnClass(Operand $class): bool
-    {
-        $name = OperandHelper::literalString($class);
-
-        return $name !== null && in_array(strtolower($name), ['self', 'static', 'parent'], true);
+        return ThisReceiver::inInstanceMethod($this->context);
     }
 
     /**
@@ -7021,12 +7100,11 @@ final class FunctionAnalysis
         }
 
         if (OperandHelper::variableName($receiver) === 'this') {
-            // A copy of `$this`: the base run finds the class of what it
-            // holds, and a run on an allocation site finds the site.
+            // A copy of `$this` holds the object the run is on: the method's
+            // own objects in its own run, and the receiver in a variant.
             $this->receiverOpaque = $this->receiverOpaque || $this->isInstanceContext();
-            $key = $this->receiverKey();
 
-            return $key !== null && ConstantTable::allocatedClass($key) !== null ? $key : null;
+            return $this->isInstanceContext() && ! $this->context->isClosure() ? $this->receiverKey() : null;
         }
 
         $op = OperandHelper::definingOp($receiver);

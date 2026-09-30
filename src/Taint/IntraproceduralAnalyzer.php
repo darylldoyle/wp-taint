@@ -84,23 +84,43 @@ final class IntraproceduralAnalyzer
      * A variant bound to a caller's literal key is one caller's, not the
      * body's. A receiver variant's writes are that receiver's, so they land,
      * with any key it binds too: they are that receiver's under that key.
-     * A protected or private method that only other classes' methods call
-     * runs only on the objects they name, as receiver variants, so its own
-     * run, on an object of its own class, is not one that happens.
      *
      * @param array<int, int|string> $keyBindings
      */
-    public function holdsBackWrites(FunctionContext $context, array $keyBindings): bool
+    public function holdsBackWrites(array $keyBindings): bool
     {
-        if (isset($keyBindings[FunctionSummary::RECEIVER])) {
-            return false;
-        }
+        return $keyBindings !== [] && ! isset($keyBindings[FunctionSummary::RECEIVER]);
+    }
 
-        if ($keyBindings !== []) {
-            return true;
-        }
-
-        if ($context->className === null || $this->callGraph === null) {
+    /**
+     * Whether a method's own run keeps its writes to `$this` out of the
+     * shared map, and lands the rest.
+     *
+     * A protected or private method that only other classes' methods call by
+     * name runs as a receiver variant on each object they name. A call that
+     * names no object, such as one on a parameter, runs a variant on the
+     * method's own objects: see {@see FunctionAnalysis::heldBackReceiverOf()}.
+     * Its own run is not one that happens. So its writes to `$this` are held
+     * back, and so are its writes to an object a property of `$this` holds,
+     * which depends on the object too. Its summary then says it wrote
+     * `$this`, so every call runs a variant, and the variants land those
+     * writes. See {@see ReceiverView::$writes}.
+     *
+     * Its other writes land: an option, a static property, an object made
+     * with `new` or handed in. The method makes those wherever it runs, and
+     * its own summary carries only the writes a parameter reaches.
+     *
+     * Not past the method's receiver cap. A call there applies the own
+     * summary and runs no variant, so the own run's writes are the only ones.
+     *
+     * @param array<int, int|string> $keyBindings
+     */
+    public function holdsBackReceiverWrites(
+        FunctionContext $context,
+        array $keyBindings,
+        SummaryTable $summaries,
+    ): bool {
+        if ($keyBindings !== [] || $context->className === null || $this->callGraph === null) {
             return false;
         }
 
@@ -108,7 +128,8 @@ final class IntraproceduralAnalyzer
 
         return ($flags & (Func::FLAG_PROTECTED | Func::FLAG_PRIVATE)) !== 0
             && ($flags & Func::FLAG_STATIC) === 0
-            && $this->callGraph->calledOnlyFromOtherClasses($context->key);
+            && $this->callGraph->calledOnlyFromOtherClasses($context->key)
+            && ! $summaries->isCapped($context->key, SummaryTable::RECEIVER_VARIANT);
     }
 
     /**
@@ -136,9 +157,8 @@ final class IntraproceduralAnalyzer
         // body as written, so nothing it writes belongs in the shared property
         // map. See PropertyTaintMap::$sealed. Nor does a run of a summary
         // variant, whose bound key is one caller's, not the body's.
-        $properties = $seedParameterIndex === null && ! $this->holdsBackWrites($context, $keyBindings)
-            ? $properties
-            : $properties->sealed();
+        $sealed = $seedParameterIndex !== null || $this->holdsBackWrites($keyBindings);
+        $properties = $sealed ? $properties->sealed() : $properties;
         $receivers = new ReceiverResolver($this->functions->declaredTypes());
 
         return (new FunctionAnalysis(
@@ -164,6 +184,7 @@ final class IntraproceduralAnalyzer
             $this->administrators,
             $seedParts,
             $keyBindings,
+            ! $sealed && $this->holdsBackReceiverWrites($context, $keyBindings, $summaries),
         ))->run();
     }
 }

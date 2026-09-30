@@ -78,6 +78,16 @@ final class CallGraph
     private array $viaHook = [];
 
     /**
+     * Calls that run a method on no object the call names, by callee and
+     * caller: through a callable a dispatcher runs, such as
+     * `call_user_func( array( $this, 'm' ) )`, or as one of the candidates of
+     * a call the scan could not resolve. See {@see calledOnlyFromOtherClasses()}.
+     *
+     * @var array<string, array<string, true>>
+     */
+    private array $unbound = [];
+
+    /**
      * Function keys something in the scan calls.
      *
      * The reverse of `$edges`, kept as it is built rather than derived on
@@ -128,8 +138,18 @@ final class CallGraph
         return $this->methodsByName[strtolower($method)] ?? [];
     }
 
-    public function addEdge(string $from, string $to, bool $viaHook = false): void
+    /**
+     * @param bool $named the callee is the method the call op names, `$this->m()`, `$query->m()`
+     *                    or `parent::m()`, rather than a callable a dispatcher runs
+     */
+    public function addEdge(string $from, string $to, bool $viaHook = false, bool $named = false): void
     {
+        // Every call of the edge, not only the first. One call through a
+        // callable among several by name is enough.
+        if (! $named) {
+            $this->unbound[$to][$from] = true;
+        }
+
         if (! in_array($to, $this->edges[$from] ?? [], true)) {
             $this->edges[$from][] = $to;
             $this->called[$to] = true;
@@ -167,13 +187,23 @@ final class CallGraph
     }
 
     /**
+     * Record a method a call could run that the scan could not pin down.
+     * The taint pass applies nothing for such a call.
+     */
+    public function addUnboundCandidate(string $from, string $candidate): void
+    {
+        $this->unbound[$candidate][$from] = true;
+    }
+
+    /**
      * Whether every caller of a method is another class's method calling it
-     * directly: none from its own class, none through a hook, and at least
-     * one. Such a method only ever runs on an object a caller names.
+     * by name: none from its own class, none through a hook, a callable or
+     * an unresolved call, and at least one. Such a method only ever runs on
+     * an object a caller names.
      */
     public function calledOnlyFromOtherClasses(string $key): bool
     {
-        if (! isset($this->called[$key])) {
+        if (! isset($this->called[$key]) || isset($this->unbound[$key])) {
             return false;
         }
 
