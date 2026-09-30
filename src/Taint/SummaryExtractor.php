@@ -100,6 +100,9 @@ final class SummaryExtractor
         $imprecise = $parameterCount > $analysed;
         $forwarded = [];
 
+        /** @var array<string, array<int, true>> $probeReads see AnalysisResult::$receiverReads */
+        $probeReads = [];
+
         // A variant's bound key names the part a read under it takes.
         $partsKey = $keyBindings === [] ? $context->key : FunctionSummary::variantKey($context->key, $keyBindings);
         $parts = $this->parameterParts[$partsKey] ??= ParameterParts::of(
@@ -121,6 +124,10 @@ final class SummaryExtractor
             );
 
             $paramToReturn[$index] = $result->returnTaint;
+
+            foreach ($result->receiverReads as $property => $asked) {
+                $probeReads[$property] = ($probeReads[$property] ?? []) + $asked;
+            }
 
             foreach ($result->forwardedKeyParameters as $key) {
                 $forwarded[$key] = true;
@@ -179,7 +186,20 @@ final class SummaryExtractor
         // What the function returns with no parameter tainted at all: a wrapper
         // around get_option() introduces stored taint regardless of its
         // arguments, and a caller has to know that.
-        $baseline = $this->analyzer->analyze($context, $summaries, $properties, $scopes, null, false, [], $keyBindings);
+        //
+        // This run also records the view of `$this` that a call on another
+        // object compares. The view includes what the probe runs read there.
+        $baseline = $this->analyzer->analyze(
+            $context,
+            $summaries,
+            $properties,
+            $scopes,
+            null,
+            false,
+            [],
+            $keyBindings,
+            $probeReads,
+        );
 
         return new FunctionSummary(
             $keyBindings === [] ? $context->key : FunctionSummary::variantKey($context->key, $keyBindings),

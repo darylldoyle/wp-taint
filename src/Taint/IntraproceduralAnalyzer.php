@@ -142,6 +142,9 @@ final class IntraproceduralAnalyzer
      * @param array<int, int|string> $keyBindings        for a summary variant, the literal each
      *                                                    bound parameter holds: see
      *                                                    {@see FunctionSummary::variantKey()}
+     * @param array<string, array<int, true>> $probeReads what the probe runs read through `$this`,
+     *                                                    for the run that seeds nothing: see
+     *                                                    {@see AnalysisResult::$receiverReads}
      */
     public function analyze(
         FunctionContext $context,
@@ -152,6 +155,7 @@ final class IntraproceduralAnalyzer
         bool $collectFindings = true,
         array $seedParts = [],
         array $keyBindings = [],
+        array $probeReads = [],
     ): AnalysisResult {
         // A probe run asks what one parameter reaches; it does not observe the
         // body as written, so nothing it writes belongs in the shared property
@@ -185,6 +189,7 @@ final class IntraproceduralAnalyzer
             $seedParts,
             $keyBindings,
             ! $sealed && $this->holdsBackReceiverWrites($context, $keyBindings, $summaries),
+            $probeReads,
         ))->run();
     }
 }

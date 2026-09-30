@@ -398,6 +398,14 @@ final class FunctionAnalysis
          * other writes land.
          */
         private readonly bool $holdsBackReceiver = false,
+        /**
+         * What this function's probe runs read through `$this`, by property
+         * and answer, for the view this run records: see
+         * {@see AnalysisResult::$receiverReads}.
+         *
+         * @var array<string, array<int, true>>
+         */
+        private readonly array $probeReads = [],
     ) {
         $this->state = new TaintState();
         $this->restParameters = new RestParameterSanitizer($registry, $summaries);
@@ -534,32 +542,52 @@ final class FunctionAnalysis
             $plain($this->revertedResiduals),
             array_keys($this->forwardedKeys),
             $this->recordsReceiver() ? $this->receiverView() : null,
+            $this->seedParameterIndex !== null && $this->runsOnOwnObjects() ? $this->receiverReads : [],
         );
     }
 
     /**
      * Whether this run records what it read and did through `$this`: a
      * method's own run, or a literal variant of it, with no parameter
-     * seeded. A probe run reads the same properties as the run that seeds
-     * nothing, and a receiver variant's view is never asked for.
+     * seeded. A receiver variant's view is never asked for.
+     *
+     * A probe run reads the same values as the run that seeds nothing, but
+     * not always the same answers. A check made only where the seed reaches
+     * a sink runs only in a probe: whether an option name is anchored asks
+     * whether `$this->prefix` was. So a probe hands its reads to the run
+     * that seeds nothing, and that run's view includes them.
      */
     private function recordsReceiver(): bool
     {
-        return $this->recordsReceiver ??= $this->seedParameterIndex === null
-            && ! isset($this->keyBindings[FunctionSummary::RECEIVER])
+        return $this->recordsReceiver ??= $this->seedParameterIndex === null && $this->runsOnOwnObjects();
+    }
+
+    /**
+     * Whether this run is on the method's own objects: a method's own run
+     * or a literal variant of it, seeded or not.
+     */
+    private function runsOnOwnObjects(): bool
+    {
+        return ! isset($this->keyBindings[FunctionSummary::RECEIVER])
             && $this->isInstanceContext()
             && ! $this->context->isClosure();
     }
 
     /**
      * What this run read and did through `$this`, with each property read
-     * as it stands at the end of the run.
+     * as it stands at the end of the run. The reads include the ones this
+     * function's probe runs made.
      */
     private function receiverView(): ReceiverView
     {
         $receiver = (string) $this->receiverKey();
         $properties = [];
         $reads = $this->receiverReads;
+
+        foreach ($this->probeReads as $property => $asked) {
+            $reads[$property] = ($reads[$property] ?? []) + $asked;
+        }
+
         ksort($reads);
 
         foreach ($reads as $property => $asked) {
