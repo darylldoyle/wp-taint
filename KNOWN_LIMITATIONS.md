@@ -1207,6 +1207,17 @@ property agrees, `$this->handler = 'acme_render'` in the constructor,
 A property whose writes disagree, or hold anything but a literal string or
 `array( $this|'Class', 'method' )` pair, stays unresolved.
 
+A computed method name with a literal head and tail resolves to each method
+that fits it. `$this->{ 'generate_' . $type . '_html' }( $k, $v )` is one of
+the `generate_*_html()` methods of the receiver's class, its ancestors and its
+descendants, and the call reaches all of them. A descendant counts because PHP
+runs the method of the object's own class. The list is complete only when the
+scan declares every one of those classes and none has `__call()`, so a parent
+outside the scan or a `__call()` leaves the call unresolved. A subclass
+outside the scan is not found, as for any call on `$this`. A name with only a
+literal head, `'validate_' . $type`, is not resolved this way yet.
+**Direction:** misses a subclass outside the scan.
+
 What does not: a callable arriving as a parameter, or returned by a call the
 engine cannot see into. A name that resolves to a function nobody can find a
 body for also counts as unresolved, rather than resolving to nothing and

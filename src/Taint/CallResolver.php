@@ -119,6 +119,16 @@ final class CallResolver
             }
         }
 
+        // `$this->{ 'generate_' . $type . '_html' }( $k, $v )`: each method
+        // of the receiver's classes that fits the name.
+        if ($direct->dynamic && $op instanceof Op\Expr\MethodCall) {
+            $fitting = $this->methodsFitting($op, $context, $types, $direct->arguments);
+
+            if ($fitting !== []) {
+                return $fitting;
+            }
+        }
+
         // `new $handler()` where `$handler` holds a class name.
         if ($direct->dynamic && $op instanceof Op\Expr\New_) {
             $constructed = $this->constructorsFor($op->class, $direct->arguments);
@@ -779,6 +789,154 @@ final class CallResolver
         }
 
         return $this->keysOf($matching);
+    }
+
+    /**
+     * The methods a computed name with a literal head and tail can name on a
+     * receiver of known class, each as a call of its own. The call reaches
+     * all of them, and their effects are joined.
+     *
+     * `$this->{ 'generate_' . $type . '_html' }( $k, $v )` in
+     * `WC_Settings_API` is one of the `generate_*_html()` methods of the
+     * class, its ancestors and its descendants. PHP runs the method of the
+     * object's own class, and that can be a subclass, so a descendant's
+     * method counts too. The list is complete only when the scan declares
+     * every one of those classes and none has `__call()`. Otherwise the call
+     * stays unresolved, and so does a name with no literal head or tail.
+     *
+     * @param list<Operand> $arguments
+     *
+     * @return list<CallTarget>
+     */
+    private function methodsFitting(
+        Op\Expr\MethodCall $op,
+        FunctionContext $context,
+        ClassTypeMap $types,
+        array $arguments,
+    ): array {
+        [$head, $tail] = self::affixesOf($op->name);
+
+        if ($head === '' || $tail === '') {
+            return [];
+        }
+
+        $class = $this->receiverClass($op->var, $context, $types);
+
+        if ($class === null) {
+            return [];
+        }
+
+        $hierarchy = $this->functions->classHierarchy();
+
+        foreach (array_keys($this->functions->relatedClasses(strtolower(ltrim($class, '\\')))) as $related) {
+            if (! $hierarchy->declares((string) $related)) {
+                return [];
+            }
+        }
+
+        $targets = [];
+
+        foreach ([$class, ...$hierarchy->descendantsOf($class)] as $each) {
+            foreach ($this->functions->methodsOf($each) as $method) {
+                $name = strtolower($method->name);
+
+                if ($name === '__call') {
+                    return [];
+                }
+
+                if (
+                    strlen($name) >= strlen($head) + strlen($tail)
+                    && str_starts_with($name, $head)
+                    && str_ends_with($name, $tail)
+                ) {
+                    $targets[$method->key] ??= CallTarget::resolved(
+                        $arguments,
+                        Matcher::method($method->className ?? $each, $method->name),
+                        $method->key,
+                        $method->displayName . '()',
+                    );
+                }
+            }
+        }
+
+        return array_values($targets);
+    }
+
+    /**
+     * The literal text a joined name starts and ends with, lowercased.
+     * `'generate_' . $type . '_html'` gives `generate_` and `_html`. Only a
+     * literal part counts, so the head and tail hold on every path.
+     *
+     * @return array{string, string}
+     */
+    private static function affixesOf(Operand $name): array
+    {
+        $parts = self::joinedParts($name, 0);
+
+        if (count($parts) < 2) {
+            return ['', ''];
+        }
+
+        $literals = array_map(
+            static fn (Operand $part): ?string => OperandHelper::literalString($part),
+            $parts,
+        );
+        $head = '';
+        $tail = '';
+
+        foreach ($literals as $literal) {
+            if ($literal === null) {
+                break;
+            }
+
+            $head .= $literal;
+        }
+
+        foreach (array_reverse($literals) as $literal) {
+            if ($literal === null) {
+                break;
+            }
+
+            $tail = $literal . $tail;
+        }
+
+        // A name that is all literal parts folds, and is not asked here.
+        if (! in_array(null, $literals, true)) {
+            return ['', ''];
+        }
+
+        return [strtolower($head), strtolower($tail)];
+    }
+
+    /**
+     * The parts of a joined string, in order, through copies and nested
+     * joins.
+     *
+     * @return list<Operand>
+     */
+    private static function joinedParts(Operand $operand, int $depth): array
+    {
+        $definition = $depth > 8 ? null : OperandHelper::definingOp($operand);
+        $parts = match (true) {
+            $definition instanceof Op\Expr\Assign => [$definition->expr],
+            $definition instanceof Op\Expr\BinaryOp\Concat => [$definition->left, $definition->right],
+            $definition instanceof Op\Expr\ConcatList => $definition->list,
+            default => null,
+        };
+
+        if ($parts === null) {
+            return [$operand];
+        }
+
+        $flat = [];
+
+        foreach ($parts as $part) {
+            if ($part instanceof Operand) {
+                array_push($flat, ...self::joinedParts($part, $depth + 1));
+            }
+        }
+
+        return $flat;
     }
 
     /**

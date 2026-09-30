@@ -9,6 +9,12 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A computed method name with a literal head and tail reaches each method of
+  the receiver's classes that fits it. WooCommerce's settings screens call
+  `$this->{ 'generate_' . $type . '_html' }( $k, $v )`, and each of those
+  methods escapes what it prints, so the field definitions no longer reach
+  the screen raw. A descendant's method counts. A parent outside the scan or a
+  `__call()` leaves the call unresolved, as before.
 - A private property declared as a literal array is read as that literal
   when nothing in the scan writes a property of its name. WooCommerce's report
   queries build a filtered where clause from
