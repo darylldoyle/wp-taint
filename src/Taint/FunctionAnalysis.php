@@ -436,7 +436,7 @@ final class FunctionAnalysis
             $registry,
             fn (Op\Expr\PropertyFetch $fetch): ?array => $this->propertySlotsOf($fetch, ReceiverView::ANCHORED),
         );
-        $this->guards = new GuardAnalyzer($resolver->values());
+        $this->guards = new GuardAnalyzer($resolver->values(), $context->className);
         $this->capabilityGuards = new CapabilityGuard($registry, $callGraph);
         $this->returnTaint = TaintSet::empty();
         $this->returnShape = Shape::empty();

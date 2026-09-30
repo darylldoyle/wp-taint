@@ -46,6 +46,14 @@ final class ConstantTable
     private array $unresolved = [];
 
     /**
+     * Class constants declared as a list of literal strings, by class and
+     * name, or false once a declaration of that name is anything else.
+     *
+     * @var array<string, list<string>|false>
+     */
+    private array $lists = [];
+
+    /**
      * Private properties declared with a literal array, by name, or false
      * once two declarations share the name.
      *
@@ -332,6 +340,37 @@ final class ConstantTable
     public function defineClassConstant(string $class, string $name, ?string $value): void
     {
         $this->define(self::classKey($class, $name), $value);
+    }
+
+    /**
+     * A class constant declared as an array: the strings in it, or null when
+     * one of its values is not a literal string.
+     *
+     * `const TAGS = array( 'div', 'p' );` is how a class keeps an allowlist.
+     * A second declaration under the same name that differs leaves the list
+     * unknown, as it does for a scalar.
+     *
+     * @param list<string>|null $values
+     */
+    public function defineClassConstantList(string $class, string $name, ?array $values): void
+    {
+        $key = self::classKey($class, $name);
+        $known = $this->lists[$key] ?? null;
+
+        $this->lists[$key] = $values === null || ($known !== null && $known !== $values) ? false : $values;
+    }
+
+    /**
+     * The strings a class constant's array holds, or null when it is not
+     * known to be a list of literal strings.
+     *
+     * @return list<string>|null
+     */
+    public function classConstantListOf(string $class, string $name): ?array
+    {
+        $values = $this->lists[self::classKey($class, $name)] ?? null;
+
+        return is_array($values) ? $values : null;
     }
 
     /**
