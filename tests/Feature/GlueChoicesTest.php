@@ -69,7 +69,8 @@ function glueChoiceArgumentFindings(string $second): array
                 }
                 public function run( \$args ) {
                     global \$wpdb;
-                    \$wpdb->query( 'SELECT id FROM t WHERE ' . \$this->status_clause( \$this->get_match_operator( \$args ) ) );
+                    \$status = \$this->status_clause( \$this->get_match_operator( \$args ) );
+                    \$wpdb->query( 'SELECT id FROM t WHERE ' . \$status );
                 }
             }
             PHP)),
@@ -82,5 +83,5 @@ it('runs a glue parameter as each of the few strings a call passes', function ()
 });
 
 it('still reports a glue parameter one of whose strings moves the quotes', function (): void {
-    expect(glueChoiceArgumentFindings("\"' OR \""))->toBe(['wp.sqli.wpdb-query@15']);
+    expect(glueChoiceArgumentFindings("\"' OR \""))->toBe(['wp.sqli.wpdb-query@16']);
 });
