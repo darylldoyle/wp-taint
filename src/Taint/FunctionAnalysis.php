@@ -6259,9 +6259,12 @@ final class FunctionAnalysis
             // A glue of a few known strings, `" $operator "` where
             // get_match_operator() returns 'AND' or 'OR', keeps the quotes
             // when every one of them does.
-            $glues = $argument === null ? [] : $this->resolver->values()->choiceStrings($argument, $this->boundOperands());
+            $glues = $argument === null
+                ? []
+                : $this->resolver->values()->choiceStrings($argument, $this->boundOperands());
+            $breaks = array_filter($glues, static fn (string $each): bool => ! self::keepsQuotes($each));
 
-            return $glues !== [] && array_filter($glues, static fn (string $each): bool => ! self::keepsQuotes($each)) === [];
+            return $glues !== [] && $breaks === [];
         }
 
         if (! $propagator->keepsResiduals) {
