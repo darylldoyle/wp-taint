@@ -6687,12 +6687,20 @@ final class FunctionAnalysis
      * receiver cost a full summary each. 3,264 of Site Kit's 5,464 receiver
      * variants came out equal to the base summary.
      *
-     * A variant bound to the receiver, once asked for and analysed, is the
-     * one the call keeps. Until then the call applies nothing, as for a
-     * callee not yet analysed: the method's own summary reads every object
-     * of its class, and what it hands back now would stay in whatever this
-     * run writes it to. Past the receiver cap the summary on the method's
-     * own objects applies, which reads every object this one could be.
+     * The summary on the method's own objects is asked first on every call,
+     * even once a variant bound to the receiver exists. A method that calls
+     * another on `$this` answers only when the callee's summary there is the
+     * one it applied itself, so a callee that kept a variant it no longer
+     * needed kept its callers running variants too. On Elementor that was
+     * `add_responsive_control()`: its variants ran 603 times for 40 seconds,
+     * and 187 times for 12 seconds once `add_control()` was asked first.
+     *
+     * When it does not answer, the variant bound to the receiver applies.
+     * Until a round has analysed it the call applies nothing, as for a callee
+     * not yet analysed: the method's own summary reads every object of its
+     * class, and what it hands back now would stay in whatever this run
+     * writes it to. Past the receiver cap the summary on the method's own
+     * objects applies, which reads every object this one could be.
      *
      * @param array<int, int|string> $literals
      *
@@ -6702,14 +6710,6 @@ final class FunctionAnalysis
     private function receiverVariantOf(string $key, FunctionSummary $summary, array $literals, string $receiver): array
     {
         $runsOn = $this->ownReceiverOf($key);
-        $bound = FunctionSummary::variantKey($key, $literals + [FunctionSummary::RECEIVER => $receiver]);
-        $variant = $this->summaries->get($bound);
-
-        if ($variant !== null) {
-            return [$variant, $receiver, true];
-        }
-
-        $capped = $this->summaries->isCapped($key, SummaryTable::RECEIVER_VARIANT);
         $own = $literals === [] ? $summary : $this->summaries->get(FunctionSummary::variantKey($key, $literals));
 
         // The literal variant first: it may answer for this receiver and
@@ -6729,7 +6729,14 @@ final class FunctionAnalysis
             return [$own, $receiver, true];
         }
 
-        if ($capped) {
+        $bound = FunctionSummary::variantKey($key, $literals + [FunctionSummary::RECEIVER => $receiver]);
+        $variant = $this->summaries->get($bound);
+
+        if ($variant !== null) {
+            return [$variant, $receiver, true];
+        }
+
+        if ($this->summaries->isCapped($key, SummaryTable::RECEIVER_VARIANT)) {
             return [$own, $receiver, false];
         }
 
@@ -6840,15 +6847,13 @@ final class FunctionAnalysis
             return $own;
         }
 
-        $bound = $this->summaries->get(
-            FunctionSummary::variantKey($callee, $literals + [FunctionSummary::RECEIVER => $receiver]),
-        );
-
-        if ($bound !== null) {
-            return $bound;
+        if ($own !== null && $this->answersFor($own, $receiver, $depth)) {
+            return $own;
         }
 
-        return $own !== null && $this->answersFor($own, $receiver, $depth) ? $own : null;
+        return $this->summaries->get(
+            FunctionSummary::variantKey($callee, $literals + [FunctionSummary::RECEIVER => $receiver]),
+        );
     }
 
     /**
