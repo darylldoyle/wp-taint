@@ -21,12 +21,13 @@ it('credits an allowlist held in a variable', function (): void {
     expect($result->findings->all())->toBe([]);
 });
 
-it('still does not credit a loose in_array()', function (): void {
+it('still does not credit a loose in_array() against numbers', function (): void {
+    // Before PHP 8, `'1<script>' == 1` holds.
     $result = scanCode(<<<'PHP'
         <?php
         function acme_set() {
             $name = $_POST['setting_name'];
-            $allowed = array( 'blogname', 'blogdescription' );
+            $allowed = array( 1, 2 );
             if ( ! in_array( $name, $allowed ) ) { return; }
             echo $name;
         }

@@ -449,7 +449,7 @@ for the same variable, so the two paths were always distinguishable.
 a numeric or boolean type, `is_string()` proves nothing, since the dangerous
 values are strings.
 
-For the checks php-cfg does not assert on, `ctype_*`, `in_array( …, true )`,
+For the checks php-cfg does not assert on, `ctype_*`, `in_array()`,
 `array_key_exists`, `preg_match`, a comparison with a literal, `empty()` and a
 `switch` case, {@see GuardAnalyzer} computes **dominators**
 over the block graph and asks whether the validating edge lies on every path to
@@ -487,6 +487,11 @@ the proof where it is computed, and keeps it through a join. The check covers:
   `in_array( strtoupper( $dir ), … )` covers `strtoupper( $dir )`. The
   normalisers are `strtoupper`, `strtolower`, `trim`, `ltrim`, `rtrim` and
   `sanitize_key`.
+- the value itself, when `in_array()` checks it with its case changed:
+  `in_array( strtolower( $tag ), $tags )` covers `$tag`, as Elementor's
+  `Utils::validate_html_tag()` returns it. Changing case changes only letters,
+  so this clears every payload and leaves the name: `DIV` may name a
+  different option than `div`. Only `strtolower` and `strtoupper` count.
 - either side of `&&` and `||`, both ways. `isset( $x ) && ctype_digit( $x )`
   proves `$x` digits where it is true, and nothing where it is false.
   `'grid' === $mode || 'list' === $mode` proves `$mode` one of the two where it
@@ -502,6 +507,11 @@ it to an empty value: `''`, `'0'`, `0`, `null`, `false` or an empty array. A
 counts when the constant holds exactly one string that is not numeric:
 `case self::DISMISS:` with `const DISMISS = 'acme_notice';`. A constant of
 unknown value could be `true`, which every non-empty string loosely equals.
+A loose `in_array()` holds the value to the list when every value of the list
+is a string that is not numeric. Such a list must be an array literal or a
+class constant declared as one, and `self::` names the method's own class.
+`static::` could name a subclass that declares the constant again, so it
+proves nothing.
 
 **What a guard proves, kind by kind.** A check against a fixed list of
 literals, or a number check, leaves nothing but an object id. A character check

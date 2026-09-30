@@ -155,11 +155,12 @@ it('does not credit a return that lets the request through by returning 0', func
         PHP))->toBeTrue();
 });
 
-it('does not credit a loose in_array()', function (): void {
+it('does not credit a loose in_array() against numbers', function (): void {
+    // Before PHP 8, `'1 OR 1' == 1` holds.
     expect(allowlistReportsTableName(<<<'PHP'
         function acme_permission( $request ) {
             $type = $request->get_param( 'objectType' );
-            if ( in_array( $type, array( 'post', 'term' ) ) ) {
+            if ( in_array( $type, array( 1, 2 ) ) ) {
                 return true;
             }
             return false;
