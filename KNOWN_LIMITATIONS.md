@@ -62,7 +62,8 @@ badge:
 | --- | --- |
 | [An array read or write with a computed key sees the whole array](#array-element-taint-is-per-key-when-both-ends-name-a-constant-key) | Over-reports |
 | [A parameter read through more than 61 parts is read whole past them](#array-element-taint-is-per-key-when-both-ends-name-a-constant-key) | Over-reports |
-| [Object properties are per class, not per instance](#object-properties-are-per-class-not-per-instance) | Over-reports |
+| [A property of an object the scan cannot name is shared by its class](#object-properties-are-per-object-where-the-scan-can-tell-which-one) | Over-reports |
+| [`get_object_vars( $this )`, a cast, a loop over `$this` or a closure reads no property](#object-properties-are-per-object-where-the-scan-can-tell-which-one) | Misses |
 | [A guard on a container is not followed](#a-guard-clause-is-followed-a-guard-on-a-container-is-not) | Over-reports |
 | [A value of unknown origin, with `--no-unknown-provenance`](#unknown-provenance-is-reported-by-default) | Misses |
 | [A context in a rebound or parameter-fed variable is not judged](#escaping-is-judged-against-its-context-but-not-a-computed-one) | Misses |
@@ -280,8 +281,10 @@ echo $this->opts['name'];               // in another: reported
 ```
 
 A write into an element of a property reaches the property, however many keys
-deep. A property is still one slot per class, so every instance shares what
-any instance wrote. A write under a key a call fixes, `add_sql_clause( 'where',
+deep. A property is one slot per object the scan can name, and per class for
+any other object: see [Object properties are per object where the scan can
+tell which one](#object-properties-are-per-object-where-the-scan-can-tell-which-one).
+A write under a key a call fixes, `add_sql_clause( 'where',
 $clause )`, lands under that key, and a read under another key does not see
 it. A key the scanner cannot name lands where every read sees it.
 **Direction:** over-reports.
@@ -302,16 +305,62 @@ or `static`, an include, `extract()`, `parse_str()`, a dynamic call or a
 variable variable, since a variable can change there without an op on its
 operand. **Direction:** over-reports.
 
-### Object properties are per class, not per instance
+### Object properties are per object where the scan can tell which one
 
-`Foo::$value` is one slot. Taint written to `$this->value` in any instance of
-`Foo` is visible from every read of `$value` on any `Foo`.
+```php
+$stats = new Acme_Query();
+$stats->add( 'limit', 'LIMIT ' . $_GET['n'] );
+$plain = new Acme_Query();
+$wpdb->get_results( $plain->statement() );   // not reported
+```
 
-Inheritance is followed: a write in the base class's constructor lands under
-the base class's key, and a read through the subclass unions the whole chain,
-the property is one storage slot on the instance whichever class's method
-touched it. What stays approximate is the *instance* dimension, not the class
-one.
+A property's value is kept per object the scan can name, and a method call
+runs on the object its receiver is. The scan names an object in three ways.
+
+- **A `new` expression.** Every object one `new` line makes is one object, so
+  two `new Acme_Query()` lines are two objects, and a loop that runs one line
+  ten times makes one.
+- **A property that holds one.** `$this->sub = new Acme_Query()` in the
+  constructor gives `$this->sub` that object, when the scan only ever gives a
+  property of that name new objects in that class, its ancestors and its
+  descendants. One other assignment anywhere, a copy or a reference, and the
+  property holds an object of its class, as below.
+- **`$this`.** A method runs on the objects of its class, and of each
+  descendant that inherits the method rather than declaring its own. A call to
+  `$this->helper()` runs the helper on the caller's objects, so a protected
+  helper in a base class that only a Stats subclass calls writes that
+  subclass's objects, not its siblings'.
+
+Anything else is an object of its class, which stands for every object of
+that class and its descendants. A write through it reaches all of them, and a
+read through it sees all of them. That covers a parameter, a return value and
+an object handed to a function that writes it.
+
+The order of writes is not followed. A query a method runs before it adds a
+LIMIT still sees the LIMIT, since any earlier call on the same object could
+have added one. Nor is a clear: `clear_sql_clause( 'limit' )` leaves what the
+clause held. A public method of the class that writes a property counts for
+every object of the class, whether or not the scan sees a call to it, because
+code outside the scan may call it first.
+
+A call on another object applies the method's own summary when the method
+would read and call the same there, with its writes to `$this` on that
+object. Otherwise the method runs again as a variant for that object. A
+method has up to 512 such variants. Past that, a call applies the method's
+own summary, which reads every object of its class, and its writes to `$this`
+still land on the object. A variant for a literal key the call passes counts
+against the cap of 16 that every literal variant has, and past that the
+method's own summary is the one the call applies or runs again.
+
+An object handed to a call by reference could come back as another object. The
+scan assumes it does not, as WordPress code does not pass objects that way. A
+computed property name on another object, `$wpdb->$table = ...`, is taken to
+hold a value, not a new object.
+
+**Four ways of reading `$this` read no property.** `get_object_vars( $this )`,
+`(array) $this`, `foreach ( $this as $value )` and a closure in a method that
+reads `$this->name` see nothing any method wrote, on any object. A copy of
+`$this`, `$that = $this`, reads the object the call runs on, as `$this` does.
 
 A property on an object whose class the scan cannot tell has one slot per
 name, shared across the whole scan. A read of `$obj->name` on any such object
@@ -334,7 +383,8 @@ that tainted a property, and a read splices it in ahead of its own step. Without
 that, roughly a fifth of corpus findings had traces that began "read from
 property `$x`" and stopped, which is not something a reviewer can act on.
 
-**Direction:** over-approximating.
+**Direction:** over-reports, and misses for the four ways of reading `$this`
+above.
 
 ### A guard clause is followed; a guard on a container is not
 
@@ -1051,7 +1101,7 @@ Some is on the reporting side:
   Redirection's `Red_Options::save()` can be reached from the front end,
   through a database version upgrade. The `url` on its write comes from
   `Redirection_IP::$ip`, which a front-end request fills from `$_SERVER`. See
-  [Object properties are per class](#object-properties-are-per-class-not-per-instance).
+  [Object properties are per object where the scan can tell which one](#object-properties-are-per-object-where-the-scan-can-tell-which-one).
 
 **Direction:** both, as listed.
 

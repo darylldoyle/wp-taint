@@ -14,8 +14,10 @@ use Enshrined\WpTaint\Finding\TraceStep;
  * is a single flow across two bodies. The interprocedural fixed point iterates
  * until this map stops changing.
  *
- * Not path-sensitive and not per-instance. A tainted `Foo::$value` taints every
- * read of `$value` on any `Foo`. Recorded in KNOWN_LIMITATIONS.md.
+ * Not path-sensitive. A slot is an object the scan can name, an allocation
+ * site such as `foo@file.php:12`, or a class, which stands for every object of
+ * it the scan cannot name. A tainted `Foo::$value` taints every read of
+ * `$value` on any `Foo` but those objects. Recorded in KNOWN_LIMITATIONS.md.
  *
  * Each entry carries the trace of the write that tainted it, so a finding whose
  * flow enters through a property read still shows where the value came from. A

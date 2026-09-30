@@ -179,6 +179,28 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A write to a property reached every object of its class. WooCommerce's
+  report stores share one query class, and a LIMIT one store built from an
+  option reached every other store's queries as a critical SQL finding. A
+  property is now kept per object where the scan can tell which one: every
+  object one `new` line makes, a property only ever given such an object, and
+  the objects a method runs on through `$this`. A method called on another
+  object runs on that object's properties. When it would read and call the
+  same there, its own summary applies, with its writes to `$this` on that
+  object. Anything else is an object of its class, as before. See
+  KNOWN_LIMITATIONS.md.
+- A call past a function's variant cap never saw the cap. It waited for its
+  variant for good, so a write it passed a property reached nothing. Past
+  the cap, a call now applies the function's own summary, property writes
+  included. Literal variants and variants for another object are capped
+  apart, at 16 and 512.
+- A glue built from a parameter turned the escaped values `implode()` joined
+  back into SQL. WooCommerce joins its report status clauses with
+  `implode( " $operator ", $subqueries )`, where `$operator` defaults to
+  `'AND'`. A call that leaves such a parameter out now binds it to its
+  literal default, and a call that passes one literal binds that, so the
+  glue is known text. A glue that can hold a quote still turns the values
+  back into SQL.
 - A write into an element of a property went nowhere, as a write two keys
   deep into a local array did before. `$this->opts['name'] = $_GET['n']` in
   one method left `echo $this->opts['name']` clean in another. It now reaches
