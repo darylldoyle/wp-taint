@@ -196,8 +196,9 @@ final class FunctionSummary
         /**
          * Whether every key parameter only picks an element, and no key is
          * handed on to a callee: see {@see KeyParameters::onlyPick()}. Such
-         * a function may have many more literal variants, since each one
-         * costs a run of its body and asks for no other.
+         * a function may have many more literal variants. Each one costs a
+         * run of its body, and any variant it asks of a callee counts against
+         * that callee's own cap.
          */
         public readonly bool $picksElements = false,
     ) {

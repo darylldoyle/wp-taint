@@ -377,7 +377,9 @@ part of a joined string. WooCommerce's `WC_Data::get_prop()` and `set_prop()`
 are two such functions. `get_prop()` is called with 183 prop names, so past
 16 each getter returned every prop, and a product's rating read as text. A
 function that hands its key to another function keeps the cap of 16, since
-each of its variants can ask for more. On a case with 200 props the higher
+each of its variants can ask for more. A joined string built from the key can
+still reach a callee and ask for a variant of it, which counts against the
+callee's own cap. On a case with 200 props the higher
 cap took the scan from 3.9 to 5.7 seconds and from 208MB to 310MB. On a copy
 of WooCommerce's product classes it took 5.5 seconds, against 6.6 before.
 **Direction:** past the cap, over-reports.

@@ -71,9 +71,11 @@ final class KeyParameters
      * - a part of a joined string, `'acme_get_' . $prop`
      *
      * WooCommerce's `WC_Data::get_prop()` and `set_prop()` are two such
-     * functions. A variant of one differs from its own run only in the
-     * element it reads or writes. It hands the key to no callee, so it asks
-     * for no variant of its own. See {@see FunctionSummary::$picksElements}.
+     * functions. A variant of one differs from its own run mostly in the
+     * element it reads or writes. It hands the key itself to no callee. A
+     * joined string can still reach one, `$this->other( 'x_' . $prop )`,
+     * and ask for a variant of it, which counts against the callee's own
+     * cap. See {@see FunctionSummary::$picksElements}.
      *
      * @param list<int> $keys the key parameters: see {@see of()}
      */
@@ -83,31 +85,89 @@ final class KeyParameters
             return false;
         }
 
-        $indexes = [];
+        $copies = [];
 
         foreach (array_values($func->params) as $index => $param) {
             if (in_array($index, $keys, true)) {
-                $indexes[spl_object_id($param->result)] = true;
+                $copies[spl_object_id($param->result)] = true;
             }
         }
 
-        foreach (BlockOrder::of($func->cfg) as $block) {
-            foreach ([...$block->phi, ...$block->children] as $op) {
-                foreach ($op->getVariableNames() as $name) {
-                    if (! is_string($name) || $op->isWriteVariable($name)) {
-                        continue;
-                    }
+        $ops = [];
 
-                    foreach (self::operandsIn(OperandHelper::readProperty($op, $name)) as $operand) {
-                        if (! self::picks($op, $name, $operand) && self::isCopyOf($operand, $indexes, [])) {
-                            return false;
-                        }
+        foreach (BlockOrder::of($func->cfg) as $block) {
+            array_push($ops, ...$block->phi, ...$block->children);
+        }
+
+        $copies = self::copiesOf($ops, $copies);
+
+        foreach ($ops as $op) {
+            foreach ($op->getVariableNames() as $name) {
+                if (! is_string($name) || $op->isWriteVariable($name)) {
+                    continue;
+                }
+
+                foreach (self::operandsIn(OperandHelper::readProperty($op, $name)) as $operand) {
+                    if (isset($copies[spl_object_id($operand)]) && ! self::picks($op, $name, $operand)) {
+                        return false;
                     }
                 }
             }
         }
 
         return true;
+    }
+
+    /**
+     * The parameters and every copy of them, through an assignment, a
+     * narrowed type or a phi. Grown until a pass adds nothing, so a loop's
+     * phi is found however the blocks are ordered.
+     *
+     * @param list<Op>         $ops
+     * @param array<int, true> $copies an operand's object id => true
+     *
+     * @return array<int, true>
+     */
+    private static function copiesOf(array $ops, array $copies): array
+    {
+        do {
+            $added = false;
+
+            foreach ($ops as $op) {
+                $into = match (true) {
+                    $op instanceof Op\Expr\Assign => isset($copies[spl_object_id($op->expr)])
+                        ? [$op->var, $op->result]
+                        : [],
+                    $op instanceof Op\Expr\Assertion => isset($copies[spl_object_id($op->expr)]) ? [$op->result] : [],
+                    $op instanceof Op\Phi => self::anyIn($op->vars, $copies) ? [$op->result] : [],
+                    default => [],
+                };
+
+                foreach ($into as $operand) {
+                    if (! isset($copies[spl_object_id($operand)])) {
+                        $copies[spl_object_id($operand)] = true;
+                        $added = true;
+                    }
+                }
+            }
+        } while ($added);
+
+        return $copies;
+    }
+
+    /**
+     * @param array<array-key, mixed> $operands
+     * @param array<int, true>        $copies
+     */
+    private static function anyIn(array $operands, array $copies): bool
+    {
+        foreach ($operands as $operand) {
+            if ($operand instanceof Operand && isset($copies[spl_object_id($operand)])) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -120,44 +180,6 @@ final class KeyParameters
         }
 
         return is_array($slot) ? array_values(array_filter($slot, static fn ($o): bool => $o instanceof Operand)) : [];
-    }
-
-    /**
-     * Whether an operand is one of the parameters, or a copy of one through
-     * an assignment, a narrowed type or a phi.
-     *
-     * @param array<int, true> $indexes a parameter operand's object id => true
-     * @param array<int, true> $seen
-     */
-    private static function isCopyOf(Operand $operand, array $indexes, array $seen): bool
-    {
-        $id = spl_object_id($operand);
-
-        if (isset($indexes[$id])) {
-            return true;
-        }
-
-        if (isset($seen[$id]) || count($seen) > self::MAX_HOPS) {
-            return false;
-        }
-
-        $seen[$id] = true;
-
-        foreach ($operand->ops as $writer) {
-            $from = match (true) {
-                $writer instanceof Op\Expr\Assign, $writer instanceof Op\Expr\Assertion => [$writer->expr],
-                $writer instanceof Op\Phi => $writer->vars,
-                default => [],
-            };
-
-            foreach ($from as $source) {
-                if ($source instanceof Operand && self::isCopyOf($source, $indexes, $seen)) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
     }
 
     /**
