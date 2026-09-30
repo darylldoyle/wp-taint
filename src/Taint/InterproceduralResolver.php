@@ -342,6 +342,17 @@ final class InterproceduralResolver
             $visible->put($summary);
         }
 
+        // And which functions are past a variant cap. Without them no call
+        // saw a cap: one past it waited for its variant for good, applying
+        // the summary without its property writes, or nothing at all for a
+        // call on another object. WooCommerce's WC_Data::set_prop() reached
+        // the receiver cap, so every setter past it wrote nothing.
+        foreach ($summaries->capped() as $capped => $kinds) {
+            foreach (array_keys($kinds) as $kind) {
+                $visible->markCapped($capped, (string) $kind);
+            }
+        }
+
         // Every shared read, attributed to the function doing it. Probe runs
         // read through sealed copies of the property map, which share the log.
         $log = new ReadLog();

@@ -73,3 +73,35 @@ it('still reads any element for a key the caller cannot name', function (): void
         }
         PHP))->toBe(['wp.xss.unescaped-output@7']);
 });
+
+// Past the cap a call applies the function's own summary, property writes
+// included. The cap used to stay in the table the rounds merge into, so no
+// call saw it and one past it waited for its variant for good.
+
+it('writes a property through a call past the variant cap', function (): void {
+    $keys = '';
+
+    for ($i = 0; $i < 17; $i++) {
+        $keys .= "    \$query->add( 'key{$i}', 'x' );\n";
+    }
+
+    expect(keyVariantFindings(<<<PHP
+        class Acme_Query {
+            private \$clauses = array( 'limit' => array() );
+            public function add( \$type, \$clause ) {
+                \$this->clauses[ \$type ][] = \$clause;
+            }
+            public function statement() {
+                return 'SELECT * FROM t ' . implode( ' ', \$this->clauses['limit'] );
+            }
+        }
+        function acme_many_keys( Acme_Query \$query ) {
+        {$keys}
+        }
+        function acme_limited( Acme_Query \$query ) {
+            global \$wpdb;
+            \$query->add( 'limit', 'LIMIT ' . \$_GET['n'] );
+            return \$wpdb->get_results( \$query->statement() );
+        }
+        PHP))->toBe(['wp.sqli.wpdb-query@34']);
+});
