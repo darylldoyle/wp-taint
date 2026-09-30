@@ -977,6 +977,16 @@ written. If a codebase really does let a low-privilege user write a path into
 an option outside the scanned tree, add a project-local `[[sources]]` entry
 with `kinds = ["path"]`.
 
+**An option WordPress saves as an integer is clean.** `sanitize_option()`
+casts `posts_per_page`, `posts_per_rss` and 23 more to integers before
+`update_option()` or `update_site_option()` saves them, so
+`get_option( 'posts_per_page' )` is a number. It is clean whatever the scan
+saw written to it. Only a name the scan can fold counts: a name that may be
+one of these or another option reads as stored data. A filter on the option,
+`option_posts_per_page`, can still return text, and so can a direct write to
+the options table. Both are code, not stored data, and neither is followed.
+**Direction:** misses.
+
 ### An option only an administrator can write stores nothing
 
 A write only an administrator can make stores nothing in the option. A later

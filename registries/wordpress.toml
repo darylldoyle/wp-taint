@@ -144,15 +144,37 @@ function = "get_metadata"
 kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv", "storage"]
 stored = true
 
+# WordPress saves these options as integers: sanitize_option() casts each one
+# before update_option() or update_site_option() stores it (formatting.php,
+# the absint() cases and the (int) case for posts_per_page and posts_per_rss).
+# WooCommerce's report stores put `get_option( 'posts_per_page' )` into a LIMIT
+# clause, which was 36 critical SQL findings. A filter on the option can still
+# return anything, as any filter can; that is code, not stored data.
 [[sources]]
 function = "get_option"
 kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv", "storage"]
 stored = true
+clean_literals = [
+    "posts_per_page", "posts_per_rss",
+    "thumbnail_size_w", "thumbnail_size_h", "medium_size_w", "medium_size_h", "medium_large_size_w",
+    "medium_large_size_h", "large_size_w", "large_size_h", "mailserver_port", "comment_max_links", "page_on_front",
+    "page_for_posts", "rss_excerpt_length", "default_category", "default_email_category", "default_link_category",
+    "close_comments_days_old", "comments_per_page", "thread_comments_depth", "users_can_register", "start_of_week",
+    "site_icon", "fileupload_maxk",
+]
 
 [[sources]]
 function = "get_site_option"
 kinds = ["html", "html_attr", "sql", "unserialize_stored", "csv", "storage"]
 stored = true
+clean_literals = [
+    "posts_per_page", "posts_per_rss",
+    "thumbnail_size_w", "thumbnail_size_h", "medium_size_w", "medium_size_h", "medium_large_size_w",
+    "medium_large_size_h", "large_size_w", "large_size_h", "mailserver_port", "comment_max_links", "page_on_front",
+    "page_for_posts", "rss_excerpt_length", "default_category", "default_email_category", "default_link_category",
+    "close_comments_days_old", "comments_per_page", "thread_comments_depth", "users_can_register", "start_of_week",
+    "site_icon", "fileupload_maxk",
+]
 
 [[sources]]
 function = "get_transient"

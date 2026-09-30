@@ -173,6 +173,12 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- An option WordPress saves as an integer reads as clean.
+  `get_option( 'posts_per_page' )` and 24 more are numbers, since
+  `sanitize_option()` casts them before they are saved. WooCommerce's report
+  stores put `posts_per_page` into a LIMIT clause, and each store's queries
+  were reported as SQL injection.
+
 - A function that builds an array literal per element of its parameter,
   `$items[ $i ] = array( 'title' => $post->post_title, 'color' => 'red' )`,
   handed each row back as one set. A caller then read the title's taint under

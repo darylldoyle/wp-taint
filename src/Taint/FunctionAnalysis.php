@@ -4635,6 +4635,15 @@ final class FunctionAnalysis
             return false;
         }
 
+        if ($source->cleanLiterals !== []) {
+            $argument = $call->argument($source->argumentIndex);
+            $names = $argument === null ? [] : $this->resolver->values()->knownStrings($argument);
+
+            if ($names !== [] && array_diff($names, $source->cleanLiterals) === []) {
+                return false;
+            }
+        }
+
         if ($source->argumentLiteralContains === null) {
             return true;
         }

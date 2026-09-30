@@ -84,6 +84,14 @@ final class Source
         public readonly ?int $filterArgument = null,
         /** Where `filter_input()`'s options are: `options.default` comes back unfiltered. */
         public readonly ?int $optionsArgument = null,
+        /**
+         * The literals at `arg` for which the call hands back nothing
+         * untrusted. `get_option( 'posts_per_page' )` is an integer:
+         * WordPress casts it before it saves it.
+         *
+         * @var list<string>
+         */
+        public readonly array $cleanLiterals = [],
     ) {
     }
 
