@@ -69,7 +69,9 @@ function glueChoiceArgumentFindings(string $second): array
                 }
                 public function run( \$args ) {
                     global \$wpdb;
-                    \$wpdb->query( 'SELECT id FROM t WHERE ' . \$this->status_clause( \$this->get_match_operator( \$args ) ) );
+                    \$wpdb->query(
+                        'SELECT id FROM t WHERE ' . \$this->status_clause( \$this->get_match_operator( \$args ) )
+                    );
                 }
             }
             PHP)),
