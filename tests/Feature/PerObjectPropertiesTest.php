@@ -51,8 +51,12 @@ it('keeps a write through one subclass away from a sibling subclass', function (
             public function limit() {
                 $this->add( 'limit', 'LIMIT ' . $_GET['n'] );
             }
+            public function run() {
+                global $wpdb;
+                return $wpdb->get_results( $this->statement() );
+            }
         }
-        PHP))->toBe([]);
+        PHP))->toBe(['wp.sqli.wpdb-query@25']);
 });
 
 it('keeps a write to one new object away from another', function (): void {
@@ -204,8 +208,12 @@ it('keeps a write in a subclass nothing calls off another subclass\'s object', f
             public function never_called() {
                 $this->add( 'limit', 'LIMIT ' . get_option( 'posts_per_page' ) );
             }
+            public function run() {
+                global $wpdb;
+                return $wpdb->get_results( $this->statement() );
+            }
         }
-        PHP))->toBe([]);
+        PHP))->toBe(['wp.sqli.wpdb-query@25']);
 });
 
 it('keeps a write to a new object off a subclass\'s object', function (): void {
@@ -218,10 +226,12 @@ it('keeps a write to a new object off a subclass\'s object', function (): void {
             }
         }
         function acme_never_called() {
+            global $wpdb;
             $query = new Acme_Query();
             $query->add( 'limit', 'LIMIT ' . get_option( 'posts_per_page' ) );
+            return $wpdb->get_results( $query->statement() );
         }
-        PHP))->toBe([]);
+        PHP))->toBe(['wp.sqli.wpdb-query@23']);
 });
 
 it('keeps a subclass method\'s write off an object of the base class', function (): void {
@@ -230,6 +240,10 @@ it('keeps a subclass method\'s write off an object of the base class', function 
             public function add_limit() {
                 $this->add( 'limit', 'LIMIT ' . $_GET['per_page'] );
             }
+            public function run() {
+                global $wpdb;
+                return $wpdb->get_results( $this->statement() );
+            }
         }
         function acme_plain_report() {
             global $wpdb;
@@ -237,13 +251,14 @@ it('keeps a subclass method\'s write off an object of the base class', function 
             $query->add( 'select', 'id' );
             $wpdb->get_results( $query->statement() );
         }
-        PHP))->toBe([]);
+        PHP))->toBe(['wp.sqli.wpdb-query@18']);
 });
 
 // One summary serves every object it answers for. A method that reads a
-// property the objects hold apart still runs once for each of them.
+// property the objects hold apart still runs once for each of them. These
+// tests check the findings, which are the same whichever summary applied.
 
-it('shares a summary across objects that read the same, and still reports each flow', function (): void {
+it('reports each flow through a method that objects of two classes share', function (): void {
     expect(perObjectFindings(<<<'PHP'
         class Acme_Store {
             protected $where = '1=1';
@@ -272,12 +287,13 @@ it('shares a summary across objects that read the same, and still reports each f
 });
 
 it('runs a method again on an object whose property holds something else', function (): void {
+    // The query is in the caller. The method's own run reads every object's
+    // table, so reusing its summary for the coupons would report line 20.
     expect(perObjectFindings(<<<'PHP'
         class Acme_Store {
             protected $table = 'posts';
-            public function count() {
-                global $wpdb;
-                return $wpdb->get_var( 'SELECT COUNT(*) FROM ' . $this->table );
+            public function sql() {
+                return 'SELECT COUNT(*) FROM ' . $this->table;
             }
         }
         class Acme_Orders extends Acme_Store {
@@ -288,11 +304,82 @@ it('runs a method again on an object whose property holds something else', funct
         class Acme_Coupons extends Acme_Store {
         }
         function acme_counts() {
+            global $wpdb;
             $orders = new Acme_Orders();
             $coupons = new Acme_Coupons();
-            return array( $orders->count(), $coupons->count() );
+            $wpdb->get_var( $orders->sql() );
+            $wpdb->get_var( $coupons->sql() );
         }
-        PHP))->toBe(['wp.sqli.wpdb-query@6']);
+        PHP))->toBe(['wp.sqli.wpdb-query@19']);
+});
+
+/**
+ * Two stores whose `$where` holds apart, and a caller that queries each
+ * through `$sql`, a method body of Acme_Store that returns the query. The
+ * orders query is at line 19 plus the lines `$sql` has.
+ */
+function perObjectStores(string $sql): string
+{
+    return <<<PHP
+        class Acme_Store {
+            protected \$where = '1=1';
+        {$sql}
+            protected function where_clause() {
+                return \$this->where;
+            }
+        }
+        class Acme_Orders extends Acme_Store {
+            public function __construct() {
+                \$this->where = \$_GET['field'];
+            }
+        }
+        class Acme_Coupons extends Acme_Store {
+        }
+        function acme_stores() {
+            global \$wpdb;
+            \$orders = new Acme_Orders();
+            \$coupons = new Acme_Coupons();
+            \$wpdb->get_results( \$orders->sql() );
+            \$wpdb->get_results( \$coupons->sql() );
+        }
+        PHP;
+}
+
+it('runs a method again when a method it calls on $this reads something else there', function (): void {
+    expect(perObjectFindings(perObjectStores(<<<'PHP'
+            public function sql() {
+                return 'SELECT * FROM t WHERE ' . $this->where_clause();
+            }
+        PHP)))->toBe(['wp.sqli.wpdb-query@22']);
+});
+
+it('runs a method again when it calls itself on $this', function (): void {
+    expect(perObjectFindings(perObjectStores(<<<'PHP'
+            public function sql( $depth = 1 ) {
+                if ( $depth > 0 ) {
+                    return $this->sql( $depth - 1 );
+                }
+                return 'SELECT * FROM t WHERE ' . $this->where_clause();
+            }
+        PHP)))->toBe(['wp.sqli.wpdb-query@25']);
+});
+
+it('runs a method again when a call chain on $this is deeper than the check follows', function (): void {
+    $chain = '';
+
+    for ($i = 0; $i < 20; $i++) {
+        $next = $i + 1;
+        $chain .= "    protected function step{$i}() {\n        return \$this->step{$next}();\n    }\n";
+    }
+
+    $chain .= "    protected function step20() {\n        return \$this->where_clause();\n    }\n";
+
+    expect(perObjectFindings(perObjectStores(<<<PHP
+            public function sql() {
+                return 'SELECT * FROM t WHERE ' . \$this->step0();
+            }
+        {$chain}
+        PHP)))->toBe(['wp.sqli.wpdb-query@86']);
 });
 
 it('keeps a held-back helper\'s own write on the subclass that calls it', function (): void {
@@ -667,8 +754,12 @@ it('keeps the receiver variants going past the literal cap', function (): void {
             public function limit() {
                 \$this->add( 'limit', 'LIMIT ' . \$_GET['n'] );
             }
+            public function run() {
+                global \$wpdb;
+                return \$wpdb->get_results( \$this->statement() );
+            }
         }
-        PHP))->toBe([]);
+        PHP))->toBe(['wp.sqli.wpdb-query@45']);
 });
 
 // A literal variant a call on `$this` asks for counts against the literal

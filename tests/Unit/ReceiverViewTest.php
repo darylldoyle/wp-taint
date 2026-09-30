@@ -51,6 +51,30 @@ it('unions two bodies that saw the same, and marks two that did not', function (
         ->and($clean->union($tainted)->opaque)->toBeTrue();
 });
 
+it('marks the union of two bodies that called or held different things', function (): void {
+    $applied = new ReceiverView([], ['acme::add' => ['acme::add', [], 'acme::add']]);
+    $waiting = new ReceiverView([], ['acme::add' => ['acme::add', [], null]]);
+    $other = new ReceiverView([], ['acme::clear' => ['acme::clear', [], 'acme::clear']]);
+    $one = new ReceiverView([], [], ['sub' => 'acme_query@a.php:3']);
+    $none = new ReceiverView([], [], ['sub' => null]);
+
+    expect($applied->union($applied)->opaque)->toBeFalse()
+        ->and($applied->union($waiting)->opaque)->toBeTrue()
+        ->and($applied->union($other)->opaque)->toBeFalse()
+        ->and(array_keys($applied->union($other)->calls))->toBe(['acme::add', 'acme::clear'])
+        ->and($one->union($one)->opaque)->toBeFalse()
+        ->and($one->union($none)->opaque)->toBeTrue()
+        ->and($one->union(new ReceiverView())->allocations)->toBe(['sub' => 'acme_query@a.php:3']);
+});
+
+it('keeps the write flag of either body in the union', function (): void {
+    $wrote = new ReceiverView(writes: true);
+
+    expect($wrote->union(new ReceiverView())->writes)->toBeTrue()
+        ->and((new ReceiverView())->union($wrote)->writes)->toBeTrue()
+        ->and((new ReceiverView())->union(new ReceiverView())->writes)->toBeFalse();
+});
+
 it('is equal only to a view of the same reads, calls and sites', function (): void {
     $view = new ReceiverView(
         ['limit' => [ReceiverView::VALUE => Shape::empty()]],
