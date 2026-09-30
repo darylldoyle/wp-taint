@@ -90,7 +90,7 @@ final class ConstantTableBuilder
                             }
                         }
 
-                        $this->collect($next, $resolver, $op, $class);
+                        $this->collect($next, $resolver, $op, $class, $context);
                     }
                 }
 
@@ -286,8 +286,13 @@ final class ConstantTableBuilder
         return $flat;
     }
 
-    private function collect(ConstantTable $table, ValueResolver $resolver, mixed $op, ?string $class = null): void
-    {
+    private function collect(
+        ConstantTable $table,
+        ValueResolver $resolver,
+        mixed $op,
+        ?string $class = null,
+        ?FunctionContext $context = null,
+    ): void {
         // A private property declared as a literal array, and every write to a
         // property of any name, so a read can tell whether the declaration is
         // still its value. See ConstantTable::fixedPropertyDefault().
@@ -309,8 +314,32 @@ final class ConstantTableBuilder
         }
 
         if ($op instanceof Op\Expr\PropertyFetch) {
-            if (self::mayChange($op->result, 0)) {
-                $table->markPropertyWritten(OperandHelper::literalString($op->name));
+            $name = OperandHelper::literalString($op->name);
+
+            // An assignment to the property is a writer of the fetch's
+            // result, not a usage of it.
+            $assigned = OperandHelper::isWrittenElsewhere($op->result, $op);
+
+            if ($assigned || self::mayChange($op->result, 0)) {
+                $table->markPropertyWritten($name);
+            }
+
+            if ($assigned || self::mayRebind($op->result)) {
+                $site = $context === null ? null : self::allocationAssigned($op, $context);
+
+                if ($site !== null && $name !== null && $context?->className !== null) {
+                    $table->recordPropertyAllocation($context->className, $name, $site);
+                } else {
+                    $onThis = OperandHelper::variableName($op->var) === 'this';
+
+                    // A computed name on another object, `$wpdb->$table = ...`,
+                    // is taken to be a value of that object's own. Read as
+                    // any property of any object, one such line anywhere
+                    // left every property of the scan unknown.
+                    if ($onThis || $name !== null) {
+                        $table->markPropertyNotAllocated($onThis ? $context?->className : null, $name);
+                    }
+                }
             }
 
             return;
@@ -362,6 +391,76 @@ final class ConstantTableBuilder
         }
 
         $table->define($name, self::single($resolver->strings($arguments[1])));
+    }
+
+    /**
+     * The allocation site of `$this->name = new Acme_Query( ... )`, when that
+     * assignment is the one thing done to the fetch. Null for anything else.
+     */
+    private static function allocationAssigned(Op\Expr\PropertyFetch $fetch, FunctionContext $context): ?string
+    {
+        if (OperandHelper::variableName($fetch->var) !== 'this' || self::mayRebind($fetch->result)) {
+            return null;
+        }
+
+        $writers = array_values(array_filter(
+            $fetch->result->ops,
+            static fn (Op $writer): bool => $writer !== $fetch,
+        ));
+        $assign = $writers[0] ?? null;
+
+        if (count($writers) !== 1 || ! $assign instanceof Op\Expr\Assign || $assign->var !== $fetch->result) {
+            return null;
+        }
+
+        $new = OperandHelper::definingOp($assign->expr);
+        $class = $new instanceof Op\Expr\New_ ? OperandHelper::literalString($new->class) : null;
+
+        if ($class === null || in_array(strtolower($class), ['self', 'static', 'parent'], true)) {
+            return null;
+        }
+
+        return ConstantTable::allocationSite($class, $context->file->relativePath, (int) $new->getAttribute('startLine'));
+    }
+
+    /**
+     * Whether a property fetch's result is used in a way that could make the
+     * property hold a different object: assigned, bound by reference, or the
+     * base of an element write. A method call on the object it holds, a read
+     * of one of that object's properties, or handing it to a call, leaves it
+     * holding the same object.
+     */
+    private static function mayRebind(Operand $operand): bool
+    {
+        foreach ($operand->usages as $usage) {
+            $keeps = match (true) {
+                // An object handed to a call is the same object when it comes
+                // back. Only a parameter taken by reference could put another
+                // there, and WordPress code does not pass objects that way.
+                $usage instanceof Op\Expr\MethodCall,
+                $usage instanceof Op\Expr\StaticCall,
+                $usage instanceof Op\Expr\FuncCall,
+                $usage instanceof Op\Expr\NsFuncCall,
+                $usage instanceof Op\Expr\New_ => true,
+                // Unset leaves no object, so none the property could hold.
+                $usage instanceof Op\Terminal\Unset_ => true,
+                $usage instanceof Op\Expr\PropertyFetch => $usage->var === $operand,
+                $usage instanceof Op\Expr\Assign => $usage->expr === $operand && $usage->var !== $operand,
+                $usage instanceof Op\Expr\Isset_,
+                $usage instanceof Op\Expr\Empty_,
+                $usage instanceof Op\Expr\InstanceOf_ => true,
+                $usage instanceof Op\Expr\ArrayDimFetch => $usage->var === $operand
+                    && ! OperandHelper::isWrittenElsewhere($usage->result, $usage)
+                    && ! self::mayChange($usage->result, 1),
+                default => false,
+            };
+
+            if (! $keeps) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

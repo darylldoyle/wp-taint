@@ -49,6 +49,11 @@ final class PropertyTaintMap
     /** @var array<string, bool> */
     private array $anchored = [];
 
+    /** @var array<string, list<string>> property => allocation sites, see allocatedOwners() */
+    private array $allocated = [];
+
+    private int $allocatedFor = -1;
+
     /**
      * Each property's value as a shape: its own taint on top and, for an
      * array, its elements under their keys, so a read of `$this->opts['mode']`
@@ -106,6 +111,33 @@ final class PropertyTaintMap
         $this->log?->record('p:' . self::key($class, $property));
 
         return $this->taint[self::key($class, $property)] ?? Shape::empty();
+    }
+
+    /**
+     * The allocation sites whose objects had this property written: see
+     * {@see \Enshrined\WpTaint\Cfg\ConstantTable::allocationSite()}.
+     *
+     * @return list<string>
+     */
+    public function allocatedOwners(string $property): array
+    {
+        $this->log?->record('p*:' . $property);
+
+        if ($this->allocatedFor !== count($this->tracked)) {
+            $this->allocated = [];
+
+            foreach (array_keys($this->tracked) as $key) {
+                $at = strrpos($key, '::');
+
+                if ($at !== false && str_contains(substr($key, 0, $at), '@')) {
+                    $this->allocated[substr($key, $at + 2)][] = substr($key, 0, $at);
+                }
+            }
+
+            $this->allocatedFor = count($this->tracked);
+        }
+
+        return $this->allocated[$property] ?? [];
     }
 
     public function isTracked(?string $class, string $property): bool
@@ -388,6 +420,10 @@ final class PropertyTaintMap
 
     private static function key(?string $class, string $property): string
     {
-        return strtolower($class ?? '?') . '::' . $property;
+        // `class#method` names the objects a method runs on, which keep their
+        // properties under their class.
+        $at = $class === null ? false : strpos($class, '#');
+
+        return strtolower($at === false ? ($class ?? '?') : substr($class, 0, $at)) . '::' . $property;
     }
 }

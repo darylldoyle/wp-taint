@@ -90,6 +90,15 @@ final class ValueResolver
     private array $bound = [];
 
     /**
+     * The constants this resolver folds names through, for the property
+     * allocations recorded beside them.
+     */
+    public function constants(): ?ConstantTable
+    {
+        return $this->constants;
+    }
+
+    /**
      * Every constant string this operand can hold.
      *
      * @return list<string> empty when any of its values cannot be pinned down

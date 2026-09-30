@@ -67,6 +67,13 @@ final class LiteralAnchor
         private readonly ?FunctionContext $context = null,
         private readonly ?ClassTypeMap $types = null,
         private readonly ?Registry $registry = null,
+        /**
+         * The slots a read of a property sees, as the dataflow finds them:
+         * see {@see FunctionAnalysis::propertySlotsOf()}.
+         *
+         * @var (\Closure(Op\Expr\PropertyFetch): (list<string|null>|null))|null
+         */
+        private readonly ?\Closure $slots = null,
     ) {
     }
 
@@ -223,6 +230,18 @@ final class LiteralAnchor
         $property = OperandHelper::literalString($definition->name);
 
         if ($property === null) {
+            return true;
+        }
+
+        $slots = $this->slots === null ? null : ($this->slots)($definition);
+
+        if ($slots !== null) {
+            foreach ($slots as $slot) {
+                if (! $this->properties->isAnchored($slot, $property)) {
+                    return false;
+                }
+            }
+
             return true;
         }
 

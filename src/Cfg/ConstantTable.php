@@ -56,6 +56,12 @@ final class ConstantTable
     /** @var array<string, true> property names code writes */
     private array $writtenProperties = [];
 
+    /** @var array<string, array<string, array<string, true>>> property => owner class => allocation sites */
+    private array $allocations = [];
+
+    /** @var array<string, array<string, true>> property or '*' => owner class or '*' => true */
+    private array $notAllocated = [];
+
     private bool $anyPropertyWritten = false;
 
     /**
@@ -137,6 +143,68 @@ final class ConstantTable
         $default = $this->fixedProperties[$name] ?? null;
 
         return $default instanceof Operand ? $default : null;
+    }
+
+    /**
+     * The key of the objects one `new` expression creates: its class, file and
+     * line. Every object made there shares the key.
+     */
+    public static function allocationSite(string $class, string $file, int $line): string
+    {
+        return strtolower(ltrim($class, '\\')) . '@' . $file . ':' . $line;
+    }
+
+    /**
+     * The class of an allocation site's objects, or null for a class key.
+     */
+    public static function allocatedClass(string $key): ?string
+    {
+        $at = strpos($key, '@');
+
+        return $at === false ? null : substr($key, 0, $at);
+    }
+
+    /**
+     * `$this->subquery = new SqlQuery( ... )`, seen in a method of `$owner`.
+     *
+     * The allocation site is the object, for a property only ever given a new
+     * object of a named class: see {@see allocationsOf()}.
+     */
+    public function recordPropertyAllocation(string $owner, string $name, string $site): void
+    {
+        $this->allocations[$name][strtolower($owner)][$site] = true;
+    }
+
+    /**
+     * A property given anything but a new object of a named class: a value, a
+     * reference, a copy of another object. `$owner` is the class whose method
+     * gives it through `$this`, and null for any other receiver, which could be
+     * an object of any class. `$name` is null for a computed name, which could
+     * be any property.
+     */
+    public function markPropertyNotAllocated(?string $owner, ?string $name): void
+    {
+        $this->notAllocated[$name ?? '*'][$owner === null ? '*' : strtolower($owner)] = true;
+    }
+
+    /**
+     * The allocation sites a property of this name is given, by the class
+     * whose method gives it through `$this`, and the classes that give it
+     * something else. Null when a receiver of any class is given something
+     * else under this name.
+     *
+     * @return array{array<string, array<string, true>>, array<string, true>}|null
+     *         owner class => sites, and the owner classes that give anything else
+     */
+    public function allocationsOf(string $name): ?array
+    {
+        $other = ($this->notAllocated[$name] ?? []) + ($this->notAllocated['*'] ?? []);
+
+        if (isset($other['*'])) {
+            return null;
+        }
+
+        return [$this->allocations[$name] ?? [], $other];
     }
 
     public function defineClassConstant(string $class, string $name, ?string $value): void

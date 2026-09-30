@@ -40,6 +40,13 @@ final class OriginClassifier
         private readonly PropertyTaintMap $properties,
         private readonly ReceiverResolver $receivers,
         private readonly ClassHierarchy $hierarchy = new ClassHierarchy(),
+        /**
+         * The slots a read of a property sees, as the dataflow finds them:
+         * see {@see FunctionAnalysis::propertySlotsOf()}.
+         *
+         * @var (\Closure(Op\Expr\PropertyFetch): (list<string|null>|null))|null
+         */
+        private readonly ?\Closure $slots = null,
     ) {
     }
 
@@ -225,9 +232,29 @@ final class OriginClassifier
         // A `protected $table` written in the base class's constructor and read
         // through the subclass lands under the base class's key, and the flat
         // lookup used to miss it.
-        foreach ($owner === null ? [null] : $this->hierarchy->lookupOrder($owner) as $candidate) {
-            if ($this->properties->isTracked($candidate, $property)) {
-                return $this->properties->get($candidate, $property)->isEmpty();
+        $slots = $this->slots === null ? null : ($this->slots)($fetch);
+
+        if ($slots !== null) {
+            $tracked = false;
+
+            foreach ($slots as $slot) {
+                if ($this->properties->isTracked($slot, $property)) {
+                    $tracked = true;
+
+                    if (! $this->properties->get($slot, $property)->isEmpty()) {
+                        return false;
+                    }
+                }
+            }
+
+            if ($tracked) {
+                return true;
+            }
+        } else {
+            foreach ($owner === null ? [null] : $this->hierarchy->lookupOrder($owner) as $candidate) {
+                if ($this->properties->isTracked($candidate, $property)) {
+                    return $this->properties->get($candidate, $property)->isEmpty();
+                }
             }
         }
 

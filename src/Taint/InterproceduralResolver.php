@@ -63,6 +63,13 @@ final class InterproceduralResolver
      */
     private const MAX_VARIANTS = 16;
 
+    /**
+     * How many receiver variants one function may have: one per class or
+     * allocation site it runs on. Past the cap a call applies the function's
+     * own summary.
+     */
+    private const MAX_RECEIVER_VARIANTS = 512;
+
     public function __construct(
         private readonly IntraproceduralAnalyzer $analyzer,
         private readonly SummaryExtractor $extractor,
@@ -226,7 +233,7 @@ final class InterproceduralResolver
                     // Past the cap a call applies the function's own summary,
                     // property writes included, which it held back while it
                     // waited. Its callers run again to do so.
-                    if (count($variants[$base] ?? []) >= self::MAX_VARIANTS) {
+                    if (self::variantsLike($variants[$base] ?? [], $bindings) >= self::capFor($bindings)) {
                         if (! $summaries->isCapped($base)) {
                             $summaries->markCapped($base);
                             $changed = true;
@@ -422,6 +429,23 @@ final class InterproceduralResolver
                     $dirty,
                     $produced,
                 );
+
+                // A receiver variant's body runs on that receiver, so its
+                // property writes land, as the function's own run's do.
+                if (isset($bindings[FunctionSummary::RECEIVER])) {
+                    foreach ($contexts as $context) {
+                        $this->analyzer->analyze(
+                            $context,
+                            $visible,
+                            $roundProperties,
+                            $roundScopes,
+                            null,
+                            false,
+                            [],
+                            $bindings,
+                        );
+                    }
+                }
             }
         }
 
@@ -495,6 +519,35 @@ final class InterproceduralResolver
                 $dirty[$reader] = true;
             }
         }
+    }
+
+    /**
+     * How many variants of the same kind as `$bindings` a function has: with
+     * a receiver, or without one.
+     *
+     * @param array<string, array<int, int|string>> $existing
+     * @param array<int, int|string>                $bindings
+     */
+    private static function variantsLike(array $existing, array $bindings): int
+    {
+        $receiver = isset($bindings[FunctionSummary::RECEIVER]);
+        $count = 0;
+
+        foreach ($existing as $each) {
+            if (isset($each[FunctionSummary::RECEIVER]) === $receiver) {
+                $count++;
+            }
+        }
+
+        return $count;
+    }
+
+    /**
+     * @param array<int, int|string> $bindings
+     */
+    private static function capFor(array $bindings): int
+    {
+        return isset($bindings[FunctionSummary::RECEIVER]) ? self::MAX_RECEIVER_VARIANTS : self::MAX_VARIANTS;
     }
 
     private static function isMain(FunctionMeta|FunctionContext $function): bool

@@ -94,6 +94,9 @@ final class CallGraph
      */
     private ?array $methodsByName = null;
 
+    /** @var array<string, list<string>>|null callee key => caller keys, built on first use */
+    private ?array $callers = null;
+
     public function addFunction(string $key): void
     {
         $this->known[$key] = true;
@@ -161,6 +164,51 @@ final class CallGraph
     public function hasCaller(string $key): bool
     {
         return isset($this->called[$key]);
+    }
+
+    /**
+     * Whether every caller of a method is another class's method calling it
+     * directly: none from its own class, none through a hook, and at least
+     * one. Such a method only ever runs on an object a caller names.
+     */
+    public function calledOnlyFromOtherClasses(string $key): bool
+    {
+        if (! isset($this->called[$key])) {
+            return false;
+        }
+
+        $at = strrpos($key, '::');
+
+        if ($at === false) {
+            return false;
+        }
+
+        $class = substr($key, 0, $at);
+
+        if ($this->callers === null) {
+            $this->callers = [];
+
+            foreach ($this->edges as $from => $targets) {
+                foreach ($targets as $to) {
+                    $this->callers[$to][] = $from;
+                }
+            }
+        }
+
+        foreach ($this->callers[$key] ?? [] as $from) {
+            $fromAt = strrpos($from, '::');
+
+            if (
+                $fromAt === false
+                || substr($from, 0, $fromAt) === $class
+                || str_contains($from, '{')
+                || isset($this->viaHook[$from][$key])
+            ) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     public function addExternal(string $from, string $identity): void

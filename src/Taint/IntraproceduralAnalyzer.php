@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Taint;
 
+use PHPCfg\Func;
+
 use Enshrined\WpTaint\Cfg\IncludeGraph;
 use Enshrined\WpTaint\Hooks\RestRouteTable;
 use Enshrined\WpTaint\Registry\ArgumentSelector;
@@ -68,6 +70,39 @@ final class IntraproceduralAnalyzer
     }
 
     /**
+     * Whether a run's property writes stay out of the shared map.
+     *
+     * A variant bound to a caller's literal key is one caller's, not the
+     * body's. A receiver variant's writes are that receiver's, so they land,
+     * with any key it binds too: they are that receiver's under that key.
+     * A protected or private method that only other classes' methods call
+     * runs only on the objects they name, as receiver variants, so its own
+     * run, on an object of its own class, is not one that happens.
+     *
+     * @param array<int, int|string> $keyBindings
+     */
+    private function holdsBackWrites(FunctionContext $context, array $keyBindings): bool
+    {
+        if (isset($keyBindings[FunctionSummary::RECEIVER])) {
+            return false;
+        }
+
+        if ($keyBindings !== []) {
+            return true;
+        }
+
+        if ($context->className === null || $this->callGraph === null) {
+            return false;
+        }
+
+        $flags = $context->func->flags;
+
+        return ($flags & (Func::FLAG_PROTECTED | Func::FLAG_PRIVATE)) !== 0
+            && ($flags & Func::FLAG_STATIC) === 0
+            && $this->callGraph->calledOnlyFromOtherClasses($context->key);
+    }
+
+    /**
      * @param int|null               $seedParameterIndex when set, that parameter is seeded
      *                                                    with every taint kind and no real
      *                                                    sources are used — this is how
@@ -92,7 +127,9 @@ final class IntraproceduralAnalyzer
         // body as written, so nothing it writes belongs in the shared property
         // map. See PropertyTaintMap::$sealed. Nor does a run of a summary
         // variant, whose bound key is one caller's, not the body's.
-        $properties = $seedParameterIndex === null && $keyBindings === [] ? $properties : $properties->sealed();
+        $properties = $seedParameterIndex === null && ! $this->holdsBackWrites($context, $keyBindings)
+            ? $properties
+            : $properties->sealed();
         $receivers = new ReceiverResolver($this->functions->declaredTypes());
 
         return (new FunctionAnalysis(

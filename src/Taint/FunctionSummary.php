@@ -181,6 +181,13 @@ final class FunctionSummary
     }
 
     /**
+     * The binding a receiver variant keeps its receiver under: the object
+     * `$this` is in that run, a class or an allocation site. See
+     * {@see \Enshrined\WpTaint\Cfg\ConstantTable::allocationSite()}.
+     */
+    public const RECEIVER = -1;
+
+    /**
      * The key of a variant of a summary: the function analysed with each
      * parameter in `$bindings` holding that literal as an array key.
      *

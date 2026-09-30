@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Enshrined\WpTaint\Taint;
 
 use Enshrined\WpTaint\Cfg\CompatibilityVisitor;
+use Enshrined\WpTaint\Cfg\ConstantTable;
 use Enshrined\WpTaint\Cfg\IncludeGraph;
 use Enshrined\WpTaint\Finding\Finding;
 use Enshrined\WpTaint\Finding\Fingerprint;
@@ -326,12 +327,20 @@ final class FunctionAnalysis
          */
         private readonly array $keyBindings = [],
     ) {
+
         $this->state = new TaintState();
         $this->restParameters = new RestParameterSanitizer($registry, $summaries);
         $this->types = new ClassTypeMap();
         $this->queryShapes = new QueryShapeInspector(
             $literals,
-            new OriginClassifier($registry, $resolver, $properties, $receivers, $functions->classHierarchy()),
+            new OriginClassifier(
+                $registry,
+                $resolver,
+                $properties,
+                $receivers,
+                $functions->classHierarchy(),
+                $this->propertySlotsOf(...),
+            ),
             $resolver->values(),
         );
         $this->anchors = new LiteralAnchor(
@@ -342,6 +351,7 @@ final class FunctionAnalysis
             $context,
             $this->types,
             $registry,
+            $this->propertySlotsOf(...),
         );
         $this->guards = new GuardAnalyzer($resolver->values());
         $this->capabilityGuards = new CapabilityGuard($registry, $callGraph);
@@ -3104,8 +3114,9 @@ final class FunctionAnalysis
 
         $values = [];
 
-        foreach ($this->functions->classHierarchy()->lookupOrder($owner) as $candidate) {
+        foreach ($this->propertySlots($owner, $property) as $candidate) {
             $values[] = $this->properties->valueOf($candidate, $property);
+
         }
 
         $key = strtolower($owner) . '::' . $property;
@@ -3127,6 +3138,76 @@ final class FunctionAnalysis
     }
 
     /**
+     * The slots a read of this property sees, for the rules that ask where a
+     * property's value came from. Null for a name computed at run time.
+     *
+     * @return list<string|null>|null
+     */
+    private function propertySlotsOf(Op\Expr\PropertyFetch $fetch): ?array
+    {
+        $property = OperandHelper::literalString($fetch->name);
+
+        if ($property === null) {
+            return null;
+        }
+
+        $owner = $this->propertyOwnerClass($fetch);
+
+        return $owner === null ? [null] : $this->propertySlots($owner, $property);
+    }
+
+    /**
+     * The slots a read of `$property` on `$owner` sees.
+     *
+     * An allocation site's objects are of one class: the site's own slot,
+     * and the slots of that class and its ancestors, which writes through a
+     * receiver typed as one of them could have reached. A class stands for
+     * any object of it or of a descendant: those classes' slots, its
+     * ancestors', and every allocation site of one of them.
+     *
+     * @return list<string>
+     */
+    private function propertySlots(string $owner, string $property): array
+    {
+        $hierarchy = $this->functions->classHierarchy();
+        $allocated = ConstantTable::allocatedClass($owner);
+
+        if ($allocated !== null) {
+            return [$owner, ...$hierarchy->lookupOrder($allocated)];
+        }
+
+        // `class#method`: the objects that method runs on. See receiverOf().
+        $method = null;
+
+        if (str_contains($owner, '#')) {
+            [$owner, $method] = explode('#', $owner, 2);
+        }
+
+        $slots = $hierarchy->lookupOrder($owner);
+        $below = [];
+        $declared = $method === null ? null : $this->functions->resolveMethodKey($owner, $method);
+
+        foreach ($hierarchy->descendantsOf($owner) as $descendant) {
+            if ($method !== null && $this->functions->resolveMethodKey($descendant, $method) !== $declared) {
+                continue;
+            }
+
+            $slots[] = $descendant;
+            $below[strtolower($descendant)] = true;
+        }
+
+        $below[strtolower($owner)] = true;
+
+        foreach ($this->properties->allocatedOwners($property) as $site) {
+            if (isset($below[(string) ConstantTable::allocatedClass($site)])) {
+                $slots[] = $site;
+            }
+        }
+
+        return $slots;
+    }
+
+    /**
      * The recorded origin of the nearest class in the hierarchy that tracked
      * the property, so the trace still says where the value was written.
      *
@@ -3134,7 +3215,7 @@ final class FunctionAnalysis
      */
     private function storedPropertyOrigin(?string $owner, string $property): array
     {
-        foreach ($owner === null ? [null] : $this->functions->classHierarchy()->lookupOrder($owner) as $candidate) {
+        foreach ($owner === null ? [null] : $this->propertySlots($owner, $property) as $candidate) {
             if ($this->properties->isTracked($candidate, $property)) {
                 return $this->properties->originOf($candidate, $property);
             }
@@ -3229,7 +3310,12 @@ final class FunctionAnalysis
      */
     private function propertyOwnerClass(Op\Expr\PropertyFetch $fetch): ?string
     {
-        return $this->receivers->propertyOwnerOf($fetch->var, $this->context, $this->types);
+        if (OperandHelper::variableName($fetch->var) === 'this' && $this->isInstanceContext()) {
+            return $this->receiverKey();
+        }
+
+        return $this->allocationKeyOf($fetch->var, 0)
+            ?? $this->receivers->propertyOwnerOf($fetch->var, $this->context, $this->types);
     }
 
     private function transferConcatList(Op\Expr\ConcatList $op): bool
@@ -6254,7 +6340,8 @@ final class FunctionAnalysis
             $this->imprecise = true;
         }
 
-        $summary = $this->variantOf($call, $key, $summary);
+
+        $summary = $this->variantOf($op, $call, $key, $summary);
         $result = $summary->introduces();
         $structure = $summary->introducesShape();
         $contributors = [];
@@ -6371,15 +6458,18 @@ final class FunctionAnalysis
      * writes `$sql` under `'where'` alone, where the summary itself writes it
      * under any key. See {@see KeyParameters}.
      */
-    private function variantOf(CallTarget $call, string $key, FunctionSummary $summary): FunctionSummary
+    private function variantOf(Op\Expr $op, CallTarget $call, string $key, FunctionSummary $summary): FunctionSummary
     {
-        if ($summary->keyParameters === [] || ! $call->positional) {
-            return $summary;
+        $bindings = [];
+        $receiver = $this->receiverBindingFor($op, $key);
+
+        if ($receiver !== null) {
+            $bindings[FunctionSummary::RECEIVER] = $receiver;
         }
 
-        $bindings = [];
+        $keyParameters = $call->positional ? $summary->keyParameters : [];
 
-        foreach ($summary->keyParameters as $index) {
+        foreach ($keyParameters as $index) {
             $argument = $call->argument($index);
 
             if ($argument === null) {
@@ -6410,6 +6500,7 @@ final class FunctionAnalysis
         $variantKey = FunctionSummary::variantKey($key, $bindings);
         $variant = $this->summaries->get($variantKey);
 
+
         if ($variant === null) {
             $this->summaries->request($variantKey, $key, $bindings);
 
@@ -6417,10 +6508,237 @@ final class FunctionAnalysis
             // wait for it: applied now, under a key the summary cannot name,
             // they would stay for every key to read. A function past its cap
             // gets no variant, so its own summary applies in full.
-            return $this->summaries->isCapped($key) ? $summary : $summary->withoutPropertyWrites();
+            if ($this->summaries->isCapped($key)) {
+                return $summary;
+            }
+
+            // A receiver variant waits as a callee not yet analysed does: the
+            // function's own summary reads every object of its class, and what
+            // it hands back now would stay in whatever this run writes it to.
+            return $receiver !== null
+                ? FunctionSummary::empty($summary->key, $summary->displayName)
+                : $summary->withoutPropertyWrites();
         }
 
         return $variant;
+    }
+
+    /**
+     * The object a method call runs on, when it is not the method's own class:
+     * the object `$this` is here, for `$this->m()` and `parent::m()`, or the
+     * allocation site of `$query->m()`. The callee then runs as a variant with
+     * that receiver, so it reads and writes that object's properties rather
+     * than every object of its class.
+     *
+     * ```php
+     * class Stats_Store extends Data_Store {
+     *     public function run() {
+     *         $this->add_limit();            // writes Stats_Store's LIMIT
+     *     }
+     * }
+     * $query = new Sql_Query();
+     * $query->statement();                  // reads this query's clauses
+     * ```
+     */
+    private function receiverBindingFor(Op\Expr $op, string $calleeKey): ?string
+    {
+        $at = strrpos($calleeKey, '::');
+
+        if ($at === false || str_contains($calleeKey, '{')) {
+            return null;
+        }
+
+        $receiver = match (true) {
+            $op instanceof Op\Expr\MethodCall => OperandHelper::variableName($op->var) === 'this'
+                ? $this->receiverKey()
+                : $this->allocationKeyOf($op->var, 0),
+            $op instanceof Op\Expr\StaticCall => $this->isInstanceContext()
+                && in_array(strtolower(OperandHelper::literalString($op->class) ?? ''), ['self', 'static', 'parent'], true)
+                ? $this->receiverKey()
+                : null,
+            $op instanceof Op\Expr\New_ => $this->allocationSiteOf($op),
+            default => null,
+        };
+
+        if ($receiver === null) {
+            return null;
+        }
+
+        $receiver = strtolower($receiver);
+
+        // The callee's own run already runs on exactly these objects.
+        if ($receiver === $this->receiverOf(substr($calleeKey, 0, $at), substr($calleeKey, $at + 2))) {
+            return null;
+        }
+
+        return $receiver;
+    }
+
+    /**
+     * The object `$this` is in this run: a receiver variant's receiver, or
+     * the method's own class.
+     */
+    private function receiverKey(): ?string
+    {
+        $bound = $this->keyBindings[FunctionSummary::RECEIVER] ?? null;
+
+        if (is_string($bound)) {
+            return $bound;
+        }
+
+        if ($this->context->className === null || ! $this->isInstanceContext()) {
+            return $this->context->className;
+        }
+
+        return $this->receiverOf($this->context->className, $this->context->func->name);
+    }
+
+    /**
+     * The objects a method runs on, as a receiver key: its class, which
+     * stands for every object of it or of a descendant, or `class#method`
+     * when a descendant declares its own method of that name and so never
+     * runs this one.
+     *
+     * ```php
+     * class Coupons_Store extends Data_Store { function get_data() { ... } }
+     * class Coupons_Stats extends Coupons_Store { function get_data() { ... } }
+     * ```
+     *
+     * `Coupons_Store::get_data()` never runs on a `Coupons_Stats` object, so
+     * the LIMIT that object's own `get_data()` writes is not one it reads.
+     */
+    private function receiverOf(string $class, string $method): string
+    {
+        $declared = $this->functions->resolveMethodKey($class, $method);
+
+        foreach ($this->functions->classHierarchy()->descendantsOf($class) as $descendant) {
+            if ($this->functions->resolveMethodKey($descendant, $method) !== $declared) {
+                return strtolower(ltrim($class, '\\')) . '#' . strtolower($method);
+            }
+        }
+
+        return strtolower(ltrim($class, '\\'));
+    }
+
+    /**
+     * The class of the object `$this` is in this run.
+     */
+    private function receiverClass(): ?string
+    {
+        $key = $this->receiverKey();
+
+        if ($key === null) {
+            return null;
+        }
+
+        $class = ConstantTable::allocatedClass($key) ?? $key;
+        $at = strpos($class, '#');
+
+        return $at === false ? $class : substr($class, 0, $at);
+    }
+
+    private function isInstanceContext(): bool
+    {
+        return $this->context->className !== null
+            && ($this->context->func->flags & \PHPCfg\Func::FLAG_STATIC) === 0;
+    }
+
+    /**
+     * The allocation site of the object an operand holds, when the scan can
+     * name it: `new Acme_Query()` followed through copies, or a property of
+     * `$this` that the scan only ever gives new objects of one site.
+     */
+    private function allocationKeyOf(Operand $receiver, int $hops): ?string
+    {
+        if ($hops > self::MAX_ASSIGNMENT_HOPS) {
+            return null;
+        }
+
+        if (OperandHelper::variableName($receiver) === 'this') {
+            $key = $this->receiverKey();
+
+            return $key !== null && ConstantTable::allocatedClass($key) !== null ? $key : null;
+        }
+
+        $op = OperandHelper::definingOp($receiver);
+
+        return match (true) {
+            $op instanceof Op\Expr\Assign => $this->allocationKeyOf($op->expr, $hops + 1),
+            $op instanceof Op\Expr\New_ => $this->allocationSiteOf($op),
+            $op instanceof Op\Expr\PropertyFetch => $this->propertyAllocation($op),
+            default => null,
+        };
+    }
+
+    private function allocationSiteOf(Op\Expr\New_ $new): ?string
+    {
+        $class = OperandHelper::literalString($new->class);
+
+        if ($class === null || in_array(strtolower($class), ['self', 'static', 'parent'], true)) {
+            return null;
+        }
+
+        return ConstantTable::allocationSite(
+            $class,
+            $this->context->file->relativePath,
+            (int) $new->getAttribute('startLine'),
+        );
+    }
+
+    /**
+     * The one allocation site `$this->name` can hold: the sites the scan
+     * gives a property of that name, from a method of the receiver's class,
+     * one of its ancestors or traits, or one of its descendants.
+     */
+    private function propertyAllocation(Op\Expr\PropertyFetch $fetch): ?string
+    {
+        $name = OperandHelper::literalString($fetch->name);
+        $table = $this->resolver->values()->constants();
+        $holder = $this->receiverClass();
+
+        if ($name === null || $table === null || $holder === null || OperandHelper::variableName($fetch->var) !== 'this') {
+            return null;
+        }
+
+        $given = $table->allocationsOf($name);
+
+
+        if ($given === null) {
+            return null;
+        }
+
+        [$allocated, $other] = $given;
+        $sites = [];
+
+        foreach ($this->relatedClasses($holder) as $class => $_) {
+            if (isset($other[$class])) {
+                return null;
+            }
+
+            $sites += $allocated[$class] ?? [];
+        }
+
+        return count($sites) === 1 ? (string) array_key_first($sites) : null;
+    }
+
+    /**
+     * A class, the classes and traits it inherits from, and every descendant
+     * with theirs: the classes whose methods can run on an object of it.
+     *
+     * @return array<string, true> lower-case names
+     */
+    private function relatedClasses(string $class): array
+    {
+        $hierarchy = $this->functions->classHierarchy();
+        $related = [];
+
+        foreach ([$class, ...$hierarchy->descendantsOf($class)] as $each) {
+            foreach ($hierarchy->lookupOrder($each) as $inherited) {
+                $related[strtolower($inherited)] = true;
+            }
+        }
+
+        return $related;
     }
 
     /**
