@@ -73,6 +73,41 @@ it('keeps a write to one new object away from another', function (): void {
         PHP))->toBe(['wp.sqli.wpdb-query@19']);
 });
 
+// Redirection makes an IP object from a request header on one line, and one
+// from each saved proxy address on another. With one slot for the class, the
+// header reached the saved options and every redirect built from them.
+
+it('keeps what two new lines hand one constructor apart', function (): void {
+    expect(findingSignatures(scanCode(<<<'PHP'
+        <?php
+        class Acme_IP {
+            private $ip = '';
+            public function __construct( $ip = '' ) {
+                $this->ip = $ip;
+            }
+            public function get() {
+                return $this->ip;
+            }
+        }
+        function acme_client_ip( $header ) {
+            $ip = new Acme_IP( $_SERVER[ $header ] );
+            return $ip->get();
+        }
+        function acme_saved_ips( $ips ) {
+            return array_map( function ( $each ) {
+                $ip = new Acme_IP( sanitize_text_field( $each ) );
+                return $ip->get();
+            }, $ips );
+        }
+        function acme_redirect() {
+            $proxies = acme_saved_ips( array( '127.0.0.1' ) );
+            wp_redirect( 'https://example.org/?via=' . $proxies[0] );
+            wp_redirect( 'https://example.org/?ip=' . acme_client_ip( 'HTTP_X_FORWARDED_FOR' ) );
+        }
+        add_action( 'init', 'acme_redirect' );
+        PHP)))->toBe(['wp.redirect.open-redirect@24']);
+});
+
 it('keeps a protected helper\'s write on the subclass that calls it', function (): void {
     expect(perObjectFindings(perObjectQuery() . "\n" . <<<'PHP'
         class Acme_Store extends Acme_Query {
