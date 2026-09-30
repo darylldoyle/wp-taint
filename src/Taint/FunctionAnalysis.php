@@ -55,6 +55,12 @@ final class FunctionAnalysis
     private const MAX_ASSIGNMENT_HOPS = 16;
 
     /**
+     * How deep {@see answersFor()} follows calls on `$this` before it answers
+     * no, and the call runs a variant instead.
+     */
+    private const MAX_RECEIVER_CALL_DEPTH = 16;
+
+    /**
      * This function's parameters it hands on to a callee's key parameter,
      * which makes them key parameters of its own: see variantOf().
      *
@@ -116,6 +122,61 @@ final class FunctionAnalysis
      * @var array<string, array{0: string, 1: string, 2: string, 3: Shape}>
      */
     private array $scopesReached = [];
+
+    /**
+     * The properties this run read through `$this`, when it records a
+     * {@see ReceiverView}: see {@see recordsReceiver()}.
+     *
+     * @var array<string, true>
+     */
+    private array $receiverReads = [];
+
+    /**
+     * The methods this run called on `$this`, and the summary each applied:
+     * see {@see ReceiverView::$calls}.
+     *
+     * @var array<string, array{string, array<int, int|string>, string|null}>
+     */
+    private array $receiverCalls = [];
+
+    /**
+     * The one allocation site each `$this->name` a call was made on held:
+     * see {@see ReceiverView::$allocations}.
+     *
+     * @var array<string, string|null>
+     */
+    private array $receiverSites = [];
+
+    /** This run reached `$this` through a copy: see {@see ReceiverView::$opaque}. */
+    private bool $receiverOpaque = false;
+
+    /** This run wrote a property of its receiver: see {@see ReceiverView::$writes}. */
+    private bool $receiverWritten = false;
+
+    /**
+     * Whether a summary answers for a receiver, by summary key and
+     * receiver: see {@see answersFor()}. The same call is transferred many
+     * times in one run.
+     *
+     * @var array<string, bool>
+     */
+    private array $answers = [];
+
+    /**
+     * The questions {@see answersFor()} is answering now.
+     *
+     * @var array<string, true>
+     */
+    private array $checking = [];
+
+    /**
+     * The open questions a call cycle answered yes to, in the order asked.
+     *
+     * @var list<string>
+     */
+    private array $assumed = [];
+
+    private ?bool $recordsReceiver = null;
 
     private TaintState $state;
 
@@ -461,7 +522,46 @@ final class FunctionAnalysis
             $this->returnShape->mapSets(static fn (TaintSet $taint): TaintSet => $taint->withoutElements()),
             $plain($this->revertedResiduals),
             array_keys($this->forwardedKeys),
+            $this->recordsReceiver() ? $this->receiverView() : null,
         );
+    }
+
+    /**
+     * Whether this run records what it read and did through `$this`: a
+     * method's own run, or a literal variant of it, with no parameter
+     * seeded. A probe run reads the same properties as the run that seeds
+     * nothing, and a receiver variant's view is never asked for.
+     */
+    private function recordsReceiver(): bool
+    {
+        return $this->recordsReceiver ??= $this->seedParameterIndex === null
+            && ! isset($this->keyBindings[FunctionSummary::RECEIVER])
+            && $this->isInstanceContext()
+            && ! $this->context->isClosure();
+    }
+
+    /**
+     * What this run read and did through `$this`, with each property read
+     * as it stands at the end of the run.
+     */
+    private function receiverView(): ReceiverView
+    {
+        $receiver = (string) $this->receiverKey();
+        $properties = [];
+        $reads = array_keys($this->receiverReads);
+        sort($reads);
+
+        foreach ($reads as $property) {
+            $property = (string) $property;
+            $properties[$property] = $this->properties->viewOf($this->propertySlots($receiver, $property), $property);
+        }
+
+        $calls = $this->receiverCalls;
+        ksort($calls);
+        $sites = $this->receiverSites;
+        ksort($sites);
+
+        return new ReceiverView($properties, $calls, $sites, $this->receiverOpaque, $this->receiverWritten);
     }
 
     /**
@@ -1744,6 +1844,9 @@ final class FunctionAnalysis
                     ? $this->propertyOwnerClass($target)
                     : $this->staticOwnerClass($target);
 
+                // Noted from the op, not from the map: a run whose writes are
+                // held back writes nothing there, and still writes `$this`.
+                $this->receiverWritten = $this->receiverWritten || $this->readsThis($target);
                 $this->properties->track($owner, $property);
 
                 // Only when something reached it, and with what did. A probe
@@ -1930,6 +2033,7 @@ final class FunctionAnalysis
             ? $this->propertyOwnerClass($fetch)
             : $this->staticOwnerClass($fetch);
 
+        $this->receiverWritten = $this->receiverWritten || $this->readsThis($fetch);
         $this->properties->track($owner, $property);
         $this->properties->recordAnchor($owner, $property, $this->anchors->has($op->expr));
 
@@ -3029,6 +3133,10 @@ final class FunctionAnalysis
 
         $owner = $this->propertyOwnerClass($op);
 
+        if ($this->readsThis($op)) {
+            $this->receiverReads[$property] = true;
+        }
+
         // A table name or prefix on the database handle is not data. WordPress
         // sets these itself from the install's configuration, and every plugin
         // interpolates them into SQL because there is no other way to name a
@@ -3150,6 +3258,10 @@ final class FunctionAnalysis
         }
 
         $owner = $this->propertyOwnerClass($fetch);
+
+        if ($this->readsThis($fetch)) {
+            $this->receiverReads[$property] = true;
+        }
 
         return $owner === null ? [null] : $this->propertySlots($owner, $property);
     }
@@ -3290,12 +3402,23 @@ final class FunctionAnalysis
      */
     private function propertyOwnerClass(Op\Expr\PropertyFetch $fetch): ?string
     {
-        if (OperandHelper::variableName($fetch->var) === 'this' && $this->isInstanceContext()) {
+        if ($this->readsThis($fetch)) {
             return $this->receiverKey();
         }
 
         return $this->allocationKeyOf($fetch->var, 0)
             ?? $this->receivers->propertyOwnerOf($fetch->var, $this->context, $this->types);
+    }
+
+    /**
+     * Whether a fetch is `$this->name` in a method, which reads the object
+     * the run is on.
+     */
+    private function readsThis(Op\Expr\PropertyFetch|Op\Expr\StaticPropertyFetch $fetch): bool
+    {
+        return $fetch instanceof Op\Expr\PropertyFetch
+            && OperandHelper::variableName($fetch->var) === 'this'
+            && $this->isInstanceContext();
     }
 
     private function transferConcatList(Op\Expr\ConcatList $op): bool
@@ -4971,6 +5094,9 @@ final class FunctionAnalysis
                 $class = $receiver;
             }
 
+            $this->receiverWritten = $this->receiverWritten
+                || ($class !== null && $class === $this->receiverKey());
+
             // Only what survives the body, part by part. The kinds were
             // recorded by the probe run, whose seed carried every kind: what
             // reached the property is what the body let through.
@@ -6459,14 +6585,7 @@ final class FunctionAnalysis
      */
     private function variantOf(Op\Expr $op, CallTarget $call, string $key, FunctionSummary $summary): array
     {
-        $bindings = [];
-        $receiver = $this->receiverBindingFor($op, $key);
-        $runsOn = $this->ownReceiverOf($key);
-
-        if ($receiver !== null) {
-            $bindings[FunctionSummary::RECEIVER] = $receiver;
-        }
-
+        $literals = [];
         $keyParameters = $call->positional ? $summary->keyParameters : [];
 
         foreach ($keyParameters as $index) {
@@ -6479,7 +6598,7 @@ final class FunctionAnalysis
             $keys = $this->namedKeys($argument);
 
             if ($keys !== null && count($keys) === 1) {
-                $bindings[$index] = $keys[0];
+                $literals[$index] = $keys[0];
 
                 continue;
             }
@@ -6493,36 +6612,240 @@ final class FunctionAnalysis
             }
         }
 
-        if ($bindings === []) {
-            return [$summary, $runsOn];
-        }
+        $receiver = $this->receiverBindingFor($op, $key);
 
-        $variantKey = FunctionSummary::variantKey($key, $bindings);
-        $variant = $this->summaries->get($variantKey);
+        [$applied, $runsOn, $settled] = $receiver === null
+            ? $this->literalVariantOf($key, $summary, $literals)
+            : $this->receiverVariantOf($key, $summary, $literals, $receiver);
 
-        if ($variant === null) {
-            $this->summaries->request($variantKey, $key, $bindings);
-
-            // The next round analyses the variant, and the property writes
-            // wait for it: applied now, under a key the summary cannot name,
-            // they would stay for every key to read. A function past its cap
-            // gets no variant, so its own summary applies in full.
-            if ($this->summaries->isCapped($key)) {
-                return [$summary, $runsOn];
-            }
-
-            // A receiver variant waits as a callee not yet analysed does: the
-            // function's own summary reads every object of its class, and what
-            // it hands back now would stay in whatever this run writes it to.
-            return [
-                $receiver !== null
-                    ? FunctionSummary::empty($summary->key, $summary->displayName)
-                    : $summary->withoutPropertyWrites(),
-                $runsOn,
+        // What a call on `$this` applied, so a call on another object can
+        // tell whether this run would apply the same there.
+        if ($this->recordsReceiver() && $this->callsThis($op)) {
+            $this->receiverCalls[FunctionSummary::variantKey($key, $literals)] = [
+                $key,
+                $literals,
+                $settled ? strtolower($applied->key) : null,
             ];
         }
 
-        return [$variant, $receiver ?? $runsOn];
+        return [$applied, $runsOn];
+    }
+
+    /**
+     * A call that names no receiver: the variant for its literal keys, once
+     * a round has analysed it, and the function's own summary until then.
+     *
+     * @param array<int, int|string> $literals
+     *
+     * @return array{FunctionSummary, string|null, bool} the summary, the object it ran on, and whether
+     *         it is the one the call keeps applying
+     */
+    private function literalVariantOf(string $key, FunctionSummary $summary, array $literals): array
+    {
+        $runsOn = $this->ownReceiverOf($key);
+
+        if ($literals === []) {
+            return [$summary, $runsOn, true];
+        }
+
+        $variantKey = FunctionSummary::variantKey($key, $literals);
+        $variant = $this->summaries->get($variantKey);
+
+        if ($variant !== null) {
+            return [$variant, $runsOn, true];
+        }
+
+        $this->summaries->request($variantKey, $key, $literals);
+
+        // The next round analyses the variant, and the property writes wait
+        // for it: applied now, under a key the summary cannot name, they
+        // would stay for every key to read. A function past its cap gets no
+        // variant, so its own summary applies in full.
+        if ($this->summaries->isCapped($key)) {
+            return [$summary, $runsOn, false];
+        }
+
+        return [$summary->withoutPropertyWrites(), $runsOn, false];
+    }
+
+    /**
+     * A method call on another object: the summary the method would apply
+     * on its own objects, when it answers for this receiver too, and a
+     * variant bound to the receiver when it does not.
+     *
+     * The summary on the method's own objects is the base summary, or the
+     * variant for the call's literal keys. It answers for the receiver when
+     * the method would read and call the same there: see
+     * {@see ReceiverView}. Its writes to `$this` then land on the receiver.
+     * One summary serves every receiver it answers for, where a variant per
+     * receiver cost a full summary each. 3,264 of Site Kit's 5,464 receiver
+     * variants came out equal to the base summary.
+     *
+     * A variant bound to the receiver, once asked for and analysed, is the
+     * one the call keeps. Until then the call applies nothing, as for a
+     * callee not yet analysed: the method's own summary reads every object
+     * of its class, and what it hands back now would stay in whatever this
+     * run writes it to. Past the receiver cap the summary on the method's
+     * own objects applies, which reads every object this one could be.
+     *
+     * @param array<int, int|string> $literals
+     *
+     * @return array{FunctionSummary, string|null, bool} the summary, the object it ran on, and whether
+     *         it is the one the call keeps applying
+     */
+    private function receiverVariantOf(string $key, FunctionSummary $summary, array $literals, string $receiver): array
+    {
+        $runsOn = $this->ownReceiverOf($key);
+        $bound = FunctionSummary::variantKey($key, $literals + [FunctionSummary::RECEIVER => $receiver]);
+        $variant = $this->summaries->get($bound);
+
+        if ($variant !== null) {
+            return [$variant, $receiver, true];
+        }
+
+        $capped = $this->summaries->isCapped($key, SummaryTable::RECEIVER_VARIANT);
+        $own = $literals === [] ? $summary : $this->summaries->get(FunctionSummary::variantKey($key, $literals));
+
+        if ($own === null) {
+            if ($capped) {
+                return [$summary, $receiver, false];
+            }
+
+            // The literal variant first: it may answer for this receiver and
+            // every other.
+            $this->summaries->request(
+                FunctionSummary::variantKey($key, $literals),
+                $key,
+                $literals,
+                SummaryTable::RECEIVER_VARIANT,
+            );
+
+            return [FunctionSummary::empty($summary->key, $summary->displayName), $runsOn, false];
+        }
+
+        if ($this->answersFor($own, $receiver)) {
+            return [$own, $receiver, true];
+        }
+
+        if ($capped) {
+            return [$own, $receiver, false];
+        }
+
+        $this->summaries->request(
+            $bound,
+            $key,
+            $literals + [FunctionSummary::RECEIVER => $receiver],
+            SummaryTable::RECEIVER_VARIANT,
+        );
+
+        return [FunctionSummary::empty($summary->key, $summary->displayName), $runsOn, false];
+    }
+
+    /**
+     * Whether a summary of a method's own run answers for another receiver:
+     * every property the run read through `$this` holds the same there,
+     * every `$this->name` holds the same allocation site, and every method
+     * it called on `$this` applies the same summary there.
+     */
+    private function answersFor(FunctionSummary $summary, string $receiver, int $depth = 0): bool
+    {
+        $view = $summary->receiverView;
+
+        if ($view === null || ! $view->answersForOthers() || $depth > self::MAX_RECEIVER_CALL_DEPTH) {
+            return false;
+        }
+
+        $id = strtolower($summary->key) . "\0" . $receiver;
+
+        if (isset($this->answers[$id])) {
+            return $this->answers[$id];
+        }
+
+        // A method that calls itself on `$this`, or two that call each other,
+        // ask this again while it is being answered. The call applies this
+        // summary there if everything else holds, so the question answers
+        // yes to itself. An answer that leaned on a question still open is
+        // not kept, since that question may yet answer no.
+        if (isset($this->checking[$id])) {
+            $this->assumed[] = $id;
+
+            return true;
+        }
+
+        $this->checking[$id] = true;
+        $mark = count($this->assumed);
+        $answer = $this->viewHoldsOn($view, $receiver, $depth);
+        unset($this->checking[$id]);
+
+        $open = array_values(array_filter(
+            array_slice($this->assumed, $mark),
+            static fn (string $assumed): bool => $assumed !== $id,
+        ));
+        array_splice($this->assumed, $mark, count($this->assumed) - $mark, $open);
+
+        if ($open === []) {
+            $this->answers[$id] = $answer;
+        }
+
+        return $answer;
+    }
+
+    private function viewHoldsOn(ReceiverView $view, string $receiver, int $depth): bool
+    {
+        foreach (array_keys($view->properties) as $property) {
+            $property = (string) $property;
+            $seen = $this->properties->viewOf($this->propertySlots($receiver, $property), $property);
+
+            if (! $view->sawSame($property, $seen)) {
+                return false;
+            }
+        }
+
+        $class = self::classOfReceiver($receiver);
+
+        foreach ($view->allocations as $property => $site) {
+            if ($this->allocationOn($class, (string) $property) !== $site) {
+                return false;
+            }
+        }
+
+        foreach ($view->calls as [$callee, $literals, $applied]) {
+            $there = $this->summaryOn($callee, $literals, $receiver, $depth + 1);
+
+            if ($applied === null || $there === null || strtolower($there->key) !== $applied) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * The summary a call on `$this` applies in a run on `$receiver`, when a
+     * round has one for it: the same choice {@see receiverVariantOf()}
+     * makes. Null when the call would wait for a variant.
+     *
+     * @param array<int, int|string> $literals
+     */
+    private function summaryOn(string $callee, array $literals, string $receiver, int $depth): ?FunctionSummary
+    {
+        $own = $literals === []
+            ? $this->summaries->get($callee)
+            : $this->summaries->get(FunctionSummary::variantKey($callee, $literals));
+
+        if ($this->bindsNoReceiver($callee, $receiver)) {
+            return $own;
+        }
+
+        $bound = $this->summaries->get(
+            FunctionSummary::variantKey($callee, $literals + [FunctionSummary::RECEIVER => $receiver]),
+        );
+
+        if ($bound !== null) {
+            return $bound;
+        }
+
+        return $own !== null && $this->answersFor($own, $receiver, $depth) ? $own : null;
     }
 
     /**
@@ -6560,24 +6883,13 @@ final class FunctionAnalysis
      */
     private function receiverBindingFor(Op\Expr $op, string $calleeKey): ?string
     {
-        $at = strrpos($calleeKey, '::');
-
-        if ($at === false || str_contains($calleeKey, '{')) {
-            return null;
-        }
-
-        // A static method has no `$this`, so every object runs it alike.
-        if ($this->functions->get($calleeKey)->isStatic ?? false) {
+        if ($this->ownReceiverOf($calleeKey) === null) {
             return null;
         }
 
         $receiver = match (true) {
-            $op instanceof Op\Expr\MethodCall => OperandHelper::variableName($op->var) === 'this'
-                ? $this->receiverKey()
-                : $this->allocationKeyOf($op->var, 0),
-            $op instanceof Op\Expr\StaticCall => $this->isInstanceContext() && self::namesOwnClass($op->class)
-                ? $this->receiverKey()
-                : null,
+            $this->callsThis($op) => $this->receiverKey(),
+            $op instanceof Op\Expr\MethodCall => $this->allocationKeyOf($op->var, 0),
             $op instanceof Op\Expr\New_ => $this->allocationSiteOf($op),
             default => null,
         };
@@ -6588,12 +6900,31 @@ final class FunctionAnalysis
 
         $receiver = strtolower($receiver);
 
-        // The callee's own run already runs on exactly these objects.
-        if ($receiver === $this->functions->receiverOf(substr($calleeKey, 0, $at), substr($calleeKey, $at + 2))) {
-            return null;
-        }
+        return $this->bindsNoReceiver($calleeKey, $receiver) ? null : $receiver;
+    }
 
-        return $receiver;
+    /**
+     * Whether a call to `$calleeKey` on `$receiver` runs the method's own
+     * run: a static method has no `$this`, so every object runs it alike,
+     * and a receiver the method's own run is already on needs no variant.
+     */
+    private function bindsNoReceiver(string $calleeKey, string $receiver): bool
+    {
+        return ($this->functions->get($calleeKey)->isStatic ?? false)
+            || $receiver === $this->ownReceiverOf($calleeKey);
+    }
+
+    /**
+     * Whether a call runs on `$this`: `$this->m()`, or `self::m()`,
+     * `static::m()` and `parent::m()` in a method.
+     */
+    private function callsThis(Op\Expr $op): bool
+    {
+        return match (true) {
+            $op instanceof Op\Expr\MethodCall => OperandHelper::variableName($op->var) === 'this',
+            $op instanceof Op\Expr\StaticCall => $this->isInstanceContext() && self::namesOwnClass($op->class),
+            default => false,
+        };
     }
 
     /**
@@ -6622,10 +6953,15 @@ final class FunctionAnalysis
     {
         $key = $this->receiverKey();
 
-        if ($key === null) {
-            return null;
-        }
+        return $key === null ? null : self::classOfReceiver($key);
+    }
 
+    /**
+     * The class of a receiver key's objects: an allocation site's class, or
+     * the class a `class#method` key names.
+     */
+    private static function classOfReceiver(string $key): string
+    {
         $class = ConstantTable::allocatedClass($key) ?? $key;
         $at = strpos($class, '#');
 
@@ -6661,6 +6997,9 @@ final class FunctionAnalysis
         }
 
         if (OperandHelper::variableName($receiver) === 'this') {
+            // A copy of `$this`: the base run finds the class of what it
+            // holds, and a run on an allocation site finds the site.
+            $this->receiverOpaque = $this->receiverOpaque || $this->isInstanceContext();
             $key = $this->receiverKey();
 
             return $key !== null && ConstantTable::allocatedClass($key) !== null ? $key : null;
@@ -6710,7 +7049,18 @@ final class FunctionAnalysis
             return null;
         }
 
-        return $table->allocationFor($holder, $name, $this->functions->relatedClasses($holder));
+        // Null answers too: another receiver's class may name one site.
+        return $this->receiverSites[$name] = $this->allocationOn($holder, $name);
+    }
+
+    /**
+     * The one allocation site `$this->name` holds on an object of `$class`:
+     * see {@see ConstantTable::allocationFor()}.
+     */
+    private function allocationOn(string $class, string $name): ?string
+    {
+        return $this->resolver->values()->constants()
+            ?->allocationFor($class, $name, $this->functions->relatedClasses($class));
     }
 
     /**

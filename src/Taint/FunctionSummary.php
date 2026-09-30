@@ -177,6 +177,14 @@ final class FunctionSummary
          * @var list<int>
          */
         public readonly array $keyParameters = [],
+        /**
+         * What the method's own run read and did through `$this`, so a call
+         * on another object can apply this summary there rather than run a
+         * variant for that object. Null when the run did not record one: a
+         * function, a static method, a closure, or a variant. Null never
+         * answers for another receiver.
+         */
+        public readonly ?ReceiverView $receiverView = null,
     ) {
     }
 
@@ -392,6 +400,7 @@ final class FunctionSummary
             [],
             $sets($this->paramToReturnEach),
             $this->keyParameters,
+            $this->receiverView,
         );
     }
 
@@ -431,6 +440,7 @@ final class FunctionSummary
             $this->parameterParts,
             $this->paramToReturnEach,
             $this->keyParameters,
+            $this->receiverView,
         );
     }
 
@@ -628,6 +638,9 @@ final class FunctionSummary
             $this->parameterParts,
             self::mergeSets($this->paramToReturnEach, $other->paramToReturnEach),
             self::mergeKeyParameters($this->keyParameters, $other->keyParameters),
+            $this->receiverView === null || $other->receiverView === null
+                ? null
+                : $this->receiverView->union($other->receiverView),
         );
     }
 
@@ -1076,6 +1089,15 @@ final class FunctionSummary
         // A key parameter a callee's summary adds is a variant this
         // function's callers may now ask for.
         if ($this->parameterKeys !== $other->parameterKeys || $this->keyParameters !== $other->keyParameters) {
+            return false;
+        }
+
+        // A call on another object applied this summary because of what the
+        // view held. When the view moves, that call has to ask again.
+        if (
+            ($this->receiverView === null) !== ($other->receiverView === null)
+            || ($this->receiverView !== null && ! $this->receiverView->equals($other->receiverView))
+        ) {
             return false;
         }
 

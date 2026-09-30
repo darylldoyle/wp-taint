@@ -133,6 +133,42 @@ final class PropertyTaintMap
         return $this->allocated[$property] ?? [];
     }
 
+    /**
+     * What a read of `$property` sees across `$slots`: the values joined,
+     * whether every slot's writes were anchored, and whether the tracked
+     * slots all hold nothing, or null when no slot was tracked. These are
+     * the three answers a read gives the dataflow, {@see LiteralAnchor} and
+     * {@see OriginClassifier}. It logs the reads those make.
+     *
+     * The write's origin is left out. Two receivers whose slots hold the
+     * same value can still name different writes as its origin, and a trace
+     * is not a reason to run a method again.
+     *
+     * @param list<string|null> $slots
+     *
+     * @return array{Shape, bool, bool|null}
+     */
+    public function viewOf(array $slots, string $property): array
+    {
+        $value = Shape::empty();
+        $anchored = true;
+        $tracked = false;
+        $clean = true;
+
+        foreach ($slots as $slot) {
+            $each = $this->valueOf($slot, $property);
+            $value = $value->join($each);
+            $anchored = $anchored && $this->isAnchored($slot, $property);
+
+            if ($this->isTracked($slot, $property)) {
+                $tracked = true;
+                $clean = $clean && $each->flatten()->isEmpty();
+            }
+        }
+
+        return [$value, $anchored, $tracked ? $clean : null];
+    }
+
     public function isTracked(?string $class, string $property): bool
     {
         $this->log?->record('p:' . self::key($class, $property));

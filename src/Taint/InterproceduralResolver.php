@@ -65,8 +65,10 @@ final class InterproceduralResolver
 
     /**
      * How many receiver variants one function may have: one per class or
-     * allocation site it runs on. Past the cap a call applies the function's
-     * own summary.
+     * allocation site it runs on, and per literal key. The literal variants
+     * a call on another object applies there count here too. Past the cap a
+     * call applies the summary it would apply on the method's own objects,
+     * with its writes to `$this` on the receiver.
      */
     private const MAX_RECEIVER_VARIANTS = 512;
 
@@ -133,6 +135,11 @@ final class InterproceduralResolver
         /** @var array<string, true> $newVariants */
         $newVariants = [];
 
+        // The kind of each variant, which cap it counts against: see
+        // SummaryTable::RECEIVER_VARIANT.
+        /** @var array<string, array<string, string>> $kinds */
+        $kinds = [];
+
         // The fixed point cannot say how many rounds it needs until it stops
         // needing them, so the phase reports a round count rather than a
         // percentage. Real plugins settle in five to eight.
@@ -155,7 +162,7 @@ final class InterproceduralResolver
 
             /** @var list<array{summaries: list<FunctionSummary>, properties: PropertyTaintMap,
              *     scopes: ScopeTable, reads: array<string, list<string>>,
-             *     requests: array<string, array{string, array<int, int|string>}>}> $shards */
+             *     requests: array<string, array{string, array<int, int|string>, string}>}> $shards */
             $shards = $pool->run(
                 fn (int $shard, int $shardCount): array => $this->round(
                     $ordered,
@@ -179,8 +186,10 @@ final class InterproceduralResolver
                 $summaries->put($summary);
             }
 
-            foreach (array_keys($previousSummaries->capped()) as $capped) {
-                $summaries->markCapped($capped);
+            foreach ($previousSummaries->capped() as $capped => $cappedKinds) {
+                foreach (array_keys($cappedKinds) as $cappedKind) {
+                    $summaries->markCapped($capped, (string) $cappedKind);
+                }
             }
 
             $properties = clone $previousProperties;
@@ -229,19 +238,19 @@ final class InterproceduralResolver
 
                 // A variant a call asked for is analysed next round, next to
                 // the function it varies, up to the cap.
-                foreach ($shardResult['requests'] as $variantKey => [$functionKey, $bindings]) {
+                foreach ($shardResult['requests'] as $variantKey => [$functionKey, $bindings, $kind]) {
                     $base = strtolower($functionKey);
 
                     if (isset($variants[$base][$variantKey])) {
                         continue;
                     }
 
-                    // Past the cap a call applies the function's own summary,
-                    // property writes included, which it held back while it
-                    // waited. Its callers run again to do so.
-                    if (self::variantsLike($variants[$base] ?? [], $bindings) >= self::capFor($bindings)) {
-                        if (! $summaries->isCapped($base)) {
-                            $summaries->markCapped($base);
+                    // Past the cap a call applies a summary the function
+                    // already has, property writes included, which it held
+                    // back while it waited. Its callers run again to do so.
+                    if (count(array_keys($kinds[$base] ?? [], $kind, true)) >= self::capFor($kind)) {
+                        if (! $summaries->isCapped($base, $kind)) {
+                            $summaries->markCapped($base, $kind);
                             $changed = true;
                             $moved['c:' . $base] = true;
                         }
@@ -250,6 +259,7 @@ final class InterproceduralResolver
                     }
 
                     $variants[$base][$variantKey] = $bindings;
+                    $kinds[$base][$variantKey] = $kind;
                     $newVariants[$variantKey] = true;
                     $changed = true;
                 }
@@ -303,7 +313,8 @@ final class InterproceduralResolver
      *                                                                           the last round
      *
      * @return array{summaries: list<FunctionSummary>, properties: PropertyTaintMap, scopes: ScopeTable,
-     *     reads: array<string, list<string>>, requests: array<string, array{string, array<int, int|string>}>}
+     *     reads: array<string, list<string>>,
+     *     requests: array<string, array{string, array<int, int|string>, string}>}
      */
     private function round(
         array $ordered,
@@ -513,33 +524,9 @@ final class InterproceduralResolver
         }
     }
 
-    /**
-     * How many variants of the same kind as `$bindings` a function has: with
-     * a receiver, or without one.
-     *
-     * @param array<string, array<int, int|string>> $existing
-     * @param array<int, int|string>                $bindings
-     */
-    private static function variantsLike(array $existing, array $bindings): int
+    private static function capFor(string $kind): int
     {
-        $receiver = isset($bindings[FunctionSummary::RECEIVER]);
-        $count = 0;
-
-        foreach ($existing as $each) {
-            if (isset($each[FunctionSummary::RECEIVER]) === $receiver) {
-                $count++;
-            }
-        }
-
-        return $count;
-    }
-
-    /**
-     * @param array<int, int|string> $bindings
-     */
-    private static function capFor(array $bindings): int
-    {
-        return isset($bindings[FunctionSummary::RECEIVER]) ? self::MAX_RECEIVER_VARIANTS : self::MAX_VARIANTS;
+        return $kind === SummaryTable::RECEIVER_VARIANT ? self::MAX_RECEIVER_VARIANTS : self::MAX_VARIANTS;
     }
 
     private static function isMain(FunctionMeta|FunctionContext $function): bool

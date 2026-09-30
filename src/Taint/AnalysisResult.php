@@ -95,6 +95,11 @@ final class AnalysisResult
          * @var list<int>
          */
         public readonly array $forwardedKeyParameters = [],
+        /**
+         * What a method's own run read and did through `$this`: see
+         * {@see FunctionSummary::$receiverView}. Null for any other run.
+         */
+        public readonly ?ReceiverView $receiverView = null,
     ) {
     }
 }

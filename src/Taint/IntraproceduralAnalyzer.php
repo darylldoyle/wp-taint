@@ -80,7 +80,7 @@ final class IntraproceduralAnalyzer
      *
      * @param array<int, int|string> $keyBindings
      */
-    private function holdsBackWrites(FunctionContext $context, array $keyBindings): bool
+    public function holdsBackWrites(FunctionContext $context, array $keyBindings): bool
     {
         if (isset($keyBindings[FunctionSummary::RECEIVER])) {
             return false;

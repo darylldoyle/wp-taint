@@ -199,6 +199,13 @@ final class SummaryExtractor
                 $this->keyParameters[$context->key] ??= KeyParameters::of($context->func),
                 [...array_keys($forwarded), ...$baseline->forwardedKeyParameters],
             ),
+            // A write to `$this` needs a run on the receiver only when the
+            // method's own run holds its writes back. Otherwise that run
+            // wrote the method's own objects, which every read of the
+            // receiver sees.
+            $baseline->receiverView?->withWrites(
+                $baseline->receiverView->writes && $this->analyzer->holdsBackWrites($context, []),
+            ),
         );
     }
 
