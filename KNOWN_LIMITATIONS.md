@@ -428,10 +428,11 @@ unless the function makes the object it returns, as above.
 
 An object of a known class does not read that slot, and a write to it does not
 land there. So a cart fee cast from its arguments keeps its `id` off a report
-row read through an untyped parameter. A stdClass object is the one exception
-on the read side. Code hands such an object to a function whose parameter
-names no class, and a write there lands on the slot. So a read of a stdClass
-object sees the slot too.
+row read through an untyped parameter. A cast object is the one exception on
+the read side, as is a stdClass object the scan knows only by its class. Code
+hands such an object to a function whose parameter names no class, and a write
+there lands on the slot. So a read of a cast object sees the slot too. An
+object from `new stdClass()` does not, as for any other `new` line.
 
 The other way round is not followed. A function whose parameter names no class
 reads the slot, so it misses a write made to an object of a known class

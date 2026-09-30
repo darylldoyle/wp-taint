@@ -1096,7 +1096,7 @@ it('keeps the writes to two cast lines apart', function (): void {
         PHP))->toBe(['wp.xss.unescaped-output@7']);
 });
 
-it('lets a cast object read what a function it was handed writes', function (): void {
+it('lets a cast object read what a function it was handed writes, and not a new line\'s object', function (): void {
     expect(perObjectOutput(<<<'PHP'
         function acme_fill( $bag ) {
             $bag->title = $_GET['title'];
@@ -1107,15 +1107,23 @@ it('lets a cast object read what a function it was handed writes', function (): 
             acme_fill( $bag );
             echo $bag->title;
             echo $bag->opts['label'];
+            $made = new stdClass();
+            acme_fill( $made );
+            echo $made->title;
         }
         add_action( 'init', 'acme_page' );
         PHP))->toBe(['wp.xss.unescaped-output@9', 'wp.xss.unescaped-output@10']);
 });
 
-it('reads the object a function returns where the function made it', function (string $made): void {
+it('reads the object a function returns where the function made it', function (string $made, string $call): void {
     expect(perObjectOutput(<<<PHP
         class Acme_Box {
             public \$name;
+            public static function make() {
+                \$made = new Acme_Box();
+                \$made->name = \$_GET['name'];
+                return \$made;
+            }
         }
         function acme_make() {
             \$made = {$made};
@@ -1123,12 +1131,51 @@ it('reads the object a function returns where the function made it', function (s
             return \$made;
         }
         function acme_page() {
-            \$made = acme_make();
+            \$made = {$call};
             echo \$made->name;
         }
         add_action( 'init', 'acme_page' );
-        PHP))->toBe(['wp.xss.unescaped-output@12']);
+        PHP))->toBe(['wp.xss.unescaped-output@17']);
 })->with([
-    'a new line' => ['new Acme_Box()'],
-    'a cast' => ['(object) array( \'name\' => \'\' )'],
+    'a new line' => ['new Acme_Box()', 'acme_make()'],
+    'a cast' => ['(object) array( \'name\' => \'\' )', 'acme_make()'],
+    'a static method' => ['new Acme_Box()', 'Acme_Box::make()'],
+]);
+
+// The object a call returns is named only when every return of the callee
+// hands back the one object a line in it makes. Anything else is an object
+// of unknown class, as a return value was before, and misses the write.
+
+it('names no object for a call that can return more than one', function (string $maker, string $call): void {
+    expect(perObjectOutput(<<<PHP
+        class Acme_Box {
+            public \$name;
+        }
+        {$maker}
+        function acme_page() {
+            \$made = {$call};
+            echo \$made->name;
+        }
+        add_action( 'init', 'acme_page' );
+        PHP))->toBe([]);
+})->with([
+    'two lines' => [<<<'PHP'
+        function acme_make( $fresh ) {
+            if ( $fresh ) {
+                $made = new Acme_Box();
+                $made->name = $_GET['name'];
+                return $made;
+            }
+            return new Acme_Box();
+        }
+        PHP, 'acme_make( true )'],
+    'an instance method' => [<<<'PHP'
+        class Acme_Factory {
+            public function make() {
+                $made = new Acme_Box();
+                $made->name = $_GET['name'];
+                return $made;
+            }
+        }
+        PHP, '( new Acme_Factory() )->make()'],
 ]);

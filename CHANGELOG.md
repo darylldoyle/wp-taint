@@ -209,9 +209,10 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   A cast line now makes a stdClass object, as `new stdClass()` there would.
   A function whose every `return` hands back the object one `new` line or
   cast in it makes returns that object, so its caller still reads what it
-  wrote there. A stdClass object still reads the slot of objects of unknown
-  class, since code hands such objects to functions whose parameter names no
-  class.
+  wrote there. A cast object still reads the slot of objects of unknown
+  class, as it did when it was one of them, since code hands such objects to
+  functions whose parameter names no class. An object from `new stdClass()`
+  does not, as before.
 - A read of a property under a literal key named the first write under any
   key as its source. WooCommerce's transient file engine reads
   `$wp->query_vars['wc-transient-file-name']`, and its trace began at the

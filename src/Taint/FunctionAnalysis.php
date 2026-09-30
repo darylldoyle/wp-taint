@@ -3378,9 +3378,11 @@ final class FunctionAnalysis
      * any object of it or of a descendant: those classes' slots, its
      * ancestors', and every allocation site of one of them.
      *
-     * A stdClass object also sees the slot of objects of unknown class.
-     * Code hands such an object to functions whose parameter names no
-     * class, and a write there lands on that slot.
+     * The object an `(object)` cast makes also sees the slot of objects of
+     * unknown class, as it did when it was one of them. Code hands such an
+     * object to functions whose parameter names no class, and a write there
+     * lands on that slot. So does a stdClass object the scan knows only by
+     * its class, which can be one a cast made.
      *
      * @return list<string|null>
      */
@@ -3388,11 +3390,28 @@ final class FunctionAnalysis
     {
         $slots = $this->classKnownSlots($owner, $property);
 
-        if (strcasecmp(self::classOfReceiver($owner), 'stdClass') === 0) {
+        if ($this->readsUnknownSlot($owner)) {
             $slots[] = null;
         }
 
         return $slots;
+    }
+
+    /**
+     * Whether a read on `$owner` sees the slot of objects of unknown class:
+     * see {@see propertySlots()}.
+     */
+    private function readsUnknownSlot(string $owner): bool
+    {
+        if (strcasecmp(self::classOfReceiver($owner), 'stdClass') !== 0) {
+            return false;
+        }
+
+        if (ConstantTable::allocatedClass($owner) === null) {
+            return true;
+        }
+
+        return $this->resolver->values()->constants()?->isCastSite(ConstantTable::unqualifiedSite($owner)) ?? false;
     }
 
     /**

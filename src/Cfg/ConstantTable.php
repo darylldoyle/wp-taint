@@ -68,8 +68,11 @@ final class ConstantTable
     /** @var array<string, string|null> holder class and property => its one site, see allocationFor() */
     private array $allocationFor = [];
 
-    /** @var array<string, string> function key => the allocation site of the object it returns */
+    /** @var array<string, string|null> function key => the allocation site of the object it returns */
     private array $returnedSites = [];
+
+    /** @var array<string, true> the allocation sites of `(object)` cast lines */
+    private array $castSites = [];
 
     private bool $anyPropertyWritten = false;
 
@@ -265,7 +268,12 @@ final class ConstantTable
      */
     public function recordReturnedSite(string $function, string $site): void
     {
-        $this->returnedSites[strtolower($function)] = $site;
+        $key = strtolower($function);
+
+        // Two declarations of one function that return different objects
+        // return neither for sure.
+        $this->returnedSites[$key] = array_key_exists($key, $this->returnedSites)
+            && $this->returnedSites[$key] !== $site ? null : $site;
     }
 
     /**
@@ -275,6 +283,23 @@ final class ConstantTable
     public function returnedSite(string $function): ?string
     {
         return $this->returnedSites[strtolower($function)] ?? null;
+    }
+
+    /**
+     * An `(object)` cast line, as the allocation site of the stdClass
+     * objects it makes.
+     */
+    public function recordCastSite(string $site): void
+    {
+        $this->castSites[$site] = true;
+    }
+
+    /**
+     * Whether an allocation site is an `(object)` cast line.
+     */
+    public function isCastSite(string $site): bool
+    {
+        return isset($this->castSites[$site]);
     }
 
     /**

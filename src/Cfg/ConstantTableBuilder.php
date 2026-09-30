@@ -343,6 +343,14 @@ final class ConstantTableBuilder
         ?string $class = null,
         ?FunctionContext $context = null,
     ): void {
+        if ($op instanceof Op\Expr\Cast\Object_ && $context !== null) {
+            $table->recordCastSite(
+                ConstantTable::allocationSite('stdClass', $context->file->relativePath, $op->getLine()),
+            );
+
+            return;
+        }
+
         // A private property declared as a literal array, and every write to a
         // property of any name, so a read can tell whether the declaration is
         // still its value. See ConstantTable::fixedPropertyDefault().
