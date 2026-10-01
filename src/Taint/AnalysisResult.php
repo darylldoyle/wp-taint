@@ -95,6 +95,19 @@ final class AnalysisResult
          * @var list<int>
          */
         public readonly array $forwardedKeyParameters = [],
+        /**
+         * What a method's own run read and did through `$this`: see
+         * {@see FunctionSummary::$receiverView}. Null for any other run.
+         */
+        public readonly ?ReceiverView $receiverView = null,
+        /**
+         * In a probe run of a method, the properties it read through `$this`
+         * and which answers it read from each: see {@see ReceiverView::VALUE}.
+         * The run that seeds nothing adds these to its view.
+         *
+         * @var array<string, array<int, true>>
+         */
+        public readonly array $receiverReads = [],
     ) {
     }
 }

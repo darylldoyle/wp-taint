@@ -28,6 +28,8 @@ final class FunctionSummary
 
     private ?self $plain = null;
 
+    private ?self $withoutPropertyWrites = null;
+
     /**
      * @param array<int, TaintSet>            $paramToReturn kinds that reach the return value from each parameter
      * @param array<int, list<SinkReference>> $paramToSink   sinks each parameter reaches
@@ -175,8 +177,53 @@ final class FunctionSummary
          * @var list<int>
          */
         public readonly array $keyParameters = [],
+        /**
+         * What the method's own run read and did through `$this`, so a call
+         * on another object can apply this summary there rather than run a
+         * variant for that object. Null when the run did not record one: a
+         * function, a static method, a closure, or a variant. Null never
+         * answers for another receiver.
+         */
+        public readonly ?ReceiverView $receiverView = null,
+        /**
+         * The key parameters that are part of the glue the function joins an
+         * array with: see {@see KeyParameters::of()}. A call that leaves
+         * one out binds it to its literal default, so the glue is known text.
+         *
+         * @var list<int>
+         */
+        public readonly array $glueParameters = [],
+        /**
+         * Whether every key parameter only picks an element, and no key is
+         * handed on to a callee: see {@see KeyParameters::onlyPick()}. Such
+         * a function may have many more literal variants. Each one costs a
+         * run of its body, and any variant it asks of a callee counts against
+         * that callee's own cap.
+         */
+        public readonly bool $picksElements = false,
     ) {
     }
+
+    /**
+     * The binding a receiver variant keeps its receiver under: the object
+     * `$this` is in that run, a class or an allocation site. See
+     * {@see \Enshrined\WpTaint\Cfg\ConstantTable::allocationSite()}.
+     */
+    public const RECEIVER = -1;
+
+    /**
+     * The class a summary records a write to `$this->name` under, in
+     * {@see $paramToProperty}. The call site puts the write on the object
+     * the call runs on: the variant's receiver, or the objects the method's
+     * own run is on.
+     *
+     * ```php
+     * class Acme_Store extends Acme_Query {
+     *     public function limit( $n ) { $this->add( 'limit', $n ); }
+     * }
+     * ```
+     */
+    public const THIS = '$this';
 
     /**
      * The key of a variant of a summary: the function analysed with each
@@ -369,6 +416,51 @@ final class FunctionSummary
             [],
             $sets($this->paramToReturnEach),
             $this->keyParameters,
+            $this->receiverView,
+            $this->glueParameters,
+            $this->picksElements,
+        );
+    }
+
+    /**
+     * This summary with no parameter written into a property: what a call
+     * applies while it waits for the summary for its fixed key.
+     *
+     * The property map only grows. A call that applied this summary's own
+     * writes first, under a key it could not name, left them for every key
+     * to read, and the summary for the key it passes could only add to them.
+     * See {@see FunctionAnalysis::variantOf()}.
+     */
+    public function withoutPropertyWrites(): self
+    {
+        if ($this->paramToProperty === []) {
+            return $this;
+        }
+
+        return $this->withoutPropertyWrites ??= new self(
+            $this->key,
+            $this->displayName,
+            $this->paramToReturn,
+            $this->paramToSink,
+            $this->clears,
+            $this->introducesOrNull,
+            $this->imprecise,
+            $this->paramToParam,
+            $this->sourcesToParam,
+            $this->returnAnchored,
+            [],
+            $this->paramToCapture,
+            $this->paramToScope,
+            $this->paramToReturnShape,
+            $this->introducesShapeOrNull,
+            $this->parameterKeys,
+            $this->revertedResiduals,
+            $this->parameterParts,
+            $this->paramToReturnEach,
+            $this->keyParameters,
+            $this->receiverView,
+            $this->glueParameters,
+            $this->picksElements,
         );
     }
 
@@ -566,6 +658,11 @@ final class FunctionSummary
             $this->parameterParts,
             self::mergeSets($this->paramToReturnEach, $other->paramToReturnEach),
             self::mergeKeyParameters($this->keyParameters, $other->keyParameters),
+            $this->receiverView === null || $other->receiverView === null
+                ? null
+                : $this->receiverView->union($other->receiverView),
+            self::mergeKeyParameters($this->glueParameters, $other->glueParameters),
+            $this->picksElements && $other->picksElements,
         );
     }
 
@@ -1013,7 +1110,21 @@ final class FunctionSummary
 
         // A key parameter a callee's summary adds is a variant this
         // function's callers may now ask for.
-        if ($this->parameterKeys !== $other->parameterKeys || $this->keyParameters !== $other->keyParameters) {
+        if (
+            $this->parameterKeys !== $other->parameterKeys
+            || $this->keyParameters !== $other->keyParameters
+            || $this->glueParameters !== $other->glueParameters
+            || $this->picksElements !== $other->picksElements
+        ) {
+            return false;
+        }
+
+        // A call on another object applied this summary because of what the
+        // view held. When the view moves, that call has to ask again.
+        if (
+            ($this->receiverView === null) !== ($other->receiverView === null)
+            || ($this->receiverView !== null && ! $this->receiverView->equals($other->receiverView))
+        ) {
             return false;
         }
 

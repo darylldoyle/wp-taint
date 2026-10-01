@@ -14,6 +14,18 @@ namespace Enshrined\WpTaint\Taint;
  */
 final class SummaryTable
 {
+    /**
+     * A variant a call asked for with literal keys alone: see
+     * {@see FunctionSummary::variantKey()}.
+     */
+    public const LITERAL_VARIANT = 'literal';
+
+    /**
+     * A variant a method call on another object asked for, bound to that
+     * receiver. Each kind has its own cap: see {@see InterproceduralResolver}.
+     */
+    public const RECEIVER_VARIANT = 'receiver';
+
     /** @var array<string, FunctionSummary> */
     private array $summaries = [];
 
@@ -23,9 +35,18 @@ final class SummaryTable
      * Variants a call asked for that the table does not hold yet: see
      * {@see FunctionSummary::variantKey()}. The next round analyses them.
      *
-     * @var array<string, array{string, array<int, int|string>}> variant key => function key and bindings
+     * @var array<string, array{string, array<int, int|string>, string}> variant key => function key,
+     *      bindings and kind
      */
     private array $requests = [];
+
+    /**
+     * Functions with every variant of a kind they may have: see
+     * {@see markCapped()}.
+     *
+     * @var array<string, array<string, true>> function key => kinds
+     */
+    private array $capped = [];
 
     /**
      * Record every lookup from now on. See {@see ReadLog}.
@@ -74,18 +95,53 @@ final class SummaryTable
      * Ask for a variant of a function's summary, for the next round.
      *
      * @param array<int, int|string> $bindings parameter index => literal
+     * @param string                 $kind     {@see LITERAL_VARIANT} or {@see RECEIVER_VARIANT}
      */
-    public function request(string $variantKey, string $functionKey, array $bindings): void
-    {
-        $this->requests[strtolower($variantKey)] ??= [$functionKey, $bindings];
+    public function request(
+        string $variantKey,
+        string $functionKey,
+        array $bindings,
+        string $kind = self::LITERAL_VARIANT,
+    ): void {
+        $this->requests[strtolower($variantKey)] ??= [$functionKey, $bindings, $kind];
     }
 
     /**
-     * @return array<string, array{string, array<int, int|string>}> variant key => function key and bindings
+     * @return array<string, array{string, array<int, int|string>, string}> variant key => function key,
+     *         bindings and kind
      */
     public function requests(): array
     {
         return $this->requests;
+    }
+
+    /**
+     * Record that a function has every variant of this kind it may have, so
+     * a call asking for another applies a summary it already has. See
+     * {@see FunctionAnalysis::variantOf()}.
+     *
+     * The two kinds are capped apart. One flag for both let 16 literal
+     * variants stop every receiver variant, and 512 receiver variants stop
+     * every literal one.
+     */
+    public function markCapped(string $functionKey, string $kind = self::LITERAL_VARIANT): void
+    {
+        $this->capped[strtolower($functionKey)][$kind] = true;
+    }
+
+    public function isCapped(string $functionKey, string $kind = self::LITERAL_VARIANT): bool
+    {
+        $this->log?->record('c:' . strtolower($functionKey));
+
+        return isset($this->capped[strtolower($functionKey)][$kind]);
+    }
+
+    /**
+     * @return array<string, array<string, true>> function key => kinds
+     */
+    public function capped(): array
+    {
+        return $this->capped;
     }
 
     public function has(string $key): bool

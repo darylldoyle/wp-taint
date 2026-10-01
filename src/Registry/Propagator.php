@@ -74,6 +74,15 @@ final class Propagator
          * backslash and then both quotes escapes for a quoted literal.
          */
         public readonly bool $readsEscapes = false,
+        /**
+         * `str_replace()`'s search and replacement. Text with no quote,
+         * backtick or backslash in it cannot move an escaped value out of
+         * its quotes, so the value keeps its residual; any other text, or
+         * text the scan cannot read, turns it back into `sql`.
+         *
+         * @var list<int>
+         */
+        public readonly array $quoteArguments = [],
     ) {
     }
 }

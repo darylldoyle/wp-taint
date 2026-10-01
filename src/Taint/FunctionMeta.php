@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Enshrined\WpTaint\Taint;
 
+use PHPCfg\Func;
 use PHPCfg\Op;
 
 /**
@@ -36,14 +37,29 @@ final class FunctionMeta
         public readonly bool $isMain,
         public readonly bool $isClosure,
         public readonly array $parameters,
+        public readonly bool $isStatic = false,
+        /**
+         * Each parameter's default, when it is a literal string or integer,
+         * by position. A call that leaves the argument out passes it.
+         *
+         * @var array<int, int|string>
+         */
+        public readonly array $defaults = [],
     ) {
     }
 
     public static function of(FunctionContext $context, ?int $position): self
     {
         $parameters = [];
+        $defaults = [];
 
-        foreach (array_values($context->func->params) as $parameter) {
+        foreach (array_values($context->func->params) as $index => $parameter) {
+            $default = OperandHelper::literalKey($parameter->defaultVar);
+
+            if ($default !== null) {
+                $defaults[$index] = $default;
+            }
+
             $parameters[] = $parameter instanceof Op\Expr\Param
                 ? [
                     'name' => OperandHelper::literalString($parameter->name),
@@ -64,6 +80,8 @@ final class FunctionMeta
             $context->isMain(),
             $context->isClosure(),
             $parameters,
+            ($context->func->flags & Func::FLAG_STATIC) !== 0,
+            $defaults,
         );
     }
 

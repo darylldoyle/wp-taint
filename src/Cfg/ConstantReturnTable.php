@@ -71,6 +71,15 @@ final class ConstantReturnTable
      */
     private array $byMethod = [];
 
+    /**
+     * Functions whose every return is one of a few known strings, with the
+     * strings: `get_match_operator()` returns `'AND'` or `'OR'`. Only a glue
+     * check reads these: see {@see \Enshrined\WpTaint\Taint\ValueResolver::choiceStrings()}.
+     *
+     * @var array<string, list<string>>
+     */
+    private array $choices = [];
+
     public function record(string $key, string $value): void
     {
         $this->returns[strtolower($key)] = $value;
@@ -84,6 +93,36 @@ final class ConstantReturnTable
     {
         $this->templates[strtolower($key)] = $segments;
         $this->index($key);
+    }
+
+    /**
+     * @param list<string> $values
+     */
+    public function recordChoices(string $key, array $values): void
+    {
+        $this->choices[strtolower($key)] = $values;
+        $this->index($key);
+    }
+
+    /**
+     * @return list<string>|null
+     */
+    public function choicesFor(string $name): ?array
+    {
+        return $this->choices[strtolower(ltrim($name, '\\'))] ?? null;
+    }
+
+    /**
+     * The strings a method named this returns, when exactly one class
+     * declares it.
+     *
+     * @return list<string>|null
+     */
+    public function choicesForUniqueMethod(string $method): ?array
+    {
+        $key = $this->byMethod[strtolower($method)] ?? false;
+
+        return $key === false ? null : ($this->choices[$key] ?? null);
     }
 
     private function index(string $key): void

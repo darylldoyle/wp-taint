@@ -7,6 +7,7 @@ namespace Enshrined\WpTaint\Cfg;
 use Enshrined\WpTaint\Taint\BlockOrder;
 use Enshrined\WpTaint\Taint\FunctionContext;
 use Enshrined\WpTaint\Taint\OperandHelper;
+use Enshrined\WpTaint\Taint\ThisReceiver;
 use Enshrined\WpTaint\Taint\ValueResolver;
 use PHPCfg\Op;
 use PHPCfg\Operand;
@@ -39,6 +40,9 @@ use PHPCfg\Operand;
 final class ConstantTableBuilder
 {
     private const PASSES = 2;
+
+    /** How many copies a returned object is followed back through. */
+    private const MAX_RETURN_HOPS = 16;
 
     public function __construct(private readonly ValueResolver $values)
     {
@@ -90,11 +94,17 @@ final class ConstantTableBuilder
                             }
                         }
 
-                        $this->collect($next, $resolver, $op, $class);
+                        $this->collect($next, $resolver, $op, $class, $context);
                     }
                 }
 
                 $this->collectReturn($nextReturns, $resolver, $context);
+
+                $returned = self::returnedSiteOf($context);
+
+                if ($returned !== null) {
+                    $next->recordReturnedSite($context->key, $returned);
+                }
             }
 
             $table = $next;
@@ -118,6 +128,12 @@ final class ConstantTableBuilder
     ): void {
         if ($context->isMain()) {
             return;
+        }
+
+        $choices = self::choicesOf($resolver, $context);
+
+        if ($choices !== null && count($choices) > 1) {
+            $returns->recordChoices($context->key, $choices);
         }
 
         $values = [];
@@ -177,6 +193,40 @@ final class ConstantTableBuilder
         if (count($unique) === 1) {
             $returns->record($context->key, reset($unique));
         }
+    }
+
+    /**
+     * Every string a function can return, when each of its returns folds to
+     * a known few: `$operator = 'AND'; ... $operator = 'OR'; return
+     * $operator;`. Null when any return may hand back something else, a bare
+     * `return;` included.
+     *
+     * @return list<string>|null
+     */
+    private static function choicesOf(ValueResolver $resolver, FunctionContext $context): ?array
+    {
+        $choices = [];
+
+        foreach (BlockOrder::of($context->func->cfg) as $block) {
+            foreach ($block->children as $op) {
+                if (! $op instanceof Op\Terminal\Return_) {
+                    continue;
+                }
+
+                $strings = $op->expr === null ? [] : $resolver->keyStrings($op->expr);
+
+                if ($strings === []) {
+                    return null;
+                }
+
+                $choices = [...$choices, ...$strings];
+            }
+        }
+
+        $choices = array_values(array_unique($choices));
+        sort($choices);
+
+        return $choices === [] ? null : $choices;
     }
 
     /**
@@ -286,8 +336,76 @@ final class ConstantTableBuilder
         return $flat;
     }
 
-    private function collect(ConstantTable $table, ValueResolver $resolver, mixed $op, ?string $class = null): void
-    {
+    private function collect(
+        ConstantTable $table,
+        ValueResolver $resolver,
+        mixed $op,
+        ?string $class = null,
+        ?FunctionContext $context = null,
+    ): void {
+        if ($op instanceof Op\Expr\Cast\Object_ && $context !== null) {
+            $table->recordCastSite(
+                ConstantTable::allocationSite('stdClass', $context->file->relativePath, $op->getLine()),
+            );
+
+            return;
+        }
+
+        // A private property declared as a literal array, and every write to a
+        // property of any name, so a read can tell whether the declaration is
+        // still its value. See ConstantTable::fixedPropertyDefault().
+        if ($op instanceof Op\Stmt\Property) {
+            $name = OperandHelper::literalString($op->name);
+
+            if (
+                $class !== null
+                && $name !== null
+                && $op->isPrivate()
+                && ! $op->static
+                && $op->defaultVar !== null
+                && OperandHelper::definingOp($op->defaultVar) instanceof Op\Expr\Array_
+            ) {
+                $table->declareFixedProperty($name, $op->defaultVar);
+            }
+
+            return;
+        }
+
+        if ($op instanceof Op\Expr\PropertyFetch) {
+            $name = OperandHelper::literalString($op->name);
+
+            // An assignment to the property is a writer of the fetch's
+            // result, not a usage of it.
+            $assigned = OperandHelper::isWrittenElsewhere($op->result, $op);
+
+            if ($assigned || self::mayChange($op->result, 0)) {
+                $table->markPropertyWritten($name);
+            }
+
+            if ($assigned || self::mayRebind($op->result)) {
+                $site = $context === null ? null : self::allocationAssigned($op, $context);
+
+                if ($site !== null && $name !== null && $context?->className !== null) {
+                    $method = ThisReceiver::inInstanceMethod($context) && ! $context->isClosure()
+                        ? $context->func->name
+                        : null;
+                    $table->recordPropertyAllocation($context->className, $name, $site, $method);
+                } else {
+                    $onThis = OperandHelper::variableName($op->var) === 'this';
+
+                    // A computed name on another object, `$wpdb->$table = ...`,
+                    // is taken to be a value of that object's own. Read as
+                    // any property of any object, one such line anywhere
+                    // left every property of the scan unknown.
+                    if ($onThis || $name !== null) {
+                        $table->markPropertyNotAllocated($onThis ? $context?->className : null, $name);
+                    }
+                }
+            }
+
+            return;
+        }
+
         // `const NAME = 'value';` — php-cfg gives it its own terminal, with the
         // name already resolved. Inside a class body it is the class's, and
         // its name is the bare one: recorded as a global, `class A { const
@@ -303,6 +421,7 @@ final class ConstantTableBuilder
 
             if ($class !== null) {
                 $table->defineClassConstant($class, $name, $value);
+                $table->defineClassConstantList($class, $name, self::literalStrings($op->value));
             } else {
                 $table->define($name, $value);
             }
@@ -334,6 +453,223 @@ final class ConstantTableBuilder
         }
 
         $table->define($name, self::single($resolver->strings($arguments[1])));
+    }
+
+    /**
+     * The allocation site of `$this->name = new Acme_Query( ... )`, when that
+     * assignment is the one thing done to the fetch. Null for anything else.
+     */
+    private static function allocationAssigned(Op\Expr\PropertyFetch $fetch, FunctionContext $context): ?string
+    {
+        if (OperandHelper::variableName($fetch->var) !== 'this' || self::mayRebind($fetch->result)) {
+            return null;
+        }
+
+        $writers = [];
+
+        foreach ($fetch->result->ops as $writer) {
+            if ($writer !== $fetch) {
+                $writers[] = $writer;
+            }
+        }
+
+        $assign = $writers[0] ?? null;
+
+        if (count($writers) !== 1 || ! $assign instanceof Op\Expr\Assign || $assign->var !== $fetch->result) {
+            return null;
+        }
+
+        $new = OperandHelper::definingOp($assign->expr);
+
+        if (! $new instanceof Op\Expr\New_) {
+            return null;
+        }
+
+        $class = OperandHelper::literalString($new->class);
+
+        if ($class === null || in_array(strtolower($class), ['self', 'static', 'parent'], true)) {
+            return null;
+        }
+
+        return ConstantTable::allocationSite($class, $context->file->relativePath, $new->getLine());
+    }
+
+    /**
+     * The allocation site of the object every `return` of a function hands
+     * back, when that is one object: see
+     * {@see ConstantTable::recordReturnedSite()}. Null for anything else,
+     * a bare `return;` included.
+     */
+    private static function returnedSiteOf(FunctionContext $context): ?string
+    {
+        if ($context->isMain()) {
+            return null;
+        }
+
+        $site = null;
+
+        foreach (BlockOrder::of($context->func->cfg) as $block) {
+            foreach ($block->children as $op) {
+                if (! $op instanceof Op\Terminal\Return_) {
+                    continue;
+                }
+
+                $each = $op->expr === null ? null : self::siteMaking($op->expr, $context);
+
+                if ($each === null || ($site !== null && $site !== $each)) {
+                    return null;
+                }
+
+                $site = $each;
+            }
+        }
+
+        return $site;
+    }
+
+    /**
+     * The allocation site of the object a value is, when a `new` line with a
+     * named class or an `(object)` cast of an array literal made it in this
+     * body. A cast of anything else could hand back an object the value
+     * already was.
+     */
+    private static function siteMaking(Operand $value, FunctionContext $context): ?string
+    {
+        $op = self::writerOf($value);
+
+        if ($op instanceof Op\Expr\New_) {
+            $class = OperandHelper::literalString($op->class);
+
+            return $class === null || in_array(strtolower($class), ['self', 'static', 'parent'], true)
+                ? null
+                : ConstantTable::allocationSite($class, $context->file->relativePath, $op->getLine());
+        }
+
+        if ($op instanceof Op\Expr\Cast\Object_ && self::writerOf($op->expr) instanceof Op\Expr\Array_) {
+            return ConstantTable::allocationSite('stdClass', $context->file->relativePath, $op->getLine());
+        }
+
+        return null;
+    }
+
+    /**
+     * The op that gives a value, followed back through copies.
+     */
+    private static function writerOf(Operand $value): ?Op
+    {
+        for ($hops = 0; $hops < self::MAX_RETURN_HOPS; $hops++) {
+            $op = OperandHelper::definingOp($value);
+
+            if (! $op instanceof Op\Expr\Assign) {
+                return $op;
+            }
+
+            $value = $op->expr;
+        }
+
+        return null;
+    }
+
+    /**
+     * Whether a property fetch's result is used in a way that could make the
+     * property hold a different object: assigned, bound by reference, or the
+     * base of an element write. A method call on the object it holds, a read
+     * of one of that object's properties, or handing it to a call, leaves it
+     * holding the same object.
+     */
+    private static function mayRebind(Operand $operand): bool
+    {
+        foreach ($operand->usages as $usage) {
+            $keeps = match (true) {
+                // An object handed to a call is the same object when it comes
+                // back. Only a parameter taken by reference could put another
+                // there, and WordPress code does not pass objects that way.
+                $usage instanceof Op\Expr\MethodCall,
+                $usage instanceof Op\Expr\StaticCall,
+                $usage instanceof Op\Expr\FuncCall,
+                $usage instanceof Op\Expr\NsFuncCall,
+                $usage instanceof Op\Expr\New_ => true,
+                // Unset leaves no object, so none the property could hold.
+                $usage instanceof Op\Terminal\Unset_ => true,
+                $usage instanceof Op\Expr\PropertyFetch => $usage->var === $operand,
+                $usage instanceof Op\Expr\Assign => $usage->expr === $operand && $usage->var !== $operand,
+                $usage instanceof Op\Expr\Isset_,
+                $usage instanceof Op\Expr\Empty_,
+                $usage instanceof Op\Expr\InstanceOf_ => true,
+                $usage instanceof Op\Expr\ArrayDimFetch => $usage->var === $operand
+                    && ! OperandHelper::isWrittenElsewhere($usage->result, $usage)
+                    && ! self::mayChange($usage->result, 1),
+                default => false,
+            };
+
+            if (! $keeps) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Whether a property fetch's result is used in any way that could change
+     * the property: written, bound by reference, unset, handed to a call, or
+     * the base of an element write. A read, a copy, a loop over it and a
+     * read of one of its elements leave it as it is.
+     */
+    private static function mayChange(Operand $operand, int $depth): bool
+    {
+        if ($depth > 8) {
+            return true;
+        }
+
+        foreach ($operand->usages as $usage) {
+            $reads = match (true) {
+                $usage instanceof Op\Iterator\Reset,
+                $usage instanceof Op\Iterator\Valid,
+                $usage instanceof Op\Iterator\Key,
+                $usage instanceof Op\Expr\Isset_,
+                $usage instanceof Op\Expr\Empty_ => true,
+                $usage instanceof Op\Iterator\Value => ! $usage->byRef,
+                $usage instanceof Op\Expr\Assign => $usage->expr === $operand && $usage->var !== $operand,
+                $usage instanceof Op\Expr\ArrayDimFetch => $usage->var === $operand
+                    && ! OperandHelper::isWrittenElsewhere($usage->result, $usage)
+                    && ! self::mayChange($usage->result, $depth + 1),
+                default => false,
+            };
+
+            if (! $reads) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * The strings in an array literal, or null when it is not one or holds
+     * anything but literal strings.
+     *
+     * @return list<string>|null
+     */
+    private static function literalStrings(Operand $operand): ?array
+    {
+        $definition = OperandHelper::definingOp($operand);
+
+        if (! $definition instanceof Op\Expr\Array_ || $definition->values === []) {
+            return null;
+        }
+
+        $strings = [];
+
+        foreach ($definition->values as $value) {
+            if (! $value instanceof Operand\Literal || ! is_string($value->value)) {
+                return null;
+            }
+
+            $strings[] = $value->value;
+        }
+
+        return $strings;
     }
 
     /**

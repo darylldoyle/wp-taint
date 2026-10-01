@@ -63,6 +63,23 @@ final class InterproceduralResolver
      */
     private const MAX_VARIANTS = 16;
 
+    /**
+     * How many literal variants a function may have when every key
+     * parameter only picks an element: see
+     * {@see FunctionSummary::$picksElements}. WooCommerce's
+     * `WC_Data::get_prop()` is called with 183 prop names. Past a cap of
+     * 16, each getter returned every prop, so a rating read as text.
+     */
+    private const MAX_PICKING_VARIANTS = 256;
+
+    /**
+     * How many receiver variants one function may have: one per class or
+     * allocation site it runs on, and per literal key. Past the cap a call
+     * applies the summary it would apply on the method's own objects, with
+     * its writes to `$this` on the receiver.
+     */
+    private const MAX_RECEIVER_VARIANTS = 512;
+
     public function __construct(
         private readonly IntraproceduralAnalyzer $analyzer,
         private readonly SummaryExtractor $extractor,
@@ -126,6 +143,11 @@ final class InterproceduralResolver
         /** @var array<string, true> $newVariants */
         $newVariants = [];
 
+        // The kind of each variant, which cap it counts against: see
+        // SummaryTable::RECEIVER_VARIANT.
+        /** @var array<string, array<string, string>> $kinds */
+        $kinds = [];
+
         // The fixed point cannot say how many rounds it needs until it stops
         // needing them, so the phase reports a round count rather than a
         // percentage. Real plugins settle in five to eight.
@@ -148,7 +170,7 @@ final class InterproceduralResolver
 
             /** @var list<array{summaries: list<FunctionSummary>, properties: PropertyTaintMap,
              *     scopes: ScopeTable, reads: array<string, list<string>>,
-             *     requests: array<string, array{string, array<int, int|string>}>}> $shards */
+             *     requests: array<string, array{string, array<int, int|string>, string}>}> $shards */
             $shards = $pool->run(
                 fn (int $shard, int $shardCount): array => $this->round(
                     $ordered,
@@ -172,12 +194,21 @@ final class InterproceduralResolver
                 $summaries->put($summary);
             }
 
+            foreach ($previousSummaries->capped() as $capped => $cappedKinds) {
+                foreach (array_keys($cappedKinds) as $cappedKind) {
+                    $summaries->markCapped($capped, (string) $cappedKind);
+                }
+            }
+
             $properties = clone $previousProperties;
             $scopes = clone $previousScopes;
             $changed = false;
 
             /** @var array<string, true> $moved ReadLog entries that changed this round */
             $moved = [];
+
+            /** @var array<string, array{string, array<int, int|string>, string}> $requests */
+            $requests = [];
 
             // Merged in shard order, then in the order each shard produced
             // them. Both are fixed, so the merge is deterministic.
@@ -193,10 +224,16 @@ final class InterproceduralResolver
                     $summaries->put($summary);
                 }
 
-                foreach ($properties->mergeChangedKeys($shardResult['properties']) as $key) {
+                $propertyChanges = $properties->mergeChanges($shardResult['properties']);
+
+                foreach ($propertyChanges['keys'] as $key) {
                     $changed = true;
                     $moved['p:' . $key] = true;
                     $moved['p*:' . substr($key, (int) strpos($key, '::') + 2)] = true;
+                }
+
+                foreach ($propertyChanges['allocated'] as $property) {
+                    $moved['pa:' . $property] = true;
                 }
 
                 $scopeChanges = $scopes->mergeChanges($shardResult['scopes']);
@@ -210,19 +247,43 @@ final class InterproceduralResolver
                     $readsOf[$key] = $entries;
                 }
 
-                // A variant a call asked for is analysed next round, next to
-                // the function it varies, up to the cap.
-                foreach ($shardResult['requests'] as $variantKey => [$functionKey, $bindings]) {
-                    $base = strtolower($functionKey);
+                foreach ($shardResult['requests'] as $variantKey => $request) {
+                    $requests[$variantKey] ??= $request;
+                }
+            }
 
-                    if (isset($variants[$base][$variantKey]) || count($variants[$base] ?? []) >= self::MAX_VARIANTS) {
-                        continue;
+            // A variant a call asked for is analysed next round, next to the
+            // function it varies, up to the cap. In order of variant key, so
+            // which ones a cap admits does not depend on how the functions
+            // were split across workers.
+            ksort($requests, SORT_STRING);
+
+            foreach ($requests as $variantKey => [$functionKey, $bindings, $kind]) {
+                $base = strtolower($functionKey);
+
+                if (isset($variants[$base][$variantKey])) {
+                    continue;
+                }
+
+                // Past the cap a call applies a summary the function already
+                // has. While it waited for the variant, it left out that
+                // summary's property writes, so its callers run again.
+                $cap = self::capFor($kind, $summaries->get($functionKey));
+
+                if (count(array_keys($kinds[$base] ?? [], $kind, true)) >= $cap) {
+                    if (! $summaries->isCapped($base, $kind)) {
+                        $summaries->markCapped($base, $kind);
+                        $changed = true;
+                        $moved['c:' . $base] = true;
                     }
 
-                    $variants[$base][$variantKey] = $bindings;
-                    $newVariants[$variantKey] = true;
-                    $changed = true;
+                    continue;
                 }
+
+                $variants[$base][$variantKey] = $bindings;
+                $kinds[$base][$variantKey] = $kind;
+                $newVariants[$variantKey] = true;
+                $changed = true;
             }
 
             // Every function must have a summary once the first round is done.
@@ -273,7 +334,8 @@ final class InterproceduralResolver
      *                                                                           the last round
      *
      * @return array{summaries: list<FunctionSummary>, properties: PropertyTaintMap, scopes: ScopeTable,
-     *     reads: array<string, list<string>>, requests: array<string, array{string, array<int, int|string>}>}
+     *     reads: array<string, list<string>>,
+     *     requests: array<string, array{string, array<int, int|string>, string}>}
      */
     private function round(
         array $ordered,
@@ -299,6 +361,17 @@ final class InterproceduralResolver
 
         foreach ($summaries->all() as $summary) {
             $visible->put($summary);
+        }
+
+        // And which functions are past a variant cap. Without them no call
+        // saw a cap: one past it waited for its variant for good, applying
+        // the summary without its property writes, or nothing at all for a
+        // call on another object. WooCommerce's WC_Data::set_prop() reached
+        // the receiver cap, so every setter past it wrote nothing.
+        foreach ($summaries->capped() as $capped => $kinds) {
+            foreach (array_keys($kinds) as $kind) {
+                $visible->markCapped($capped, (string) $kind);
+            }
         }
 
         // Every shared read, attributed to the function doing it. Probe runs
@@ -344,8 +417,11 @@ final class InterproceduralResolver
             $analyse = $dirty === null || isset($dirty[$key]);
             $varying = [];
 
+            // A variant runs again only when it is new or something it read
+            // moved. Its reads are logged under its own key, so the base
+            // function's own reads moving says nothing about it.
             foreach ($variants[strtolower($key)] ?? [] as $variantKey => $bindings) {
-                if ($analyse || isset($newVariants[$variantKey]) || isset($dirty[$variantKey])) {
+                if ($dirty === null || isset($newVariants[$variantKey]) || isset($dirty[$variantKey])) {
                     $varying[$variantKey] = $bindings;
                 }
             }
@@ -478,6 +554,15 @@ final class InterproceduralResolver
                 $dirty[$reader] = true;
             }
         }
+    }
+
+    private static function capFor(string $kind, ?FunctionSummary $summary): int
+    {
+        if ($kind === SummaryTable::RECEIVER_VARIANT) {
+            return self::MAX_RECEIVER_VARIANTS;
+        }
+
+        return $summary !== null && $summary->picksElements ? self::MAX_PICKING_VARIANTS : self::MAX_VARIANTS;
     }
 
     private static function isMain(FunctionMeta|FunctionContext $function): bool

@@ -174,6 +174,22 @@ final class CharacterProof
     }
 
     /**
+     * A value that is one of a fixed list of literals once its letters are
+     * lowered or raised: `in_array( strtolower( $tag ), $tags, true )`.
+     *
+     * Changing case changes only letters, so every character that carries
+     * syntax is as it is in the literal. A name is still a name: `DIV` may
+     * choose a different option than `div`.
+     */
+    public static function caseVariant(): self
+    {
+        return new self(
+            TaintSet::allDataflowKinds()->without(TaintSet::of(TaintKind::ObjectId, TaintKind::Identifier)),
+            false,
+        );
+    }
+
+    /**
      * Whether nothing the value carried survives but an object id.
      */
     public function clearsEverything(): bool

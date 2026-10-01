@@ -62,7 +62,11 @@ badge:
 | --- | --- |
 | [An array read or write with a computed key sees the whole array](#array-element-taint-is-per-key-when-both-ends-name-a-constant-key) | Over-reports |
 | [A parameter read through more than 61 parts is read whole past them](#array-element-taint-is-per-key-when-both-ends-name-a-constant-key) | Over-reports |
-| [Object properties are per class, not per instance](#object-properties-are-per-class-not-per-instance) | Over-reports |
+| [A property of an object the scan cannot name is shared by its class](#object-properties-are-per-object-where-the-scan-can-tell-which-one) | Over-reports |
+| [A parameter that names no class misses writes to an object of a known class](#object-properties-are-per-object-where-the-scan-can-tell-which-one) | Misses |
+| [`get_object_vars( $this )`, a cast, a loop over `$this` or a closure reads no property](#object-properties-are-per-object-where-the-scan-can-tell-which-one) | Misses |
+| [A protected method called through a callable writes every object of its class](#object-properties-are-per-object-where-the-scan-can-tell-which-one) | Over-reports |
+| [A call waiting for its variant on another object applies nothing for a round](#object-properties-are-per-object-where-the-scan-can-tell-which-one) | Misses |
 | [A guard on a container is not followed](#a-guard-clause-is-followed-a-guard-on-a-container-is-not) | Over-reports |
 | [A value of unknown origin, with `--no-unknown-provenance`](#unknown-provenance-is-reported-by-default) | Misses |
 | [A context in a rebound or parameter-fed variable is not judged](#escaping-is-judged-against-its-context-but-not-a-computed-one) | Misses |
@@ -139,7 +143,11 @@ sees only what went into it.
 
 A read counts its key as constant when every value the key can hold is known:
 a literal, a class or global constant, a join of those, or a `foreach` over a
-literal list that nothing writes into. Such a read sees only those elements, so
+literal list that nothing writes into. A private property declared as a
+literal array counts as that literal when nothing in the scan writes a
+property of its name and no other class declares one, so WooCommerce's
+`foreach ( $this->sql_filters[ $type ] as $subset )` visits only the clause
+types listed for `$type`. Such a read sees only those elements, so
 `$o[ $k ]` inside `foreach ( array( 'path', 'tmpPath' ) as $k )` reads `'path'`
 and `'tmpPath'` and nothing else. A write under such a key still goes under a
 computed key, and an item of a list literal still sits under any index.
@@ -230,6 +238,17 @@ of rows with each row's `'label'` apart from its `'raw'`. A value the function
 builds from a computed read of the parameter, `array( 'x' => $a[ $k ] )`, still
 takes every element the read could see. **Direction:** over-reports there.
 
+**A function that returns one element or the whole array joins the two.**
+Elementor's `Base_Object::get_items( $haystack, $needle = null )` returns
+`$haystack[ $needle ]` when a caller names a key, and `$haystack` when it
+names none. A caller that names no key still gets both. A loop over the
+result then takes each field of one element as if it were a whole element.
+So `$feature['name']` also sees the stored `state` string of each feature,
+and Elementor's experiments screen is reported at
+`core/experiments/manager.php:663` and `:668`. Keeping the two apart needs a
+variant for the missing key that skips the `if ( $needle )` branch.
+**Direction:** over-reports.
+
 **A key carries its collection's own taint and what the code used as a key.**
 A `foreach` key over `$_GET` is request data. After `$rows[ $_GET['k'] ] = 1`,
 the `$k` in `foreach ( $rows as $k => $v )` is request data too, and `$v` is
@@ -278,29 +297,21 @@ what every part inherits. So does a callback `array_map()` and its relatives
 run, and a function declared twice, whose two bodies number their parts apart.
 **Direction:** over-reports.
 
-### An element write into a property stops at the property
+### An element write into a property reaches the property
 
 ```php
-$rows   = array();
-$rows[] = array( 'title' => $_GET['t'] );
-echo $rows[0]['title'];                 // reported
-
-$a['x']['y'] = $_GET['v'];
-echo $a['x']['y'];                      // reported
-
 $this->opts['name'] = $_GET['n'];       // in one method
-echo $this->opts['name'];               // in another: not reported
+echo $this->opts['name'];               // in another: reported
 ```
 
-An element write into a local array reaches the array, however many keys deep,
-and an array literal written into an element keeps its own elements. A write
-into an element of a property still lands on a temporary that nothing reads
-again. A property is one slot per class, so carrying the write up would give
-every instance what one instance wrote: WooCommerce's report queries share one
-clause list across every report. That waits for a design that tells instances
-apart.
-
-**Direction:** under-reports.
+A write into an element of a property reaches the property, however many keys
+deep. A property is one slot per object the scan can name, and per class for
+any other object: see [Object properties are per object where the scan can
+tell which one](#object-properties-are-per-object-where-the-scan-can-tell-which-one).
+A write under a key a call fixes, `add_sql_clause( 'where',
+$clause )`, lands under that key, and a read under another key does not see
+it. A key the scanner cannot name lands where every read sees it.
+**Direction:** over-reports.
 
 **An overwrite replaces the element only for a read in the same block.**
 
@@ -318,25 +329,150 @@ or `static`, an include, `extract()`, `parse_str()`, a dynamic call or a
 variable variable, since a variable can change there without an op on its
 operand. **Direction:** over-reports.
 
-### Object properties are per class, not per instance
+### Object properties are per object where the scan can tell which one
 
-`Foo::$value` is one slot. Taint written to `$this->value` in any instance of
-`Foo` is visible from every read of `$value` on any `Foo`.
+```php
+$stats = new Acme_Query();
+$stats->add( 'limit', 'LIMIT ' . $_GET['n'] );
+$plain = new Acme_Query();
+$wpdb->get_results( $plain->statement() );   // not reported
+```
 
-Inheritance is followed: a write in the base class's constructor lands under
-the base class's key, and a read through the subclass unions the whole chain,
-the property is one storage slot on the instance whichever class's method
-touched it. What stays approximate is the *instance* dimension, not the class
-one.
+A property's value is kept per object the scan can name, and a method call
+runs on the object its receiver is. The scan names an object in five ways.
+
+- **A `new` expression.** Every object one `new` line makes is one object, so
+  two `new Acme_Query()` lines are two objects, and a loop that runs one line
+  ten times makes one.
+- **An `(object)` cast.** A cast line makes a stdClass object, as a
+  `new stdClass()` line there would. A cast of an object hands back that
+  object. The scan takes any value it cannot tell is an object to be an
+  array or a scalar, which is what code casts.
+- **A call to a function that makes one.** A function or static method
+  whose every `return` hands back the object one `new` line or cast in it
+  makes returns that object. So `$row = acme_make_row(); echo $row->title;`
+  reads what `acme_make_row()` wrote there.
+- **A property that holds one.** `$this->sub = new Acme_Query()` in the
+  constructor gives `$this->sub` that object, when it is the one `new` line
+  that gives a property of that name an object in that class, its ancestors
+  and its descendants. A second `new` line, or one other assignment anywhere,
+  a copy or a reference, and the property holds an object of its class, as
+  below.
+- **`$this`.** A method runs on the objects of its class, and of each
+  descendant that inherits the method rather than declaring its own. A
+  descendant that declares its own still counts when one of its methods calls
+  this one, as `parent::get_data()` does. A call to `$this->helper()` runs the
+  helper on the caller's objects, so a protected helper in a base class that
+  only a Stats subclass calls writes that subclass's objects, not its
+  siblings'. A copy of `$this`, `$self = $this`, is the same object.
+
+A `new` line in a method that runs on objects of more than one class makes
+a different object for each class. Such a method is a trait method that two
+classes use, or a method that a descendant inherits. So the query a trait's
+`init_query()` makes for the orders store is not the one it makes for the
+taxes store. A class stands for its descendants here too. A write to the
+query made for a base class reaches the query made for each subclass, and a
+read of the base class's query sees each subclass's. All the objects of one
+class that the line makes are still one object. A method that runs on one
+class only, such as a trait method that one class uses, makes one object.
+
+Anything else is an object of its class, which stands for every object of
+that class and its descendants. A write through it reaches all of them, and a
+read through it sees all of them. That covers a parameter, a return value and
+an object handed to a function that writes it.
+
+The order of writes is not followed. A query a method runs before it adds a
+LIMIT still sees the LIMIT, since any earlier call on the same object could
+have added one. Nor is a clear: `clear_sql_clause( 'limit' )` leaves what the
+clause held. A public method of the class that writes a property counts for
+every object of the class, whether or not the scan sees a call to it, because
+code outside the scan may call it first.
+
+A call on another object applies the method's own summary when the method
+would read and call the same there, with its writes to `$this` on that
+object. Otherwise the method runs again as a variant for that object. A
+method has up to 512 such variants. Past that, a call applies the method's
+own summary, which reads every object of its class. The writes the summary
+carries from a parameter land on the object the call names. The method's own
+run then writes its own objects, as a public method's does, so a write from
+the body reaches every object of its class. A variant for a literal key the
+call passes counts against the cap that every literal variant has, and
+past that the method's own summary is the one the call applies or runs
+again.
+
+A function has up to 16 literal variants. A function whose keys only pick an
+element has up to 256. Each use of such a key is an element key, a test for
+the key with `isset()`, `empty()` or `array_key_exists()`, a comparison, or a
+part of a joined string. WooCommerce's `WC_Data::get_prop()` and `set_prop()`
+are two such functions. `get_prop()` is called with 183 prop names, so past
+16 each getter returned every prop, and a product's rating read as text. A
+function that hands its key to another function keeps the cap of 16, since
+each of its variants can ask for more. A joined string built from the key can
+still reach a callee and ask for a variant of it, which counts against the
+callee's own cap. On a case with 200 props the higher
+cap took the scan from 3.9 to 5.7 seconds and from 208MB to 310MB. On a copy
+of WooCommerce's product classes it took 5.5 seconds, against 6.6 before.
+**Direction:** past the cap, over-reports.
+
+A call on another object that waits for its variant applies nothing until a
+round analyses the variant: no return value, no sink and no write. So a
+pending variant delays the call's effects by a round, and an object held in
+another object's property takes at least a round per level. Past 32 rounds
+the scan warns that summaries did not converge, and an effect still waiting
+is missed. **Direction:** misses.
+
+A protected or private method can keep back its own writes to `$this`. It
+does so when only other classes' methods call it, and each call names the
+method. When the method writes `$this`, each call then runs it again as a
+variant on the object the call names. A call on an object the scan cannot
+name, such as a parameter, runs it on the method's own objects. The own run
+keeps back two kinds of write: to `$this`, and to an object a property of
+`$this` holds, since that object depends on `$this` too. The variants make
+those writes. The own run still makes the method's other writes, such as an
+option, a static property, or an object made with `new` or handed in.
+
+A dispatcher can call the method through a callable instead. Examples are
+`call_user_func( array( $this, 'm' ) )`, `array_map()`, `array_walk()` and
+`$cb()`. Such a call names no object, so the method keeps nothing back. A
+write from its body then reaches every object of its class.
+**Direction:** over-reports. The scan sees no call at all in a dispatch whose
+callable it cannot name. A protected method that such a dispatch runs still
+keeps its writes back. **Direction:** misses.
+
+An object handed to a call by reference could come back as another object. The
+scan assumes it does not, as WordPress code does not pass objects that way. A
+computed property name on another object, `$wpdb->$table = ...`, is taken to
+hold a value, not a new object.
+
+**Four ways of reading `$this` read no property.** `get_object_vars( $this )`,
+`(array) $this`, `foreach ( $this as $value )` and a closure in a method that
+reads `$this->name` see nothing any method wrote, on any object. A copy of
+`$this`, `$that = $this`, reads the object the call runs on, as `$this` does.
+A method that reads through a copy runs again as a variant for each object a
+call names.
 
 A property on an object whose class the scan cannot tell has one slot per
 name, shared across the whole scan. A read of `$obj->name` on any such object
 sees every `->name` written on any other. The class is known for `$this`, an
-object made with `new`, a declared parameter, property or return type, and a
-value that one of PHP's own methods is declared to return. For a property,
-that holds through a join when every way in agrees on the class, or brings a
-literal, `null`, an array or a local nothing else can set. A value from a
-function or method that declares nothing shares the slot.
+object made with `new` or an `(object)` cast, a declared parameter, property
+or return type, and a value that one of PHP's own methods is declared to
+return. For a property, that holds through a join when every way in agrees on
+the class, or brings a literal, `null`, an array or a local nothing else can
+set. A value from a function or method that declares nothing shares the slot,
+unless the function makes the object it returns, as above.
+
+An object of a known class does not read that slot, and a write to it does not
+land there. So a cart fee cast from its arguments keeps its `id` off a report
+row read through an untyped parameter. A cast object is the one exception on
+the read side, as is a stdClass object the scan knows only by its class. Code
+hands such an object to a function whose parameter names no class, and a write
+there lands on the slot. So a read of a cast object sees the slot too. An
+object from `new stdClass()` does not, as for any other `new` line.
+
+The other way round is not followed. A function whose parameter names no class
+reads the slot, so it misses a write made to an object of a known class
+before the object was handed to it. That includes a cast object.
+**Direction:** misses.
 
 A property keeps its value's elements apart, as a local array does, to four
 levels. `$this->opts = array( 'name' => $_GET['n'], 'mode' => 'grid' )` in one
@@ -348,9 +484,13 @@ what was saved.
 The trace does reach back to the source: the map records the trace of the write
 that tainted a property, and a read splices it in ahead of its own step. Without
 that, roughly a fifth of corpus findings had traces that began "read from
-property `$x`" and stopped, which is not something a reviewer can act on.
+property `$x`" and stopped, which is not something a reviewer can act on. The
+map also keeps a trace for each literal key a write put taint under. So a read
+of `$wp->query_vars['file']` names the write under `'file'`, and not a write
+under `'post__in'` to another object that shares the slot.
 
-**Direction:** over-approximating.
+**Direction:** over-reports, and misses for the four ways of reading `$this`
+above.
 
 ### A guard clause is followed; a guard on a container is not
 
@@ -370,7 +510,7 @@ for the same variable, so the two paths were always distinguishable.
 a numeric or boolean type, `is_string()` proves nothing, since the dangerous
 values are strings.
 
-For the checks php-cfg does not assert on, `ctype_*`, `in_array( …, true )`,
+For the checks php-cfg does not assert on, `ctype_*`, `in_array()`,
 `array_key_exists`, `preg_match`, a comparison with a literal, `empty()` and a
 `switch` case, {@see GuardAnalyzer} computes **dominators**
 over the block graph and asks whether the validating edge lies on every path to
@@ -408,6 +548,11 @@ the proof where it is computed, and keeps it through a join. The check covers:
   `in_array( strtoupper( $dir ), … )` covers `strtoupper( $dir )`. The
   normalisers are `strtoupper`, `strtolower`, `trim`, `ltrim`, `rtrim` and
   `sanitize_key`.
+- the value itself, when `in_array()` checks it with its case changed:
+  `in_array( strtolower( $tag ), $tags )` covers `$tag`, as Elementor's
+  `Utils::validate_html_tag()` returns it. Changing case changes only letters,
+  so this clears every payload and leaves the name: `DIV` may name a
+  different option than `div`. Only `strtolower` and `strtoupper` count.
 - either side of `&&` and `||`, both ways. `isset( $x ) && ctype_digit( $x )`
   proves `$x` digits where it is true, and nothing where it is false.
   `'grid' === $mode || 'list' === $mode` proves `$mode` one of the two where it
@@ -423,6 +568,11 @@ it to an empty value: `''`, `'0'`, `0`, `null`, `false` or an empty array. A
 counts when the constant holds exactly one string that is not numeric:
 `case self::DISMISS:` with `const DISMISS = 'acme_notice';`. A constant of
 unknown value could be `true`, which every non-empty string loosely equals.
+A loose `in_array()` holds the value to the list when every value of the list
+is a string that is not numeric. Such a list must be an array literal or a
+class constant declared as one, and `self::` names the method's own class.
+`static::` could name a subclass that declares the constant again, so it
+proves nothing.
 
 **What a guard proves, kind by kind.** A check against a fixed list of
 literals, or a number check, leaves nothing but an object id. A character check
@@ -735,6 +885,15 @@ esc_html( $_GET['v'] ) )` voids the escaped default and returns a stored value
 raw, and the line reports one escape-voided finding at the stored value's
 severity.
 
+**A call takes the escaped marker only from an argument escaped as a whole.**
+An argument that still carries html was escaped in part at most, and nothing
+says the escaped part is what the call hands back. Elementor reads an
+attachment id out of settings whose other fields were escaped and filtered,
+and passes it to `wp_get_attachment_image()`. The id carried their marker, and
+the image was reported as voided escaping. So when the call's own result
+holds nothing escaped, a partly escaped argument leaves it unmarked, and the
+line reports nothing. **Direction:** misses.
+
 **Two deliberate exceptions.**
 
 - **Registered escapers never void.** Core ends `esc_html()` with
@@ -871,7 +1030,18 @@ where the format puts it, and a numeric conversion writes a number. An
 the elements where the outer quotes put them. A glue the scan cannot read as
 one string turns them back into `sql`: WooCommerce joins its tax-rate
 locations with a glue built from a number and an escaped value, and that line
-is reported. A fragment that is not written as
+is reported. A glue that can be one of a few known strings keeps the quotes
+when every one of them does: `implode( " {$operator} ", $clauses )`, where
+`get_match_operator()` returns `'AND'` or `'OR'`. A function's return counts
+as a few known strings when every `return` folds to them. Passed to a glue
+parameter, up to four such strings run the function once each, and the call
+gets what any run does; more than four read as a glue the scan cannot read.
+`str_replace()` is read the same way: a search and a replacement that hold no
+quote, backtick or backslash leave the escaping in place, so
+`str_replace( 'date_created', 'timestamp', $clause )` keeps it. A public method
+that does the replacing still runs on its own objects with arguments no caller
+names, since code outside the scan may call it, and there it undoes the
+escaping. A fragment that is not written as
 a literal still counts when it folds to exactly one string. One that folds to
 several, or to none, is taken to hold no quote: `$c ? "'" : $x` could hold
 anything.
@@ -987,6 +1157,16 @@ written. If a codebase really does let a low-privilege user write a path into
 an option outside the scanned tree, add a project-local `[[sources]]` entry
 with `kinds = ["path"]`.
 
+**An option WordPress saves as an integer is clean.** `sanitize_option()`
+casts `posts_per_page`, `posts_per_rss` and 23 more to integers before
+`update_option()` or `update_site_option()` saves them, so
+`get_option( 'posts_per_page' )` is a number. It is clean whatever the scan
+saw written to it. Only a name the scan can fold counts: a name that may be
+one of these or another option reads as stored data. A filter on the option,
+`option_posts_per_page`, can still return text, and so can a direct write to
+the options table. Both are code, not stored data, and neither is followed.
+**Direction:** misses.
+
 ### An option only an administrator can write stores nothing
 
 A write only an administrator can make stores nothing in the option. A later
@@ -1067,7 +1247,7 @@ Some is on the reporting side:
   Redirection's `Red_Options::save()` can be reached from the front end,
   through a database version upgrade. The `url` on its write comes from
   `Redirection_IP::$ip`, which a front-end request fills from `$_SERVER`. See
-  [Object properties are per class](#object-properties-are-per-class-not-per-instance).
+  [Object properties are per object where the scan can tell which one](#object-properties-are-per-object-where-the-scan-can-tell-which-one).
 
 **Direction:** both, as listed.
 
@@ -1094,6 +1274,17 @@ property agrees, `$this->handler = 'acme_render'` in the constructor,
 `call_user_func( $this->handler, … )` in another method, inheritance included.
 A property whose writes disagree, or hold anything but a literal string or
 `array( $this|'Class', 'method' )` pair, stays unresolved.
+
+A computed method name with a literal head and tail resolves to each method
+that fits it. `$this->{ 'generate_' . $type . '_html' }( $k, $v )` is one of
+the `generate_*_html()` methods of the receiver's class, its ancestors and its
+descendants, and the call reaches all of them. A descendant counts because PHP
+runs the method of the object's own class. The list is complete only when the
+scan declares every one of those classes and none has `__call()`, so a parent
+outside the scan or a `__call()` leaves the call unresolved. A subclass
+outside the scan is not found, as for any call on `$this`. A name with only a
+literal head, `'validate_' . $type`, is not resolved this way yet.
+**Direction:** misses a subclass outside the scan.
 
 What does not: a callable arriving as a parameter, or returned by a call the
 engine cannot see into. A name that resolves to a function nobody can find a

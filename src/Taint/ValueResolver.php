@@ -90,6 +90,21 @@ final class ValueResolver
     private array $bound = [];
 
     /**
+     * Whether a call folds to every string its function can return, not only
+     * to the one it always returns: see {@see choiceStrings()}.
+     */
+    private bool $choices = false;
+
+    /**
+     * The constants this resolver folds names through, for the property
+     * allocations recorded beside them.
+     */
+    public function constants(): ?ConstantTable
+    {
+        return $this->constants;
+    }
+
+    /**
      * Every constant string this operand can hold.
      *
      * @return list<string> empty when any of its values cannot be pinned down
@@ -97,6 +112,27 @@ final class ValueResolver
     public function strings(Operand $operand, int $depth = 0): array
     {
         return $this->resolve($operand, $depth, false);
+    }
+
+    /**
+     * Every constant string this operand can hold, with each parameter in
+     * `$bound` holding the literal a summary variant binds it to: see
+     * {@see keyStrings()}.
+     *
+     * @param array<int, string> $bound a parameter operand's object id => the literal it holds
+     *
+     * @return list<string> empty when any of its values cannot be pinned down
+     */
+    public function boundStrings(Operand $operand, array $bound): array
+    {
+        $previous = $this->bound;
+        $this->bound = $bound;
+
+        try {
+            return $this->resolve($operand, 0, false);
+        } finally {
+            $this->bound = $previous;
+        }
     }
 
     /**
@@ -139,6 +175,28 @@ final class ValueResolver
             return $this->resolve($operand, 0, false);
         } finally {
             [$this->loops, $this->bound] = $previous;
+        }
+    }
+
+    /**
+     * Every string an operand can hold, a call's included when its function
+     * returns one of a few known strings. For a glue check only: a glue in
+     * `' AND '` or `' OR '` leaves every quote as it found it, and knowing
+     * that is all the answer is used for.
+     *
+     * @param array<int, string> $bound see {@see keyStrings()}
+     *
+     * @return list<string> empty when any of its values cannot be pinned down
+     */
+    public function choiceStrings(Operand $operand, array $bound = []): array
+    {
+        $previous = $this->choices;
+        $this->choices = true;
+
+        try {
+            return $this->keyStrings($operand, $bound);
+        } finally {
+            $this->choices = $previous;
         }
     }
 
@@ -262,6 +320,12 @@ final class ValueResolver
 
             if ($folded !== []) {
                 return $folded;
+            }
+
+            $choices = $this->choices && $name !== null ? $this->returns?->choicesFor($name) : null;
+
+            if ($choices !== null) {
+                return $choices;
             }
         }
 
@@ -477,7 +541,17 @@ final class ValueResolver
 
         $value = $this->returns->forUniqueMethod($method);
 
-        return $value === null ? [] : [$value];
+        if ($value !== null) {
+            return [$value];
+        }
+
+        if (! $this->choices) {
+            return [];
+        }
+
+        return ($qualified === null ? null : $this->returns->choicesFor($qualified . '::' . $method))
+            ?? $this->returns->choicesForUniqueMethod($method)
+            ?? [];
     }
 
     /**
@@ -795,13 +869,16 @@ final class ValueResolver
      * reference, and no call it is handed to, since a call can take it by
      * reference.
      */
-    private function literalArray(Operand $operand): ?Op\Expr\Array_
+    private function literalArray(Operand $operand, bool $inLiteral = false): ?Op\Expr\Array_
     {
         for ($hops = 0; $hops <= self::MAX_DEPTH; $hops++) {
-            if (self::mayBeChanged($operand)) {
+            // An element of a literal is used by the literal it sits in, which
+            // changes nothing.
+            if (! $inLiteral && self::mayBeChanged($operand)) {
                 return null;
             }
 
+            $inLiteral = false;
             $definition = OperandHelper::definingOp($operand);
 
             // An element bound by reference changes when its variable does.
@@ -809,11 +886,76 @@ final class ValueResolver
                 return in_array(true, $definition->byRef, true) ? null : $definition;
             }
 
+            // `$this->filters`, a private property declared as a literal
+            // array that nothing writes: see ConstantTable::fixedPropertyDefault().
+            if ($definition instanceof Op\Expr\PropertyFetch) {
+                return $this->fixedProperty($definition);
+            }
+
+            // `$this->filters[ $type ]`, with `$type` one key.
+            if ($definition instanceof Op\Expr\ArrayDimFetch) {
+                $element = $this->elementOf($definition);
+
+                if ($element === null) {
+                    return null;
+                }
+
+                $operand = $element;
+                $inLiteral = true;
+
+                continue;
+            }
+
             if (! $definition instanceof Op\Expr\Assign) {
                 return null;
             }
 
             $operand = $definition->expr;
+        }
+
+        return null;
+    }
+
+    private function fixedProperty(Op\Expr\PropertyFetch $fetch): ?Op\Expr\Array_
+    {
+        $name = OperandHelper::literalString($fetch->name);
+
+        if ($this->constants === null || $name === null || OperandHelper::variableName($fetch->var) !== 'this') {
+            return null;
+        }
+
+        $default = $this->constants->fixedPropertyDefault($name);
+        $definition = $default === null ? null : OperandHelper::definingOp($default);
+
+        return $definition instanceof Op\Expr\Array_ && ! in_array(true, $definition->byRef, true)
+            ? $definition
+            : null;
+    }
+
+    /**
+     * The operand a literal array holds under the one key `$fetch` can read,
+     * or null when the array is not a literal or the key is not one value.
+     */
+    private function elementOf(Op\Expr\ArrayDimFetch $fetch): ?Operand
+    {
+        if ($fetch->dim === null) {
+            return null;
+        }
+
+        $array = $this->literalArray($fetch->var);
+        $keys = $array === null ? [] : array_values(array_unique($this->resolve($fetch->dim, 0, false)));
+
+        if ($array === null || count($keys) !== 1) {
+            return null;
+        }
+
+        foreach ($array->keys as $index => $key) {
+            $value = $array->values[$index] ?? null;
+            $literal = $key instanceof Operand ? OperandHelper::literalValue($key) : null;
+
+            if ((is_string($literal) || is_int($literal)) && (string) $literal === $keys[0]) {
+                return $value instanceof Operand ? $value : null;
+            }
         }
 
         return null;
