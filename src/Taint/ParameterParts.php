@@ -75,6 +75,8 @@ final class ParameterParts
         private readonly array $indexes,
         private readonly array $keyKeepers = [],
         private readonly array $bound = [],
+        /** @var (\Closure(string): bool)|null */
+        private readonly ?\Closure $scanned = null,
     ) {
     }
 
@@ -85,12 +87,18 @@ final class ParameterParts
      * @param array<int, int|string>          $bindings   for a summary variant, the literal each bound
      *                                                    parameter holds: a read under it names that key.
      *                                                    See {@see FunctionSummary::variantKey()}.
+     * @param (\Closure(string): bool)|null   $scanned    whether the scan declares a function of this lower-case
+     *                                                    name: see {@see handedOn()}. Null counts none.
      *
      * @return array<int, list<list<int|string>>> parameter index => its parts, shortest first; part
      *                                            `n + 1` is the one at position `n`
      */
-    public static function of(Func $func, array $keyKeepers = [], array $bindings = []): array
-    {
+    public static function of(
+        Func $func,
+        array $keyKeepers = [],
+        array $bindings = [],
+        ?\Closure $scanned = null,
+    ): array {
         $indexes = [];
 
         foreach (array_values($func->params) as $index => $param) {
@@ -103,7 +111,7 @@ final class ParameterParts
             return [];
         }
 
-        $finder = new self($indexes, $keyKeepers, $bindings);
+        $finder = new self($indexes, $keyKeepers, $bindings, $scanned);
 
         /** @var array<int, array<string, list<int|string>>> $parts */
         $parts = [];
@@ -272,7 +280,64 @@ final class ParameterParts
             }
         }
 
+        if ($op instanceof Op\Expr\FuncCall || $op instanceof Op\Expr\NsFuncCall) {
+            $name = OperandHelper::literalString($op->name);
+
+            return $name !== null && $this->scanned !== null && ($this->scanned)(strtolower(ltrim($name, '\\')))
+                ? $this->handedOn($op->args)
+                : [];
+        }
+
+        if ($op instanceof Op\Expr\MethodCall || $op instanceof Op\Expr\StaticCall || $op instanceof Op\Expr\New_) {
+            return $this->handedOn($op->args);
+        }
+
         return [];
+    }
+
+    /**
+     * The keys and the elements of each part a call is handed, as parts of
+     * their own.
+     *
+     * ```php
+     * function acme_persist( $update ) {
+     *     acme_insert( $update['data'] );
+     * }
+     * ```
+     *
+     * reads `$update` only through `['data']`, and what `acme_insert()` does
+     * with its argument happens out of sight. The callee's summary may keep
+     * the keys and the values of `$data` apart, putting only the keys into
+     * the SQL text. With one part for all of `['data']`, the caller's stored
+     * values arrived at the callee as the keys' taint too, and the column
+     * names of an `INSERT` looked like stored data.
+     *
+     * Only for a function the scan declares, whose reads its summary records.
+     * A method counts whatever its receiver, since the call is not resolved
+     * here. PHP's and WordPress's own functions are modelled by what they
+     * take, not by parts.
+     *
+     * @param array<mixed> $args
+     *
+     * @return list<array{int, list<int|string>}>
+     */
+    private function handedOn(array $args): array
+    {
+        $parts = [];
+
+        foreach ($args as $arg) {
+            if (! $arg instanceof Operand) {
+                continue;
+            }
+
+            foreach ([self::KEYS, self::ANY] as $step) {
+                foreach ($this->below($arg, $step) as $part) {
+                    $parts[] = $part;
+                }
+            }
+        }
+
+        return $parts;
     }
 
     /**
@@ -368,6 +433,7 @@ final class ParameterParts
 
             return match (true) {
                 $op instanceof Op\Expr\Assign,
+                $op instanceof Op\Expr\AssignRef,
                 $op instanceof Op\Expr\Assertion => $this->pathOf($op->expr, $hops + 1),
                 $op instanceof Op\Expr\ArrayDimFetch => $this->stepDown(
                     $this->pathOf($op->var, $hops + 1),

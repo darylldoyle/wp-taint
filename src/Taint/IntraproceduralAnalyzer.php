@@ -79,6 +79,14 @@ final class IntraproceduralAnalyzer
     }
 
     /**
+     * Whether the scan declares a function of this lower-case name.
+     */
+    public function isScannedFunction(string $name): bool
+    {
+        return $this->functions->has($name);
+    }
+
+    /**
      * Whether a run's property writes stay out of the shared map.
      *
      * A variant bound to a caller's literal key is one caller's, not the

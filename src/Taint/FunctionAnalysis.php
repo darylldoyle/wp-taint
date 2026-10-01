@@ -7690,14 +7690,22 @@ final class FunctionAnalysis
             );
 
             if ($kind === Shape::ITEMS) {
-                return Shape::rest($through($node->restPart()));
+                $back = Shape::rest($through($node->restPart()));
+                $items = $node->elements()[Shape::ITEMS] ?? null;
+
+                // A probe's own argument holds its items under ITEMS, not in
+                // the rest. They go back there, still standing in, so the
+                // caller one level up puts its own items in their place.
+                return $items === null ? $back : $back->join(Shape::element(Shape::ITEMS, $through($items)));
             }
 
             $leftOut = Shape::leftOutBy($key) ?? [];
             $placed = Shape::empty();
 
             foreach ($node->elements() as $at => $value) {
-                if (isset($leftOut[$at])) {
+                // What stands for the items is the [*] part's piece, never an
+                // element under a key the body does not name.
+                if (isset($leftOut[$at]) || $at === Shape::ITEMS) {
                     continue;
                 }
 
