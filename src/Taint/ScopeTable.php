@@ -277,7 +277,7 @@ final class ScopeTable
             }
 
             $existing = $target[$key][$name] ?? Shape::empty();
-            $merged = $existing->join($value);
+            $merged = $existing->joinBounded($value);
 
             // A join that adds nothing hands back the shape it joined into.
             if ($merged === $existing) {

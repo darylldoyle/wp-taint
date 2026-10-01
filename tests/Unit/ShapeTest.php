@@ -126,3 +126,142 @@ it('takes kinds out of every part and drops a part left clean', function (): voi
         ->and($without->restPart()->isEmpty())->toBeTrue()
         ->and($shape->without(TaintSet::of(TaintKind::Sql)))->toBe($shape);
 });
+
+/**
+ * A shape three levels deep with one part shared under ten keys at each
+ * level: 1,000 paths to its leaf, and four distinct parts.
+ */
+function sharedShape(): Shape
+{
+    $level = Shape::of(TaintSet::of(TaintKind::Html));
+
+    for ($depth = 0; $depth < 3; $depth++) {
+        $next = Shape::empty();
+
+        for ($key = 0; $key < 10; $key++) {
+            $next = $next->join(Shape::element('k' . $key, $level));
+        }
+
+        $level = $next;
+    }
+
+    return $level;
+}
+
+/**
+ * How many distinct part objects a shape is made of.
+ */
+function distinctParts(Shape $shape, array &$seen = []): int
+{
+    $seen[spl_object_id($shape)] = true;
+
+    foreach ($shape->elements() as $element) {
+        distinctParts($element, $seen);
+    }
+
+    if (! $shape->restPart()->isEmpty()) {
+        distinctParts($shape->restPart(), $seen);
+    }
+
+    return count($seen);
+}
+
+it('keeps a part shared under many keys shared when it rebuilds the shape', function (): void {
+    // Each rebuild once copied every path to a shared part. Four levels
+    // sharing under ten keys made 10,000 copies of the leaf, and a whole-site
+    // scan ran out of 20GB copying one returned array this way.
+    $shape = sharedShape();
+    $write = new Provenance(TraceVerb::Propagate, null, 'write');
+
+    expect(distinctParts($shape))->toBe(4);
+
+    $named = $shape->withProvenance($write);
+
+    expect(distinctParts($named))->toBe(4)
+        ->and($named->elementAt('k0'))->toBe($named->elementAt('k9'))
+        ->and($named->elementAt('k3')->elementAt('k5')->elementAt('k7')->provenance())->toBe($write)
+        ->and($named->equals($shape))->toBeTrue();
+
+    $mapped = $shape->mapSets(static fn (TaintSet $kinds): TaintSet => $kinds->with(TaintKind::Sql));
+
+    expect(distinctParts($mapped))->toBe(4)
+        ->and($mapped->elementAt('k2')->elementAt('k4')->elementAt('k6')->flatten()->toStrings())
+        ->toBe(['html', 'sql']);
+
+    expect(distinctParts(Shape::element('top', $shape)))->toBe(5)
+        ->and(distinctParts($shape->cut(1)))->toBe(2)
+        ->and(distinctParts($named->without(TaintSet::of(TaintKind::Html))))->toBe(1);
+});
+
+it('hands back a shape whose every part already names its write', function (): void {
+    $first = new Provenance(TraceVerb::Propagate, null, 'first');
+    $named = sharedShape()->withProvenance($first);
+
+    expect($named->withProvenance(new Provenance(TraceVerb::Propagate, null, 'second')))->toBe($named)
+        ->and($named->cut(Shape::DEPTH))->toBe($named);
+});
+
+/**
+ * A shape with `$width` elements under each of three levels, each leaf a
+ * different kind under a different key: `$width` cubed paths, none shared.
+ */
+function wideShape(int $width): Shape
+{
+    $shape = Shape::empty();
+
+    for ($a = 0; $a < $width; $a++) {
+        for ($b = 0; $b < $width; $b++) {
+            for ($c = 0; $c < $width; $c++) {
+                $kind = ($a + $b + $c) % 2 === 0 ? TaintKind::Html : TaintKind::Sql;
+                $leaf = Shape::element('c' . $c, Shape::of(TaintSet::of($kind)));
+                $shape = $shape->join(Shape::element('a' . $a, Shape::element('b' . $b, $leaf)));
+            }
+        }
+    }
+
+    return $shape->join(Shape::element('a0', Shape::keys(TaintSet::of(TaintKind::Path))));
+}
+
+it('counts a part once for each path to it, and stops counting past the cap', function (): void {
+    expect(sharedShape()->paths())->toBe(1 + 10 + 100 + 1000)
+        ->and(Shape::empty()->paths())->toBe(1)
+        ->and(wideShape(22)->paths())->toBe(Shape::MAX_PATHS + 1);
+});
+
+it('leaves a shape within the cap as it is', function (): void {
+    $shape = wideShape(3);
+
+    expect($shape->bounded())->toBe($shape)
+        ->and($shape->joinBounded(wideShape(3)))->toBe($shape);
+});
+
+it('folds a shape past the cap into its rest, keeping every kind at every depth', function (): void {
+    // 22 cubed is 10,648 leaves, past the cap of 10,000.
+    $write = new Provenance(TraceVerb::Propagate, null, 'write');
+    $shape = wideShape(22)->withProvenance($write);
+    $folded = $shape->bounded();
+
+    expect($folded->paths())->toBeLessThan(10)
+        ->and($folded->elements())->toBe([])
+        ->and($folded->flatten()->toStrings())->toBe($shape->flatten()->toStrings())
+        ->and($folded->restPart()->own()->toStrings())->toEqualCanonicalizing(['html', 'path', 'sql'])
+        ->and($folded->restPart()->restPart()->restPart()->own()->toStrings())
+        ->toEqualCanonicalizing(['html', 'path', 'sql'])
+        ->and($folded->keysTaint()->toStrings())->toBe(['path'])
+        ->and($folded->restPart()->keysTaint()->toStrings())->toBe(['path'])
+        ->and($folded->restPart()->provenance())->toBe($write);
+});
+
+it('hands back the stored shape when a fold adds nothing, so a round can settle', function (): void {
+    $stored = Shape::empty()->joinBounded(wideShape(22));
+
+    expect($stored->paths())->toBeLessThan(10)
+        ->and($stored->joinBounded(wideShape(22)))->toBe($stored);
+
+    // A small shape keeps its keys beside the fold, once.
+    $grown = $stored->joinBounded(wideShape(2));
+
+    expect($grown->elementAt('a1')->elementAt('b1')->elementAt('c0')->flatten()->toStrings())->toBe(['html'])
+        ->and($grown->joinBounded(wideShape(2)))->toBe($grown)
+        ->and($grown->joinBounded(wideShape(22)))->toBe($grown);
+});

@@ -349,7 +349,7 @@ final class PropertyTaintMap
         }
 
         $existing = $this->taint[$key] ?? Shape::empty();
-        $merged = $existing->join($value);
+        $merged = $existing->joinBounded($value);
 
         // A join that adds nothing hands back the shape it joined into.
         if ($merged === $existing) {
@@ -436,7 +436,7 @@ final class PropertyTaintMap
 
         foreach ($other->taint as $key => $value) {
             $existing = $this->taint[$key] ?? Shape::empty();
-            $merged = $existing->join($value);
+            $merged = $existing->joinBounded($value);
 
             if ($merged !== $existing) {
                 $this->taint[$key] = $merged;

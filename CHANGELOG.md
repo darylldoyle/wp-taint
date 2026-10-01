@@ -7,6 +7,22 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-01
+
+### Fixed
+
+- A scan no longer runs out of memory copying an array shape whose parts
+  repeat. One shape often sits under many keys of another, and each
+  rebuild of the outer shape made a fresh copy for every key. Four levels
+  sharing under ten keys made 10,000 copies of one part. A whole-site
+  scan ran out of its 20GB limit this way in round 2. Each rebuild now
+  reuses the copy it made the first time, so findings do not change.
+- An array the scan holds keeps up to 10,000 parts, where a part counts once
+  for each path to it. Past that, every key of the array reads every kind it
+  held anywhere. This bounds the memory and time one array can take, whether
+  or not its parts repeat. The largest array a WooCommerce scan copies has
+  326 parts.
+
 ## [0.5.0] - 2026-10-01
 
 ### Added
@@ -1241,7 +1257,8 @@ rate under 10% on the corpus is being demonstrated one rule at a time under
 `docs/triage/`. The first slice, `wp.authz.rest-public-write`, was 29 findings
 and 0 false positives; the rest are outstanding.
 
-[Unreleased]: https://github.com/darylldoyle/wp-taint/compare/0.5.0...HEAD
+[Unreleased]: https://github.com/darylldoyle/wp-taint/compare/0.5.1...HEAD
+[0.5.1]: https://github.com/darylldoyle/wp-taint/compare/0.5.0...0.5.1
 [0.5.0]: https://github.com/darylldoyle/wp-taint/compare/0.4.0...0.5.0
 [0.4.0]: https://github.com/darylldoyle/wp-taint/compare/0.3.1...0.4.0
 [0.3.1]: https://github.com/darylldoyle/wp-taint/compare/0.3.0...0.3.1
