@@ -128,17 +128,9 @@ final class ConsoleScanProgress implements ScanProgress
             return;
         }
 
-        if ($this->bar !== null) {
-            $this->bar->advance($steps);
-
-            return;
-        }
-
-        // An uncounted phase still has something to report. The fixed point
-        // knows which round it is on, and "round 7" moving is the difference
-        // between working and hung.
-        $this->drawn = true;
-        $this->output->write(sprintf("\r\033[K  %s… round %d", $this->label, $this->done));
+        // An uncounted phase has nothing to add to the sentence it drew. The
+        // fixed point names its round in the label instead.
+        $this->bar?->advance($steps);
     }
 
     public function note(string $message): void

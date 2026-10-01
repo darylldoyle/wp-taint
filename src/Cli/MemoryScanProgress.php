@@ -22,8 +22,6 @@ final class MemoryScanProgress implements ScanProgress
 {
     private ?string $label = null;
 
-    private int $round = 0;
-
     private int $startedAt;
 
     private int $phaseStartedAt;
@@ -41,24 +39,13 @@ final class MemoryScanProgress implements ScanProgress
     {
         $this->report();
         $this->label = $label;
-        $this->round = 0;
         $this->phaseStartedAt = self::now();
     }
 
     public function advance(int $steps = 1): void
     {
-        // The fixed point is the only phase with no total, and each advance is
-        // a round. Rounds are where memory and time go, so each gets a line.
-        if ($this->label !== 'Resolving taint across functions') {
-            return;
-        }
-
-        if ($this->round > 0) {
-            $this->report(sprintf('round %d', $this->round));
-            $this->phaseStartedAt = self::now();
-        }
-
-        $this->round += $steps;
+        // A line per phase, not per step. Each fixed-point round is a phase of
+        // its own, because rounds are where memory and time go.
     }
 
     public function note(string $message): void
@@ -68,7 +55,7 @@ final class MemoryScanProgress implements ScanProgress
 
     public function finish(): void
     {
-        $this->report($this->round > 0 ? sprintf('round %d', $this->round) : null);
+        $this->report();
         $this->label = null;
         $this->output->writeln(sprintf(
             '[memory] total %.1fs, peak %s',
@@ -77,7 +64,7 @@ final class MemoryScanProgress implements ScanProgress
         ));
     }
 
-    private function report(?string $detail = null): void
+    private function report(): void
     {
         if ($this->label === null) {
             return;
@@ -87,7 +74,7 @@ final class MemoryScanProgress implements ScanProgress
 
         $this->output->writeln(sprintf(
             '[memory] %-40s %8.1fs  heap %9s  peak %9s  gc %7.1fs',
-            $this->label . ($detail === null ? '' : ', ' . $detail),
+            $this->label,
             (self::now() - $this->phaseStartedAt) / 1e9,
             self::megabytes(memory_get_usage()),
             self::megabytes(memory_get_peak_usage()),

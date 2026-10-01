@@ -18,8 +18,15 @@ Parsing 926/926 [============================] 100%
 Indexing symbols 926/926 [====================] 100%
 Building the hook and call graphs…
 Structural rules 926/926 [===================] 100%
-Resolving taint across functions… round 6
+Resolving taint across functions, round 2 18250/48112 [=========>          ] 37%
 ```
+
+The fixed point does not know how many rounds it needs until it stops, so
+each round has its own bar. The bar counts functions walked in call order. A
+round after the first skips every function whose inputs did not change, so it
+moves fast through those and slows on the ones it analyses again. With
+`--jobs`, forked workers run the rounds and the line shows only the round
+number.
 
 Progress is drawn on stderr, and only when stderr is a terminal, so piping and
 `-o file` are unaffected. If you see nothing at all:
