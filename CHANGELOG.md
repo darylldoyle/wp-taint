@@ -173,6 +173,17 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A function that hands part of its parameter on to another call keeps that
+  part's keys and values apart. `persist_db_row( $update )` calls
+  `insert_on_duplicate_key_update( $table, $update['data'] )`, which puts only
+  the keys of `$data` into its SQL text. The stored order values in
+  `['data']` reached the column names before. A by-reference loop value is
+  followed to the parts it reads, and a list's items keep their place through
+  two functions that return them unchanged. WooCommerce's
+  `DatabaseUtil.php:269` is still reported: its rows pass through a filter
+  callback that forwards them to a helper, which needs a function to take on
+  the parts its callee reads.
+
 - A function that builds an array literal per element of its parameter,
   `$items[ $i ] = array( 'title' => $post->post_title, 'color' => 'red' )`,
   handed each row back as one set. A caller then read the title's taint under

@@ -68,6 +68,14 @@ final class IntraproceduralAnalyzer
     }
 
     /**
+     * Whether the scan declares a function of this lower-case name.
+     */
+    public function isScannedFunction(string $name): bool
+    {
+        return $this->functions->has($name);
+    }
+
+    /**
      * @param int|null               $seedParameterIndex when set, that parameter is seeded
      *                                                    with every taint kind and no real
      *                                                    sources are used — this is how

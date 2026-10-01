@@ -262,6 +262,16 @@ each element under that key, and so does a function that rebuilds its parameter
 that way. It follows the key through copies. A key built from the loop's key,
 `$out[ $k . '_x' ]`, is a computed key, as before.
 
+A part a function hands on to another call gets its keys and its elements as
+parts of their own, one level down, since the callee's reads happen out of
+sight. `acme_insert( $update['data'] )` gives `$update` the parts
+`['data']#keys` and `['data'][*]`, so a callee that puts only the keys into its
+SQL text does not get the values' taint there. Only that one level: a callee
+that reads its argument deeper, `$rows[ $i ]['format']`, still sees the part
+above as one piece. That is how a filter callback that forwards rows to a
+helper still puts a row's stored values in its `format` clause. A by-reference
+loop value, `foreach ( $rows as &$row )`, is followed as a by-value one is.
+
 A parameter keeps up to 61 parts. Past that, and for a part the function reads
 in a way this does not follow, the parameter's own taint stands for it, which is
 what every part inherits. So does a callback `array_map()` and its relatives

@@ -91,6 +91,7 @@ final class SummaryExtractor
             $context->func,
             $this->keyKeepers ??= $this->analyzer->keyKeepers(),
             $keyBindings,
+            $this->analyzer->isScannedFunction(...),
         );
 
         for ($index = 0; $index < $analysed; $index++) {
