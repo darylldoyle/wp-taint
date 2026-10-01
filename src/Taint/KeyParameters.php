@@ -179,7 +179,7 @@ final class KeyParameters
             return [$slot];
         }
 
-        return is_array($slot) ? array_values(array_filter($slot, static fn ($o): bool => $o instanceof Operand)) : [];
+        return is_array($slot) ? array_values(array_filter($slot, static fn (mixed $o): bool => $o instanceof Operand)) : [];
     }
 
     /**
