@@ -149,13 +149,26 @@ final class InterproceduralResolver
         $kinds = [];
 
         // The fixed point cannot say how many rounds it needs until it stops
-        // needing them, so the phase reports a round count rather than a
-        // percentage. Real plugins settle in five to eight.
-        $progress->phase('Resolving taint across functions', null);
+        // needing them, so each round is a phase of its own. Real plugins
+        // settle in five to eight. Within a round, the bar counts functions
+        // walked in call order: a function whose inputs did not move is
+        // skipped, so a later round moves fast through those. Only a round run
+        // in this process can count. A forked worker's writes would interleave
+        // with the others' on the same terminal, so with --jobs the round
+        // reports its number alone.
+        $inProcess = $this->jobs < 2 || ! WorkerPool::isSupported();
+        $functionCount = count(array_unique(array_map(
+            static fn (FunctionMeta|FunctionContext $function): string => $function->key,
+            $ordered,
+        )));
 
         while ($changed && $rounds < $this->options->maxInterproceduralRounds) {
             $rounds++;
-            $progress->advance();
+            $progress->phase(
+                sprintf('Resolving taint across functions, round %d', $rounds),
+                $inProcess ? $functionCount : null,
+            );
+            $roundProgress = $inProcess ? $progress : new NullScanProgress();
 
             // This round's shared starting point. Each worker copies it and
             // adds only its own results, so no worker sees another's.
@@ -183,6 +196,7 @@ final class InterproceduralResolver
                     $readers,
                     $roundVariants,
                     $roundNewVariants,
+                    $roundProgress,
                 ),
             );
 
@@ -332,6 +346,8 @@ final class InterproceduralResolver
      *                                                                           variants and their bindings
      * @param array<string, true>                                  $newVariants the variants asked for since
      *                                                                           the last round
+     * @param ScanProgress                                          $progress    advanced once per function
+     *                                                                           walked in this slice
      *
      * @return array{summaries: list<FunctionSummary>, properties: PropertyTaintMap, scopes: ScopeTable,
      *     reads: array<string, list<string>>,
@@ -348,6 +364,7 @@ final class InterproceduralResolver
         array $readers = [],
         array $variants = [],
         array $newVariants = [],
+        ScanProgress $progress = new NullScanProgress(),
     ): array {
         // A private copy, so a worker's property writes stay in that worker
         // until the parent merges them.
@@ -427,6 +444,8 @@ final class InterproceduralResolver
             }
 
             if (! $analyse && $varying === []) {
+                $progress->advance();
+
                 continue;
             }
 
@@ -482,6 +501,8 @@ final class InterproceduralResolver
                     $produced,
                 );
             }
+
+            $progress->advance();
         }
 
         // The pool serves the fixed point only. The findings pass walks files

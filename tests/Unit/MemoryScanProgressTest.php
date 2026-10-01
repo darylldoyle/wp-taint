@@ -12,10 +12,13 @@ it('reports each phase when the next one starts, and each round of the fixed poi
     $progress->phase('Parsing', 2);
     $progress->advance();
     $progress->advance();
-    $progress->phase('Resolving taint across functions', null);
+    $progress->phase('Resolving taint across functions, round 1', 3);
     $progress->advance();
     $progress->advance();
     $progress->advance();
+    $progress->phase('Resolving taint across functions, round 2', 3);
+    $progress->advance();
+    $progress->phase('Resolving taint across functions, round 3', 3);
     $progress->finish();
 
     $lines = array_values(array_filter(explode("\n", $output->fetch())));

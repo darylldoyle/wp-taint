@@ -9,6 +9,11 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The step that resolves taint across functions shows a progress bar for
+  each round: "Resolving taint across functions, round 2 18250/48112".
+  It counts functions walked in call order, so a long round on a large tree
+  is no longer one line that never moves. With `--jobs`, the line names the
+  round only, because each worker runs in its own process.
 - A computed method name with a literal head and tail reaches each method of
   the receiver's classes that fits it. WooCommerce's settings screens call
   `$this->{ 'generate_' . $type . '_html' }( $k, $v )`, and each of those
