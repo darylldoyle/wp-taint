@@ -436,7 +436,7 @@ final class FunctionAnalysis
             $registry,
             fn (Op\Expr\PropertyFetch $fetch): ?array => $this->propertySlotsOf($fetch, ReceiverView::ANCHORED),
         );
-        $this->guards = new GuardAnalyzer($resolver->values());
+        $this->guards = new GuardAnalyzer($resolver->values(), $context->className);
         $this->capabilityGuards = new CapabilityGuard($registry, $callGraph);
         $this->returnTaint = TaintSet::empty();
         $this->returnShape = Shape::empty();
@@ -1623,6 +1623,13 @@ final class FunctionAnalysis
 
     private function transfer(Op $op): bool
     {
+        // A call that voids escaping says so for its own result only. Left
+        // set, it voided whatever the next op wrote: the isset() check behind
+        // a `??` on the next pass took the escaped marker of a do_shortcode()
+        // argument from the end of the function.
+        $this->voidingCall = null;
+        $this->voidingOp = null;
+
         // An expression whose result is the target of an assignment is a write,
         // not a read: `$a['k'] = $v`, `$this->p = $v`, `self::$p = $v` all lower
         // to a fetch followed by an Assign onto the fetch's own result operand.
@@ -8385,14 +8392,23 @@ final class FunctionAnalysis
         // `echo get_option( 'x' )` reports twice — once as unescaped output,
         // which is the real finding, and once as voided escaping, which adds
         // nothing to it.
+        //
+        // Only an argument escaped as a whole lends the marker. One that
+        // still carries html was escaped in part at most, and nothing says
+        // the escaped part is what comes back. Elementor reads an attachment
+        // id out of a widget's settings, whose other fields were escaped and
+        // filtered, and hands it to wp_get_attachment_image(). The id carried
+        // their marker, and the image was reported as voided escaping.
         $incoming = TaintSet::empty();
 
         foreach ($this->voidingCall->arguments as $argument) {
-            $incoming = $incoming->union(
-                in_array($argument, $keptInputs, true)
-                    ? $this->state->taintOf($argument)
-                    : $this->state->effectiveTaintOf($argument),
-            );
+            $lent = in_array($argument, $keptInputs, true)
+                ? $this->state->taintOf($argument)
+                : $this->state->effectiveTaintOf($argument);
+
+            if (! $lent->has(TaintKind::Html)) {
+                $incoming = $incoming->union($lent);
+            }
         }
 
         $voided = $taint->union(TaintSet::of(TaintKind::EscapeVoided));

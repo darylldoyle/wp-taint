@@ -238,6 +238,17 @@ of rows with each row's `'label'` apart from its `'raw'`. A value the function
 builds from a computed read of the parameter, `array( 'x' => $a[ $k ] )`, still
 takes every element the read could see. **Direction:** over-reports there.
 
+**A function that returns one element or the whole array joins the two.**
+Elementor's `Base_Object::get_items( $haystack, $needle = null )` returns
+`$haystack[ $needle ]` when a caller names a key, and `$haystack` when it
+names none. A caller that names no key still gets both. A loop over the
+result then takes each field of one element as if it were a whole element.
+So `$feature['name']` also sees the stored `state` string of each feature,
+and Elementor's experiments screen is reported at
+`core/experiments/manager.php:663` and `:668`. Keeping the two apart needs a
+variant for the missing key that skips the `if ( $needle )` branch.
+**Direction:** over-reports.
+
 **A key carries its collection's own taint and what the code used as a key.**
 A `foreach` key over `$_GET` is request data. After `$rows[ $_GET['k'] ] = 1`,
 the `$k` in `foreach ( $rows as $k => $v )` is request data too, and `$v` is
@@ -489,7 +500,7 @@ for the same variable, so the two paths were always distinguishable.
 a numeric or boolean type, `is_string()` proves nothing, since the dangerous
 values are strings.
 
-For the checks php-cfg does not assert on, `ctype_*`, `in_array( …, true )`,
+For the checks php-cfg does not assert on, `ctype_*`, `in_array()`,
 `array_key_exists`, `preg_match`, a comparison with a literal, `empty()` and a
 `switch` case, {@see GuardAnalyzer} computes **dominators**
 over the block graph and asks whether the validating edge lies on every path to
@@ -527,6 +538,11 @@ the proof where it is computed, and keeps it through a join. The check covers:
   `in_array( strtoupper( $dir ), … )` covers `strtoupper( $dir )`. The
   normalisers are `strtoupper`, `strtolower`, `trim`, `ltrim`, `rtrim` and
   `sanitize_key`.
+- the value itself, when `in_array()` checks it with its case changed:
+  `in_array( strtolower( $tag ), $tags )` covers `$tag`, as Elementor's
+  `Utils::validate_html_tag()` returns it. Changing case changes only letters,
+  so this clears every payload and leaves the name: `DIV` may name a
+  different option than `div`. Only `strtolower` and `strtoupper` count.
 - either side of `&&` and `||`, both ways. `isset( $x ) && ctype_digit( $x )`
   proves `$x` digits where it is true, and nothing where it is false.
   `'grid' === $mode || 'list' === $mode` proves `$mode` one of the two where it
@@ -542,6 +558,11 @@ it to an empty value: `''`, `'0'`, `0`, `null`, `false` or an empty array. A
 counts when the constant holds exactly one string that is not numeric:
 `case self::DISMISS:` with `const DISMISS = 'acme_notice';`. A constant of
 unknown value could be `true`, which every non-empty string loosely equals.
+A loose `in_array()` holds the value to the list when every value of the list
+is a string that is not numeric. Such a list must be an array literal or a
+class constant declared as one, and `self::` names the method's own class.
+`static::` could name a subclass that declares the constant again, so it
+proves nothing.
 
 **What a guard proves, kind by kind.** A check against a fixed list of
 literals, or a number check, leaves nothing but an object id. A character check
@@ -853,6 +874,15 @@ flows that start at one call count as one story. `echo get_option( 'x',
 esc_html( $_GET['v'] ) )` voids the escaped default and returns a stored value
 raw, and the line reports one escape-voided finding at the stored value's
 severity.
+
+**A call takes the escaped marker only from an argument escaped as a whole.**
+An argument that still carries html was escaped in part at most, and nothing
+says the escaped part is what the call hands back. Elementor reads an
+attachment id out of settings whose other fields were escaped and filtered,
+and passes it to `wp_get_attachment_image()`. The id carried their marker, and
+the image was reported as voided escaping. So when the call's own result
+holds nothing escaped, a partly escaped argument leaves it unmarked, and the
+line reports nothing. **Direction:** misses.
 
 **Two deliberate exceptions.**
 

@@ -421,6 +421,7 @@ final class ConstantTableBuilder
 
             if ($class !== null) {
                 $table->defineClassConstant($class, $name, $value);
+                $table->defineClassConstantList($class, $name, self::literalStrings($op->value));
             } else {
                 $table->define($name, $value);
             }
@@ -642,6 +643,33 @@ final class ConstantTableBuilder
         }
 
         return false;
+    }
+
+    /**
+     * The strings in an array literal, or null when it is not one or holds
+     * anything but literal strings.
+     *
+     * @return list<string>|null
+     */
+    private static function literalStrings(Operand $operand): ?array
+    {
+        $definition = OperandHelper::definingOp($operand);
+
+        if (! $definition instanceof Op\Expr\Array_ || $definition->values === []) {
+            return null;
+        }
+
+        $strings = [];
+
+        foreach ($definition->values as $value) {
+            if (! $value instanceof Operand\Literal || ! is_string($value->value)) {
+                return null;
+            }
+
+            $strings[] = $value->value;
+        }
+
+        return $strings;
     }
 
     /**
