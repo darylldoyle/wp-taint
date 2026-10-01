@@ -17,6 +17,11 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sharing under ten keys made 10,000 copies of one part. A whole-site
   scan ran out of its 20GB limit this way in round 2. Each rebuild now
   reuses the copy it made the first time, so findings do not change.
+- An array the scan holds keeps up to 10,000 parts, where a part counts once
+  for each path to it. Past that, every key of the array reads every kind it
+  held anywhere. This bounds the memory and time one array can take, whether
+  or not its parts repeat. The largest array a WooCommerce scan copies has
+  326 parts.
 
 ## [0.5.0] - 2026-10-01
 

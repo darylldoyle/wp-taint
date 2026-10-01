@@ -56,6 +56,16 @@ final class Shape
     public const DEPTH = 4;
 
     /**
+     * How many parts a shape may hold, counting a part once for each path
+     * to it, before {@see bounded()} folds it.
+     *
+     * Every comparison and join walks a shape path by path, so this bounds
+     * their work as well as the memory a copy takes. The largest shape a
+     * WooCommerce scan copies has 326 paths.
+     */
+    public const MAX_PATHS = 10_000;
+
+    /**
      * An element standing for whichever element is read.
      *
      * A probe writes here when a function rebuilds its parameter key by key,
@@ -88,6 +98,9 @@ final class Shape
 
     /** Every element and the rest joined, found once: see anyElement(). */
     private ?self $anyOnce = null;
+
+    /** How many paths this shape has, found once: see paths(). */
+    private ?int $pathsOnce = null;
 
     /**
      * Each element standing for others, under EACH or an OTHERS key, with the
@@ -250,6 +263,91 @@ final class Shape
         }
 
         return $done[$id] = new self($this->own, $this->keys, $elements, $rest, $own, $keys);
+    }
+
+    /**
+     * How many parts this shape holds, counting a part once for each path to
+     * it, or one more than {@see MAX_PATHS} once it holds more.
+     */
+    public function paths(): int
+    {
+        if ($this->pathsOnce !== null) {
+            return $this->pathsOnce;
+        }
+
+        $paths = 1;
+
+        foreach ($this->elements as $element) {
+            $paths += $element->paths();
+
+            if ($paths > self::MAX_PATHS) {
+                return $this->pathsOnce = self::MAX_PATHS + 1;
+            }
+        }
+
+        if ($this->rest !== null) {
+            $paths += $this->rest->paths();
+        }
+
+        return $this->pathsOnce = min($paths, self::MAX_PATHS + 1);
+    }
+
+    /**
+     * This shape, or, past {@see MAX_PATHS}, one that holds all its taint in
+     * the rest.
+     *
+     * A read under any key sees the rest, so the fold loses which key held
+     * what and never loses taint. Each of the {@see DEPTH} levels below holds
+     * every kind the shape held anywhere, and every kind its keys held, so a
+     * read or a loop over keys at any depth still sees them.
+     */
+    public function bounded(): self
+    {
+        if ($this->paths() <= self::MAX_PATHS) {
+            return $this;
+        }
+
+        $all = $this->flatten();
+        $keys = $this->keysAnywhere();
+        $provenance = $this->provenance ?? $this->firstProvenance();
+        $keysProvenance = $this->keysProvenance ?? $provenance;
+        $level = null;
+
+        for ($depth = 0; $depth < self::DEPTH; $depth++) {
+            $level = new self($all, $keys, [], $level, $provenance, $keys->isEmpty() ? null : $keysProvenance);
+        }
+
+        return new self(
+            $this->own,
+            $keys,
+            [],
+            $level,
+            $provenance,
+            $keys->isEmpty() ? null : $keysProvenance,
+        );
+    }
+
+    /**
+     * What the keys carry at any depth of this shape.
+     *
+     * @param array<int, true> $seen each part already met, by object id
+     */
+    private function keysAnywhere(array &$seen = []): TaintSet
+    {
+        $seen[spl_object_id($this)] = true;
+        $keys = $this->keys;
+
+        foreach ($this->elements as $element) {
+            if (! isset($seen[spl_object_id($element)])) {
+                $keys = $keys->union($element->keysAnywhere($seen));
+            }
+        }
+
+        if ($this->rest !== null && ! isset($seen[spl_object_id($this->rest)])) {
+            $keys = $keys->union($this->rest->keysAnywhere($seen));
+        }
+
+        return $keys;
     }
 
     /**
@@ -694,6 +792,27 @@ final class Shape
         );
     }
 
+    /**
+     * {@see join()}, folded past {@see MAX_PATHS}: what a shape that is
+     * stored and joined into again, round after round, takes.
+     *
+     * A fold that holds nothing this shape does not already hold hands this
+     * shape back. Each fold is a new object, and a caller that saw a new
+     * object every round would never reach the fixed point.
+     */
+    public function joinBounded(self $other): self
+    {
+        $merged = $this->join($other->bounded());
+
+        if ($merged === $this) {
+            return $this;
+        }
+
+        $bounded = $merged->bounded();
+
+        return $bounded !== $merged && $bounded->equals($this) ? $this : $bounded;
+    }
+
     public function equals(self $other): bool
     {
         if ($other === $this) {
@@ -801,14 +920,34 @@ final class Shape
      */
     private function firstProvenance(): ?Provenance
     {
-        foreach ($this->elements as $element) {
-            $provenance = $element->provenance ?? $element->firstProvenance();
+        $seen = [];
+
+        return $this->firstProvenanceBelow($seen);
+    }
+
+    /**
+     * @param array<int, true> $seen each part already searched, by object id
+     */
+    private function firstProvenanceBelow(array &$seen): ?Provenance
+    {
+        $seen[spl_object_id($this)] = true;
+
+        foreach ([...array_values($this->elements), ...($this->rest === null ? [] : [$this->rest])] as $part) {
+            if ($part->provenance !== null) {
+                return $part->provenance;
+            }
+
+            if (isset($seen[spl_object_id($part)])) {
+                continue;
+            }
+
+            $provenance = $part->firstProvenanceBelow($seen);
 
             if ($provenance !== null) {
                 return $provenance;
             }
         }
 
-        return $this->rest === null ? null : $this->rest->provenance ?? $this->rest->firstProvenance();
+        return null;
     }
 }

@@ -4421,7 +4421,7 @@ final class FunctionAnalysis
         $this->returnTaint = $merged;
 
         // A join that adds nothing hands back the shape it joined into.
-        $merged = $this->returnShape->join($structure);
+        $merged = $this->returnShape->joinBounded($structure);
         $changed = $merged !== $this->returnShape || $changed;
         $this->returnShape = $merged;
 

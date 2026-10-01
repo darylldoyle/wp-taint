@@ -200,3 +200,68 @@ it('hands back a shape whose every part already names its write', function (): v
     expect($named->withProvenance(new Provenance(TraceVerb::Propagate, null, 'second')))->toBe($named)
         ->and($named->cut(Shape::DEPTH))->toBe($named);
 });
+
+/**
+ * A shape with `$width` elements under each of three levels, each leaf a
+ * different kind under a different key: `$width` cubed paths, none shared.
+ */
+function wideShape(int $width): Shape
+{
+    $shape = Shape::empty();
+
+    for ($a = 0; $a < $width; $a++) {
+        for ($b = 0; $b < $width; $b++) {
+            for ($c = 0; $c < $width; $c++) {
+                $kind = ($a + $b + $c) % 2 === 0 ? TaintKind::Html : TaintKind::Sql;
+                $leaf = Shape::element('c' . $c, Shape::of(TaintSet::of($kind)));
+                $shape = $shape->join(Shape::element('a' . $a, Shape::element('b' . $b, $leaf)));
+            }
+        }
+    }
+
+    return $shape->join(Shape::element('a0', Shape::keys(TaintSet::of(TaintKind::Path))));
+}
+
+it('counts a part once for each path to it, and stops counting past the cap', function (): void {
+    expect(sharedShape()->paths())->toBe(1 + 10 + 100 + 1000)
+        ->and(Shape::empty()->paths())->toBe(1)
+        ->and(wideShape(22)->paths())->toBe(Shape::MAX_PATHS + 1);
+});
+
+it('leaves a shape within the cap as it is', function (): void {
+    $shape = wideShape(3);
+
+    expect($shape->bounded())->toBe($shape)
+        ->and($shape->joinBounded(wideShape(3)))->toBe($shape);
+});
+
+it('folds a shape past the cap into its rest, keeping every kind at every depth', function (): void {
+    // 22 cubed is 10,648 leaves, past the cap of 10,000.
+    $write = new Provenance(TraceVerb::Propagate, null, 'write');
+    $shape = wideShape(22)->withProvenance($write);
+    $folded = $shape->bounded();
+
+    expect($folded->paths())->toBeLessThan(10)
+        ->and($folded->elements())->toBe([])
+        ->and($folded->flatten()->toStrings())->toBe($shape->flatten()->toStrings())
+        ->and($folded->restPart()->own()->toStrings())->toEqualCanonicalizing(['html', 'path', 'sql'])
+        ->and($folded->restPart()->restPart()->restPart()->own()->toStrings())
+        ->toEqualCanonicalizing(['html', 'path', 'sql'])
+        ->and($folded->keysTaint()->toStrings())->toBe(['path'])
+        ->and($folded->restPart()->keysTaint()->toStrings())->toBe(['path'])
+        ->and($folded->restPart()->provenance())->toBe($write);
+});
+
+it('hands back the stored shape when a fold adds nothing, so a round can settle', function (): void {
+    $stored = Shape::empty()->joinBounded(wideShape(22));
+
+    expect($stored->paths())->toBeLessThan(10)
+        ->and($stored->joinBounded(wideShape(22)))->toBe($stored);
+
+    // A small shape keeps its keys beside the fold, once.
+    $grown = $stored->joinBounded(wideShape(2));
+
+    expect($grown->elementAt('a1')->elementAt('b1')->elementAt('c0')->flatten()->toStrings())->toBe(['html'])
+        ->and($grown->joinBounded(wideShape(2)))->toBe($grown)
+        ->and($grown->joinBounded(wideShape(22)))->toBe($grown);
+});

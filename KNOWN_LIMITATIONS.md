@@ -62,6 +62,7 @@ badge:
 | --- | --- |
 | [An array read or write with a computed key sees the whole array](#array-element-taint-is-per-key-when-both-ends-name-a-constant-key) | Over-reports |
 | [A parameter read through more than 61 parts is read whole past them](#array-element-taint-is-per-key-when-both-ends-name-a-constant-key) | Over-reports |
+| [An array with more than 10,000 parts is read whole](#array-element-taint-is-per-key-when-both-ends-name-a-constant-key) | Over-reports |
 | [A property of an object the scan cannot name is shared by its class](#object-properties-are-per-object-where-the-scan-can-tell-which-one) | Over-reports |
 | [A parameter that names no class misses writes to an object of a known class](#object-properties-are-per-object-where-the-scan-can-tell-which-one) | Misses |
 | [`get_object_vars( $this )`, a cast, a loop over `$this` or a closure reads no property](#object-properties-are-per-object-where-the-scan-can-tell-which-one) | Misses |
@@ -295,6 +296,13 @@ A parameter keeps up to 61 parts. Past that, and for a part the function reads
 in a way this does not follow, the parameter's own taint stands for it, which is
 what every part inherits. So does a callback `array_map()` and its relatives
 run, and a function declared twice, whose two bodies number their parts apart.
+**Direction:** over-reports.
+
+An array the scan holds keeps up to 10,000 parts, where a part counts once for
+each path to it. Past that, every key of the array reads every kind the array
+held anywhere, at every depth. This bounds the memory and time one array can
+take. The largest array a WooCommerce scan copies has 326 parts. The scan does
+not say when it folds an array.
 **Direction:** over-reports.
 
 ### An element write into a property reaches the property

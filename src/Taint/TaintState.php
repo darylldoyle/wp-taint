@@ -129,11 +129,11 @@ final class TaintState
         $this->lastJoined[$operand] = $shape;
 
         if ($provenance !== null) {
-            $shape = $shape->withProvenance($provenance);
+            $shape = $shape->bounded()->withProvenance($provenance);
         }
 
         $existing = $this->shapeOf($operand);
-        $merged = $existing->join($shape);
+        $merged = $existing->joinBounded($shape);
 
         // A join that adds nothing hands back the shape it was given, and one
         // that adds anything makes a larger one.
