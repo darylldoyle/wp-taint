@@ -103,6 +103,44 @@ it('keeps elements quoted through an implode() glue that re-quotes them', functi
         PHP))->toBe(['wp.sqli.wpdb-query@6']);
 });
 
+/**
+ * WooCommerce's report stores join their status clauses with a glue built
+ * from a parameter: `implode( " $operator ", $subqueries )`.
+ */
+function quoteContextGlue(string $calls): string
+{
+    return <<<PHP
+        class Acme_Store {
+            protected function status_clause( \$operator = 'AND' ) {
+                \$statuses = array_map( 'esc_sql', (array) get_option( 'acme_statuses' ) );
+                \$clauses = array(
+                    "status IN ( '" . implode( "','", \$statuses ) . "' )",
+                    "status NOT IN ( 'trash' )",
+                );
+                return implode( " \$operator ", \$clauses );
+            }
+            public function run( \$operator ) {
+                global \$wpdb;
+        {$calls}
+            }
+        }
+        PHP;
+}
+
+it('keeps elements quoted through a glue whose parameter a call leaves at its default', function (): void {
+    expect(quoteContextFindings(quoteContextGlue(<<<'PHP'
+                $wpdb->get_results( 'SELECT * FROM t WHERE ' . $this->status_clause() );
+                $wpdb->get_results( 'SELECT * FROM t WHERE ' . $this->status_clause( 'OR' ) );
+        PHP)))->toBe([]);
+});
+
+it('turns the elements raw again through a glue a call can put a quote in', function (): void {
+    expect(quoteContextFindings(quoteContextGlue(<<<'PHP'
+                $wpdb->get_results( 'SELECT * FROM t WHERE ' . $this->status_clause( "' OR" ) );
+                $wpdb->get_results( 'SELECT * FROM t WHERE ' . $this->status_clause( $operator ) );
+        PHP)))->toBe(['wp.sqli.wpdb-query@13', 'wp.sqli.wpdb-query@14']);
+});
+
 it('turns an escaped value raw again through a function that can undo it', function (string $undo): void {
     expect(quoteContextFindings(<<<PHP
         function acme_run() {

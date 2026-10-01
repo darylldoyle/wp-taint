@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Enshrined\WpTaint\Taint;
 
 use Enshrined\WpTaint\Registry\ArgumentSelector;
+use PHPCfg\Func;
 
 /**
  * Computes a function's {@see FunctionSummary}.
@@ -45,11 +46,19 @@ final class SummaryExtractor
     private ?array $keyKeepers = null;
 
     /**
-     * Each function's key parameters, which do not change between rounds.
+     * Each function's key parameters, the ones among them in a glue, and
+     * whether they only pick an element, which do not change between rounds.
      *
-     * @var array<string, list<int>>
+     * @var array<string, array{list<int>, list<int>, bool}>
      */
     private array $keyParameters = [];
+
+    /**
+     * The functions that join with a glue, found once.
+     *
+     * @var array<string, list<int>>|null
+     */
+    private ?array $glues = null;
 
     public function __construct(
         private readonly IntraproceduralAnalyzer $analyzer,
@@ -85,6 +94,9 @@ final class SummaryExtractor
         $imprecise = $parameterCount > $analysed;
         $forwarded = [];
 
+        /** @var array<string, array<int, true>> $probeReads see AnalysisResult::$receiverReads */
+        $probeReads = [];
+
         // A variant's bound key names the part a read under it takes.
         $partsKey = $keyBindings === [] ? $context->key : FunctionSummary::variantKey($context->key, $keyBindings);
         $parts = $this->parameterParts[$partsKey] ??= ParameterParts::of(
@@ -106,6 +118,10 @@ final class SummaryExtractor
             );
 
             $paramToReturn[$index] = $result->returnTaint;
+
+            foreach ($result->receiverReads as $property => $asked) {
+                $probeReads[$property] = ($probeReads[$property] ?? []) + $asked;
+            }
 
             foreach ($result->forwardedKeyParameters as $key) {
                 $forwarded[$key] = true;
@@ -164,7 +180,26 @@ final class SummaryExtractor
         // What the function returns with no parameter tainted at all: a wrapper
         // around get_option() introduces stored taint regardless of its
         // arguments, and a caller has to know that.
-        $baseline = $this->analyzer->analyze($context, $summaries, $properties, $scopes, null, false, [], $keyBindings);
+        //
+        // This run also records the view of `$this` that a call on another
+        // object compares. The view includes what the probe runs read there.
+        $baseline = $this->analyzer->analyze(
+            $context,
+            $summaries,
+            $properties,
+            $scopes,
+            null,
+            false,
+            [],
+            $keyBindings,
+            $probeReads,
+        );
+
+        [$keys, $glued, $picks] = $this->keyParameters[$context->key] ??= self::keysOf(
+            $context->func,
+            $this->glues ??= $this->analyzer->glueArguments(),
+        );
+        $handedOn = [...array_keys($forwarded), ...$baseline->forwardedKeyParameters];
 
         return new FunctionSummary(
             $keyBindings === [] ? $context->key : FunctionSummary::variantKey($context->key, $keyBindings),
@@ -195,11 +230,30 @@ final class SummaryExtractor
                 ARRAY_FILTER_USE_KEY,
             ),
             $paramToReturnEach,
-            self::keyParameters(
-                $this->keyParameters[$context->key] ??= KeyParameters::of($context->func),
-                [...array_keys($forwarded), ...$baseline->forwardedKeyParameters],
+            self::keyParameters($keys, $handedOn),
+            // A write to `$this` needs a run on the receiver only when the
+            // method's own run holds its writes back. Otherwise that run
+            // wrote the method's own objects, which every read of the
+            // receiver sees.
+            $baseline->receiverView?->withWrites(
+                $baseline->receiverView->writes
+                    && $this->analyzer->holdsBackReceiverWrites($context, [], $summaries),
             ),
+            $glued,
+            $picks && $handedOn === [],
         );
+    }
+
+    /**
+     * @param array<string, list<int>> $glues
+     *
+     * @return array{list<int>, list<int>, bool}
+     */
+    private static function keysOf(Func $func, array $glues): array
+    {
+        [$keys, $glued] = KeyParameters::of($func, $glues);
+
+        return [$keys, $glued, KeyParameters::onlyPick($func, $keys)];
     }
 
     /**

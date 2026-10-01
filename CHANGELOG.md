@@ -9,12 +9,27 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A computed method name with a literal head and tail reaches each method of
+  the receiver's classes that fits it. WooCommerce's settings screens call
+  `$this->{ 'generate_' . $type . '_html' }( $k, $v )`, and each of those
+  methods escapes what it prints, so the field definitions no longer reach
+  the screen raw. A descendant's method counts. A parent outside the scan or a
+  `__call()` leaves the call unresolved, as before.
+- A private property declared as a literal array is read as that literal
+  when nothing in the scan writes a property of its name. WooCommerce's report
+  queries build a filtered where clause from
+  `foreach ( $this->sql_filters[ $type ] as $subset )`, and that loop now
+  visits only `'where'` and `'where_time'`, so a request's order-by clause
+  no longer reaches it.
 - A call that passes a fixed string as a key gets its own summary of the
   function, with that key known. `$config->get( 'mode' )`, whose body reads
   `$this->values[ $key ]`, hands back only `'mode'`, and
   `acme_pick( $row, 'label' )` only `$row['label']`. A function gets up to 16
   such summaries. Past that, and for a key the call does not fix, it applies
-  its own summary, as before.
+  its own summary, as before. A function whose keys only pick an element gets
+  up to 256. WooCommerce calls `get_prop()` with 183 prop names, and each
+  getter now returns its own prop, so a product's rating no longer reads as
+  text.
 - `wp_parse_args()` and `wp_list_pluck()` keep each element apart. They
   returned clean before, as a function the registry does not model does.
   `wp_parse_args()` keeps each key of the caller's array over the defaults, as
@@ -179,6 +194,74 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stores put `posts_per_page` into a LIMIT clause, and each store's queries
   were reported as SQL injection.
 
+- A write to a property reached every object of its class. WooCommerce's
+  report stores share one query class, and a LIMIT one store built from an
+  option reached every other store's queries as a critical SQL finding. A
+  property is now kept per object where the scan can tell which one: every
+  object one `new` line makes, a property only ever given such an object, and
+  the objects a method runs on through `$this`. A method called on another
+  object runs on that object's properties. When it would read and call the
+  same there, its own summary applies, with its writes to `$this` on that
+  object. A subclass that overrides a method and calls it through `parent::`
+  still counts among that method's objects. A protected method that only
+  subclasses call writes the objects of the subclass that calls it. Called
+  through a callable such as `array_map( array( $this, 'm' ), ... )`, it
+  writes every object of its class. A `new` line in a method that runs on
+  objects of more than one class makes a different object for each class.
+  WooCommerce's six report Stats stores make their queries on one line of a
+  trait, and a WHERE clause the orders store wrote no longer reaches the
+  taxes store's queries. Anything else is an object of its class, as before.
+  See KNOWN_LIMITATIONS.md.
+- A write to an object made by an `(object)` cast reached every object whose
+  class the scan could not tell. WooCommerce casts each cart fee's arguments
+  and writes the fee's id, and a stock report row's `$item->id` read that id.
+  A cast line now makes a stdClass object, as `new stdClass()` there would.
+  A function whose every `return` hands back the object one `new` line or
+  cast in it makes returns that object, so its caller still reads what it
+  wrote there. A cast object still reads the slot of objects of unknown
+  class, as it did when it was one of them, since code hands such objects to
+  functions whose parameter names no class. An object from `new stdClass()`
+  does not, as before.
+- A read of a property under a literal key named the first write under any
+  key as its source. WooCommerce's transient file engine reads
+  `$wp->query_vars['wc-transient-file-name']`, and its trace began at the
+  orders list table's write under `'post__in'`, which never reached it. The
+  trace now begins at the write under the key the read names.
+- A call past a function's variant cap never saw the cap. It waited for its
+  variant for good, so a write it passed a property reached nothing. Past
+  the cap, a call now applies the function's own summary, and the
+  function's own run writes every object of its class. Literal variants and
+  variants for another object are capped apart, at 16 and 512. Calls reach
+  the cap in order of the variant they ask for. How `--jobs` splits the
+  functions no longer decides that order.
+- A glue built from a parameter turned the escaped values `implode()` joined
+  back into SQL. WooCommerce joins its report status clauses with
+  `implode( " $operator ", $subqueries )`, where `$operator` defaults to
+  `'AND'`. A call that leaves such a parameter out now binds it to its
+  literal default, and a call that passes one literal binds that, so the
+  glue is known text. A glue that can hold a quote still turns the values
+  back into SQL.
+- A glue that can be one of a few known strings keeps the escaping when every
+  one of them leaves the quotes as it found them. WooCommerce's report
+  stores join their clauses with `implode( " {$operator} ", ... )`, where
+  `get_match_operator()` returns `'AND'` or `'OR'`, and the escaped order
+  statuses in those clauses counted as raw SQL. A call that passes such a
+  glue to a function's glue parameter, `get_status_subquery( $query_args,
+  $operator )`, runs the function once for each string and gets what either
+  run does.
+- `str_replace()` with a search and a replacement that hold no quote,
+  backtick or backslash keeps an escaped value's escaping. It turned every
+  escaped value it touched back into raw SQL. WooCommerce's Downloads Stats
+  store renames a column in its clauses with `str_replace_clause(
+  'where_time', 'date_created', 'timestamp' )`.
+- A write into an element of a property went nowhere, as a write two keys
+  deep into a local array did before. `$this->opts['name'] = $_GET['n']` in
+  one method left `echo $this->opts['name']` clean in another. It now reaches
+  the property. A call that passes a fixed key, such as WooCommerce's
+  `add_sql_clause( 'where', $clause )`, writes under that key alone, so a
+  report's order-by clause no longer reaches its where clause. While the
+  summary for a fixed key is still being worked out, the call holds back its
+  property writes, which would otherwise stay under a key any read sees.
 - A function that builds an array literal per element of its parameter,
   `$items[ $i ] = array( 'title' => $post->post_title, 'color' => 'red' )`,
   handed each row back as one set. A caller then read the title's taint under

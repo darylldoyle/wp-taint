@@ -285,7 +285,7 @@ final class OperandHelper
      * property names and expects the caller to read them. Isolated here so the
      * dynamic access has exactly one home. See docs/php-cfg-api-notes.md.
      */
-    private static function readProperty(Op $op, string $property): mixed
+    public static function readProperty(Op $op, string $property): mixed
     {
         /** @var array<string, mixed> $vars */
         $vars = get_object_vars($op);

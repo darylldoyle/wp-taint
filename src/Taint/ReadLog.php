@@ -15,8 +15,9 @@ namespace Enshrined\WpTaint\Taint;
  * makes skipping it exact rather than a guess: what was read, not what the
  * call graph predicts will be.
  *
- * Keys are prefixed by table: `s:` a summary, `p:` a property as `class::name`
- * and `p*:` every class's property of that name, `si:`/`so:`/`sk:`/`sg:` a
+ * Keys are prefixed by table: `s:` a summary, `p:` a property as `class::name`,
+ * `p*:` every class's property of that name, and `pa:` the allocation sites
+ * that property of that name was written on. `si:`/`so:`/`sk:`/`sg:` are a
  * scope's inbound variables, outbound variables, keyed entries and origins.
  */
 final class ReadLog

@@ -110,3 +110,15 @@ it('lists every subclass at any depth, and the classes that use a trait', functi
     expect($hierarchy->descendantsOf('Leaf'))->toBe([]);
     expect($hierarchy->descendantsOf('never_declared'))->toBe([]);
 });
+
+it('tells a trait from a class', function (): void {
+    $hierarchy = hierarchyFor(<<<'PHP'
+        <?php
+        trait Shared {}
+        class Uses { use Shared; }
+        PHP);
+
+    expect($hierarchy->isTrait('Shared'))->toBeTrue();
+    expect($hierarchy->isTrait('Uses'))->toBeFalse();
+    expect($hierarchy->isTrait('never_declared'))->toBeFalse();
+});

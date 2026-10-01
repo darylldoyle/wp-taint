@@ -14,8 +14,14 @@ use Enshrined\WpTaint\Finding\TraceStep;
  * is a single flow across two bodies. The interprocedural fixed point iterates
  * until this map stops changing.
  *
- * Not path-sensitive and not per-instance. A tainted `Foo::$value` taints every
- * read of `$value` on any `Foo`. Recorded in KNOWN_LIMITATIONS.md.
+ * Not path-sensitive. A slot is an object the scan can name, an allocation
+ * site such as `foo@file.php:12`, or a class, which stands for every object of
+ * it the scan cannot name. A write through an object of unknown origin lands
+ * on the class slot, and that could be any object of the class. So a read on
+ * an allocation site sees its own slot and the slots of its class and its
+ * ancestors, and a tainted `Foo::$value` taints every read of `$value` on any
+ * `Foo`. A write on an allocation site reaches only reads that can be on that
+ * object. Recorded in KNOWN_LIMITATIONS.md.
  *
  * Each entry carries the trace of the write that tainted it, so a finding whose
  * flow enters through a property read still shows where the value came from. A
@@ -50,6 +56,14 @@ final class PropertyTaintMap
     private array $anchored = [];
 
     /**
+     * The allocation sites each property was written on, kept as writes are
+     * tracked, in sorted order. See {@see allocatedOwners()}.
+     *
+     * @var array<string, list<string>>
+     */
+    private array $allocated = [];
+
+    /**
      * Each property's value as a shape: its own taint on top and, for an
      * array, its elements under their keys, so a read of `$this->opts['mode']`
      * sees only what `'mode'` was given.
@@ -75,6 +89,15 @@ final class PropertyTaintMap
      * @var array<string, list<TraceStep>>
      */
     private array $origins = [];
+
+    /**
+     * The trace of the write that put taint under each literal key of a
+     * property, so a read of `$wp->query_vars['file']` names the write under
+     * `'file'`, not the first write under any key.
+     *
+     * @var array<string, array<array-key, list<TraceStep>>>
+     */
+    private array $elementOrigins = [];
 
     /**
      * Shared with every copy made by clone or {@see sealed()}: a probe run
@@ -106,6 +129,59 @@ final class PropertyTaintMap
         $this->log?->record('p:' . self::key($class, $property));
 
         return $this->taint[self::key($class, $property)] ?? Shape::empty();
+    }
+
+    /**
+     * The allocation sites whose objects had this property written: see
+     * {@see \Enshrined\WpTaint\Cfg\ConstantTable::allocationSite()}.
+     *
+     * @return list<string>
+     */
+    public function allocatedOwners(string $property): array
+    {
+        // Its own entry, not `p*:`. The answer moves only when a site is
+        // written for the first time, and `p*:` moves whenever any slot of
+        // the name does: every reader of `$this->settings` ran again each
+        // time one settings object changed.
+        $this->log?->record('pa:' . $property);
+
+        return $this->allocated[$property] ?? [];
+    }
+
+    /**
+     * What a read of `$property` sees across `$slots`: the values joined,
+     * whether every slot's writes were anchored, and whether the tracked
+     * slots all hold nothing, or null when no slot was tracked. These are
+     * the three answers a read gives the dataflow, {@see LiteralAnchor} and
+     * {@see OriginClassifier}. It logs the reads those make.
+     *
+     * The write's origin is left out. Two receivers whose slots hold the
+     * same value can still name different writes as its origin, and a trace
+     * is not a reason to run a method again.
+     *
+     * @param list<string|null> $slots
+     *
+     * @return array{Shape, bool, bool|null}
+     */
+    public function viewOf(array $slots, string $property): array
+    {
+        $value = Shape::empty();
+        $anchored = true;
+        $tracked = false;
+        $clean = true;
+
+        foreach ($slots as $slot) {
+            $each = $this->valueOf($slot, $property);
+            $value = $value->join($each);
+            $anchored = $anchored && $this->isAnchored($slot, $property);
+
+            if ($this->isTracked($slot, $property)) {
+                $tracked = true;
+                $clean = $clean && $each->flatten()->isEmpty();
+            }
+        }
+
+        return [$value, $anchored, $tracked ? $clean : null];
     }
 
     public function isTracked(?string $class, string $property): bool
@@ -166,6 +242,19 @@ final class PropertyTaintMap
     }
 
     /**
+     * The trace of the write that tainted one literal key of a property, or
+     * none when no write under that key carried taint.
+     *
+     * @return list<TraceStep>
+     */
+    public function elementOriginOf(?string $class, string $property, int|string $element): array
+    {
+        $this->log?->record('p:' . self::key($class, $property));
+
+        return $this->elementOrigins[self::key($class, $property)][$element] ?? [];
+    }
+
+    /**
      * Was every value ever written to this property anchored by a literal?
      *
      * A property nothing was recorded for answers true: not knowing is not the
@@ -206,7 +295,7 @@ final class PropertyTaintMap
             return;
         }
 
-        $this->tracked[self::key($class, $property)] = true;
+        $this->startTracking(self::key($class, $property));
     }
 
     /**
@@ -248,6 +337,15 @@ final class PropertyTaintMap
 
         if ($origin !== []) {
             $this->origins[$key] = self::preferredOrigin($this->origins[$key] ?? [], $origin);
+
+            foreach ($value->elements() as $element => $part) {
+                if (! $part->flatten()->isEmpty()) {
+                    $this->elementOrigins[$key][$element] = self::preferredOrigin(
+                        $this->elementOrigins[$key][$element] ?? [],
+                        $origin,
+                    );
+                }
+            }
         }
 
         $existing = $this->taint[$key] ?? Shape::empty();
@@ -282,12 +380,29 @@ final class PropertyTaintMap
      */
     public function mergeChangedKeys(self $other): array
     {
+        return $this->mergeChanges($other)['keys'];
+    }
+
+    /**
+     * Merge, and say which entries moved, as `class::property` keys, and
+     * which properties were written on an allocation site for the first
+     * time, which is when {@see allocatedOwners()} gives another answer.
+     *
+     * @return array{keys: list<string>, allocated: list<string>}
+     */
+    public function mergeChanges(self $other): array
+    {
         $changed = [];
+        $allocated = [];
 
         foreach (array_keys($other->tracked) as $key) {
             if (! isset($this->tracked[$key])) {
-                $this->tracked[$key] = true;
+                $property = $this->startTracking($key);
                 $changed[$key] = true;
+
+                if ($property !== null) {
+                    $allocated[$property] = true;
+                }
             }
         }
 
@@ -303,6 +418,19 @@ final class PropertyTaintMap
             if (self::signature($preferred) !== self::signature($current)) {
                 $this->origins[$key] = $preferred;
                 $changed[$key] = true;
+            }
+        }
+
+        foreach ($other->elementOrigins as $key => $elements) {
+            foreach ($elements as $element => $origin) {
+                $current = $this->elementOrigins[$key][$element] ?? [];
+                $preferred = self::preferredOrigin($current, $origin);
+
+                // By signature, as for a property's own origin above.
+                if (self::signature($preferred) !== self::signature($current)) {
+                    $this->elementOrigins[$key][$element] = $preferred;
+                    $changed[$key] = true;
+                }
             }
         }
 
@@ -331,7 +459,7 @@ final class PropertyTaintMap
             }
         }
 
-        return array_keys($changed);
+        return ['keys' => array_keys($changed), 'allocated' => array_map('strval', array_keys($allocated))];
     }
 
     /**
@@ -386,8 +514,41 @@ final class PropertyTaintMap
         return implode("\0", $parts);
     }
 
+    /**
+     * Track a `class::property` key, and index it by property when its owner
+     * is an allocation site. Rebuilding the index from every tracked key
+     * whenever one was added cost up to 10.8 seconds a scan.
+     *
+     * @return string|null the property, when the key is a new allocation site's
+     */
+    private function startTracking(string $key): ?string
+    {
+        if (isset($this->tracked[$key])) {
+            return null;
+        }
+
+        $this->tracked[$key] = true;
+        $at = strrpos($key, '::');
+
+        if ($at === false || ! str_contains(substr($key, 0, $at), '@')) {
+            return null;
+        }
+
+        // Sorted, so the first slot a read finds tracked, and the origin it
+        // gives, does not depend on the order the workers' maps merged in.
+        $property = substr($key, $at + 2);
+        $this->allocated[$property][] = substr($key, 0, $at);
+        sort($this->allocated[$property], SORT_STRING);
+
+        return $property;
+    }
+
     private static function key(?string $class, string $property): string
     {
-        return strtolower($class ?? '?') . '::' . $property;
+        // `class#method` names the objects a method runs on, which keep their
+        // properties under their class.
+        $at = $class === null ? false : strpos($class, '#');
+
+        return strtolower($at === false ? ($class ?? '?') : substr($class, 0, $at)) . '::' . $property;
     }
 }

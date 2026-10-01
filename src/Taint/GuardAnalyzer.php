@@ -103,11 +103,20 @@ final class GuardAnalyzer
     private ?BlockDominators $dominators = null;
 
     /**
+     * Normalisers that change the case of letters and nothing else.
+     */
+    private const CASE_CHANGERS = ['strtolower', 'strtoupper'];
+
+    /**
      * @param ValueResolver|null $values folds a constant to the strings it can
      *     hold, so a loose comparison with one can be credited
+     * @param string|null $class the class the function is written in, which
+     *     `self::` names
      */
-    public function __construct(private readonly ?ValueResolver $values = null)
-    {
+    public function __construct(
+        private readonly ?ValueResolver $values = null,
+        private readonly ?string $class = null,
+    ) {
     }
 
     /** @var array<string, CharacterProof|null> proofFor() answers for this function, by operand and block */
@@ -690,11 +699,31 @@ final class GuardAnalyzer
         }
 
         if ($function === 'in_array') {
-            // Loose comparison is not a constraint: `in_array( '0abc', [ 0 ] )`
-            // is true in PHP before 8, and the third-party suite marks the
-            // loose form as a case an analyser should still flag.
-            if (! isset($arguments[1], $arguments[2]) || ! $checksValue(0) || ! $this->isTrue($arguments[2])) {
+            if (! isset($arguments[0], $arguments[1])) {
                 return null;
+            }
+
+            // A match on the value makes it one of the list's values. A match
+            // on the value with its case changed makes it one of them up to
+            // the case of its letters.
+            $proof = match (true) {
+                $checksValue(0) => CharacterProof::complete(),
+                $this->changesCaseOf($arguments[0], $subject) => CharacterProof::caseVariant(),
+                default => null,
+            };
+
+            if ($proof === null) {
+                return null;
+            }
+
+            // Loose comparison is not a constraint in general: `in_array(
+            // '0abc', [ 0 ] )` is true in PHP before 8, and `'1e1' == '10'` in
+            // any version. The third-party suite marks a loose check against
+            // numbers as a case an analyser should still flag. Against strings
+            // that are not numeric, `==` stretches nothing, as with the loose
+            // comparison in comparisonProof().
+            if (! isset($arguments[2]) || ! $this->isTrue($arguments[2])) {
+                return $this->holdsOnlyLooseSafeStrings($arguments[1]) ? [true, $proof] : null;
             }
 
             // A list the code built itself, from its own definitions, settles
@@ -702,8 +731,8 @@ final class GuardAnalyzer
             // checks each setting a REST request names against
             // `array_keys( $settings_by_id )` before saving it.
             return $this->isLiteralArray($arguments[1])
-                ? [true, CharacterProof::complete()]
-                : [true, CharacterProof::complete()->requiringClean($arguments[1])];
+                ? [true, $proof]
+                : [true, $proof->requiringClean($arguments[1])];
         }
 
         if ($function === 'array_key_exists') {
@@ -938,6 +967,99 @@ final class GuardAnalyzer
             && $otherNormalised !== null
             && $normalised[0] === $otherNormalised[0]
             && $this->sameValue($normalised[1], $otherNormalised[1], $depth + 1);
+    }
+
+    /**
+     * Whether a needle is the value with the case of its letters changed:
+     * `strtolower( $tag )`.
+     *
+     * Elementor checks a tag this way and then returns the tag as it came.
+     * Only a case change counts. `trim()` would leave the value free to
+     * carry whitespace the list never held.
+     */
+    private function changesCaseOf(Operand $needle, Operand $subject): bool
+    {
+        $definition = OperandHelper::definingOp($needle);
+        $normalised = $definition === null ? null : self::normaliserOf($definition);
+
+        return $normalised !== null
+            && in_array($normalised[0], self::CASE_CHANGERS, true)
+            && $this->refersTo($normalised[1], $subject);
+    }
+
+    /**
+     * Whether every value of this list is a string a loose comparison cannot
+     * stretch: see isLooseSafeLiteral().
+     */
+    private function holdsOnlyLooseSafeStrings(Operand $list): bool
+    {
+        $strings = $this->listStrings($list);
+
+        if ($strings === null) {
+            return false;
+        }
+
+        foreach ($strings as $string) {
+            if ($string === '' || is_numeric(trim($string))) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * The strings a list holds, when every value of it is a literal string:
+     * an array literal, or a class constant declared as one.
+     *
+     * `self::` names the class the function is written in. `static::` could
+     * name a subclass that declares the constant again, so it is not read.
+     *
+     * @return list<string>|null
+     */
+    private function listStrings(Operand $list, int $depth = 0): ?array
+    {
+        $definition = OperandHelper::definingOp($list);
+
+        if ($definition instanceof Op\Expr\Assign && $depth < 8) {
+            return $this->listStrings($definition->expr, $depth + 1);
+        }
+
+        if ($definition instanceof Op\Expr\Array_) {
+            $strings = [];
+
+            foreach ($definition->values as $value) {
+                if (! $value instanceof Operand\Literal || ! is_string($value->value)) {
+                    return null;
+                }
+
+                $strings[] = $value->value;
+            }
+
+            return $strings === [] ? null : $strings;
+        }
+
+        if (! $definition instanceof Op\Expr\ClassConstFetch) {
+            return null;
+        }
+
+        $class = OperandHelper::literalString($definition->class);
+        $name = OperandHelper::literalString($definition->name);
+        $constants = $this->values?->constants();
+
+        if ($class === null || $name === null || $constants === null) {
+            return null;
+        }
+
+        $lowered = strtolower(ltrim($class, '\\'));
+
+        if ($lowered === 'self') {
+            $class = $this->class;
+        } elseif ($lowered === 'static' || $lowered === 'parent') {
+            return null;
+        }
+
+        return $class === null ? null : $constants->classConstantListOf($class, $name);
     }
 
     private function isTrue(Operand $operand): bool

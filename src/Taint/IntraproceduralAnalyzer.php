@@ -8,6 +8,7 @@ use Enshrined\WpTaint\Cfg\IncludeGraph;
 use Enshrined\WpTaint\Hooks\RestRouteTable;
 use Enshrined\WpTaint\Registry\ArgumentSelector;
 use Enshrined\WpTaint\Registry\Registry;
+use PHPCfg\Func;
 
 /**
  * Runs the propagation loop over a single function body.
@@ -68,6 +69,70 @@ final class IntraproceduralAnalyzer
     }
 
     /**
+     * The functions that join with a glue: see {@see Registry::glueArguments()}.
+     *
+     * @return array<string, list<int>>
+     */
+    public function glueArguments(): array
+    {
+        return $this->registry->glueArguments();
+    }
+
+    /**
+     * Whether a run's property writes stay out of the shared map.
+     *
+     * A variant bound to a caller's literal key is one caller's, not the
+     * body's. A receiver variant's writes are that receiver's, so they land,
+     * with any key it binds too: they are that receiver's under that key.
+     *
+     * @param array<int, int|string> $keyBindings
+     */
+    public function holdsBackWrites(array $keyBindings): bool
+    {
+        return $keyBindings !== [] && ! isset($keyBindings[FunctionSummary::RECEIVER]);
+    }
+
+    /**
+     * Whether a method's own run keeps its writes to `$this` out of the
+     * shared map, and lands the rest.
+     *
+     * A protected or private method that only other classes' methods call by
+     * name runs as a receiver variant on each object they name. A call that
+     * names no object, such as one on a parameter, runs a variant on the
+     * method's own objects: see {@see FunctionAnalysis::heldBackReceiverOf()}.
+     * Its own run is not one that happens. So its writes to `$this` are held
+     * back, and so are its writes to an object a property of `$this` holds,
+     * which depends on the object too. Its summary then says it wrote
+     * `$this`, so every call runs a variant, and the variants land those
+     * writes. See {@see ReceiverView::$writes}.
+     *
+     * Its other writes land: an option, a static property, an object made
+     * with `new` or handed in. The method makes those wherever it runs, and
+     * its own summary carries only the writes a parameter reaches.
+     *
+     * Not past the method's receiver cap. A call there applies the own
+     * summary and runs no variant, so the own run's writes are the only ones.
+     *
+     * @param array<int, int|string> $keyBindings
+     */
+    public function holdsBackReceiverWrites(
+        FunctionContext $context,
+        array $keyBindings,
+        SummaryTable $summaries,
+    ): bool {
+        if ($keyBindings !== [] || $context->className === null || $this->callGraph === null) {
+            return false;
+        }
+
+        $flags = $context->func->flags;
+
+        return ($flags & (Func::FLAG_PROTECTED | Func::FLAG_PRIVATE)) !== 0
+            && ($flags & Func::FLAG_STATIC) === 0
+            && $this->callGraph->calledOnlyFromOtherClasses($context->key)
+            && ! $summaries->isCapped($context->key, SummaryTable::RECEIVER_VARIANT);
+    }
+
+    /**
      * @param int|null               $seedParameterIndex when set, that parameter is seeded
      *                                                    with every taint kind and no real
      *                                                    sources are used — this is how
@@ -77,6 +142,9 @@ final class IntraproceduralAnalyzer
      * @param array<int, int|string> $keyBindings        for a summary variant, the literal each
      *                                                    bound parameter holds: see
      *                                                    {@see FunctionSummary::variantKey()}
+     * @param array<string, array<int, true>> $probeReads what the probe runs read through `$this`,
+     *                                                    for the run that seeds nothing: see
+     *                                                    {@see AnalysisResult::$receiverReads}
      */
     public function analyze(
         FunctionContext $context,
@@ -87,12 +155,14 @@ final class IntraproceduralAnalyzer
         bool $collectFindings = true,
         array $seedParts = [],
         array $keyBindings = [],
+        array $probeReads = [],
     ): AnalysisResult {
         // A probe run asks what one parameter reaches; it does not observe the
         // body as written, so nothing it writes belongs in the shared property
         // map. See PropertyTaintMap::$sealed. Nor does a run of a summary
         // variant, whose bound key is one caller's, not the body's.
-        $properties = $seedParameterIndex === null && $keyBindings === [] ? $properties : $properties->sealed();
+        $sealed = $seedParameterIndex !== null || $this->holdsBackWrites($keyBindings);
+        $properties = $sealed ? $properties->sealed() : $properties;
         $receivers = new ReceiverResolver($this->functions->declaredTypes());
 
         return (new FunctionAnalysis(
@@ -118,6 +188,8 @@ final class IntraproceduralAnalyzer
             $this->administrators,
             $seedParts,
             $keyBindings,
+            ! $sealed && $this->holdsBackReceiverWrites($context, $keyBindings, $summaries),
+            $probeReads,
         ))->run();
     }
 }

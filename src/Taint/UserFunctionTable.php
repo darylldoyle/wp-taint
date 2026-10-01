@@ -33,6 +33,21 @@ final class UserFunctionTable
     /** @var list<FunctionMeta> */
     private array $all = [];
 
+    /** @var array<string, string> class and method => receiver key, see receiverOf() */
+    private array $receivers = [];
+
+    /** @var array<string, array{list<string>, array<string, true>}> receiver key => see classSlotsOf() */
+    private array $classSlots = [];
+
+    /** @var array<string, bool> class and method => see runsOnSeveralClasses() */
+    private array $several = [];
+
+    /** @var array<string, array<string, true>> class => see relatedClasses() */
+    private array $related = [];
+
+    /** Which methods call which, once the scan has built it: see {@see useCallGraph()}. */
+    private ?CallGraph $callGraph = null;
+
     private DeclaredTypes $declared;
 
     private ClassHierarchy $hierarchy;
@@ -205,5 +220,184 @@ final class UserFunctionTable
     public function all(): array
     {
         return $this->all;
+    }
+
+    /**
+     * Let {@see receiverOf()} see which descendants call a method they
+     * override. The call graph is built after this table, from it.
+     */
+    public function useCallGraph(CallGraph $callGraph): void
+    {
+        $this->callGraph = $callGraph;
+        $this->receivers = [];
+        $this->classSlots = [];
+        $this->several = [];
+    }
+
+    /**
+     * The objects a method runs on, as a receiver key: its class, which
+     * stands for every object of it or of a descendant, or `class#method`
+     * when a descendant declares its own method of that name and so never
+     * runs this one.
+     *
+     * ```php
+     * class Coupons_Store extends Data_Store { function get_data() { ... } }
+     * class Coupons_Stats extends Coupons_Store { function get_data() { ... } }
+     * ```
+     *
+     * `Coupons_Store::get_data()` never runs on a `Coupons_Stats` object, so
+     * the LIMIT that object's own `get_data()` writes is not one it reads.
+     * A descendant whose own methods call it, as `parent::get_data()` does,
+     * runs it on its objects, so the key still stands for that descendant.
+     *
+     * Kept per class and method. The answer walks every descendant, and the
+     * analysis asks it for every method call in every run: 1.3 million times
+     * on Elementor.
+     */
+    public function receiverOf(string $class, string $method): string
+    {
+        $key = $class . '::' . $method;
+
+        if (isset($this->receivers[$key])) {
+            return $this->receivers[$key];
+        }
+
+        $declared = $this->resolveMethodKey($class, $method);
+
+        foreach ($this->hierarchy->descendantsOf($class) as $descendant) {
+            if (! $this->runsOn($descendant, $class, $method, $declared)) {
+                return $this->receivers[$key] = strtolower(ltrim($class, '\\')) . '#' . strtolower($method);
+            }
+        }
+
+        return $this->receivers[$key] = strtolower(ltrim($class, '\\'));
+    }
+
+    /**
+     * Whether `$declared`, the body a call of `$method` on `$class` runs,
+     * can run on an object of `$descendant`: the descendant inherits it, or
+     * a method the descendant declares below `$class` calls it.
+     */
+    private function runsOn(string $descendant, string $class, string $method, ?string $declared): bool
+    {
+        if ($this->resolveMethodKey($descendant, $method) === $declared) {
+            return true;
+        }
+
+        if ($declared === null || $this->callGraph === null) {
+            return false;
+        }
+
+        $above = array_flip($this->hierarchy->lookupOrder($class));
+
+        foreach ($this->hierarchy->lookupOrder($descendant) as $candidate) {
+            if (isset($above[$candidate])) {
+                continue;
+            }
+
+            foreach ($this->byClass[$candidate] ?? [] as $meta) {
+                if (in_array($declared, $this->callGraph->calleesOf($meta->key), true)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * The class slots a read through a receiver key sees, and the classes
+     * whose allocation sites it sees too.
+     *
+     * A class key stands for any object of it or of a descendant: the slots
+     * of those classes and of its ancestors. A `class#method` key leaves out
+     * the descendants that declare their own method of that name and never
+     * call this one, as {@see receiverOf()} does. Kept per key, since it
+     * depends only on the class hierarchy, the method table and the call
+     * graph.
+     *
+     * @return array{list<string>, array<string, true>} the slots, and the lower-case classes whose
+     *                                                   allocation sites the read also sees
+     */
+    public function classSlotsOf(string $owner): array
+    {
+        if (isset($this->classSlots[$owner])) {
+            return $this->classSlots[$owner];
+        }
+
+        $class = $owner;
+        $method = null;
+        $at = strpos($owner, '#');
+
+        if ($at !== false) {
+            $method = substr($owner, $at + 1);
+            $class = substr($owner, 0, $at);
+        }
+
+        $slots = $this->hierarchy->lookupOrder($class);
+        $below = [];
+        $declared = $method === null ? null : $this->resolveMethodKey($class, $method);
+
+        foreach ($this->hierarchy->descendantsOf($class) as $descendant) {
+            if ($method !== null && ! $this->runsOn($descendant, $class, $method, $declared)) {
+                continue;
+            }
+
+            $slots[] = $descendant;
+            $below[strtolower($descendant)] = true;
+        }
+
+        $below[strtolower($class)] = true;
+
+        return $this->classSlots[$owner] = [$slots, $below];
+    }
+
+    /**
+     * Whether a method runs on objects of more than one class: the classes
+     * that use a trait, or a class and a descendant that inherits the method
+     * or calls it through `parent::`. A trait has no objects of its own, so
+     * a trait method that one class uses runs on that class only.
+     */
+    public function runsOnSeveralClasses(string $class, string $method): bool
+    {
+        $key = $class . '::' . $method;
+
+        if (isset($this->several[$key])) {
+            return $this->several[$key];
+        }
+
+        [, $below] = $this->classSlotsOf($this->receiverOf($class, $method));
+        $classes = 0;
+
+        foreach (array_keys($below) as $each) {
+            if (! $this->hierarchy->isTrait((string) $each) && ++$classes > 1) {
+                return $this->several[$key] = true;
+            }
+        }
+
+        return $this->several[$key] = false;
+    }
+
+    /**
+     * A class, the classes and traits it inherits from, and every descendant
+     * with theirs: the classes whose methods can run on an object of it.
+     *
+     * @return array<string, true> lower-case names
+     */
+    public function relatedClasses(string $class): array
+    {
+        if (isset($this->related[$class])) {
+            return $this->related[$class];
+        }
+
+        $related = [];
+
+        foreach ([$class, ...$this->hierarchy->descendantsOf($class)] as $each) {
+            foreach ($this->hierarchy->lookupOrder($each) as $inherited) {
+                $related[strtolower($inherited)] = true;
+            }
+        }
+
+        return $this->related[$class] = $related;
     }
 }
