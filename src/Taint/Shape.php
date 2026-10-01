@@ -33,6 +33,17 @@ namespace Enshrined\WpTaint\Taint;
  * {@see DEPTH} levels of elements below the value. A part deeper than that
  * folds into its node's own taint, which loses precision and never loses
  * taint.
+ *
+ * ## Shared parts stay shared
+ *
+ * One shape can sit under many keys of another: a join reuses every element
+ * it does not change, and a function that returns its argument under two
+ * keys puts one shape under both. Each method below that rebuilds a shape
+ * maps a part it meets again to the result it gave the first time, and hands
+ * back a part it would not change. Rebuilding each meeting afresh made a copy
+ * of every path to a part. One level that shares a part under two keys
+ * doubles that copy, and four levels make it sixteen times larger. A
+ * whole-site scan ran out of 20GB copying one returned array this way.
  */
 final class Shape
 {
@@ -200,24 +211,45 @@ final class Shape
      */
     public function withProvenance(Provenance $provenance): self
     {
+        $done = [];
+
+        return $this->provenanced($provenance, $done);
+    }
+
+    /**
+     * @param array<int, self> $done each part already met, by object id, and
+     *                               what it became
+     */
+    private function provenanced(Provenance $provenance, array &$done): self
+    {
         if ($this->isEmpty()) {
             return $this;
         }
 
-        $elements = [];
+        $id = spl_object_id($this);
 
-        foreach ($this->elements as $key => $element) {
-            $elements[$key] = $element->withProvenance($provenance);
+        if (isset($done[$id])) {
+            return $done[$id];
         }
 
-        return new self(
-            $this->own,
-            $this->keys,
-            $elements,
-            $this->rest?->withProvenance($provenance),
-            $this->provenance ?? ($this->flatten()->isEmpty() ? null : $provenance),
-            $this->keysProvenance ?? ($this->keys->isEmpty() ? null : $provenance),
-        );
+        $elements = [];
+        $same = true;
+
+        foreach ($this->elements as $key => $element) {
+            $elements[$key] = $element->provenanced($provenance, $done);
+            $same = $same && $elements[$key] === $element;
+        }
+
+        $rest = $this->rest?->provenanced($provenance, $done);
+        $own = $this->provenance ?? ($this->flatten()->isEmpty() ? null : $provenance);
+        $keys = $this->keysProvenance ?? ($this->keys->isEmpty() ? null : $provenance);
+
+        // Every part already names its write, so the shape is its own answer.
+        if ($same && $rest === $this->rest && $own === $this->provenance && $keys === $this->keysProvenance) {
+            return $done[$id] = $this;
+        }
+
+        return $done[$id] = new self($this->own, $this->keys, $elements, $rest, $own, $keys);
     }
 
     /**
@@ -430,29 +462,46 @@ final class Shape
      */
     public function mapSets(\Closure $map): self
     {
+        $done = [];
+
+        return $this->mapped($map, $done);
+    }
+
+    /**
+     * @param \Closure(TaintSet): TaintSet $map
+     * @param array<int, self>             $done each part already met, by object id, and what it became
+     */
+    private function mapped(\Closure $map, array &$done): self
+    {
         if ($this->isEmpty()) {
             return $this;
+        }
+
+        $id = spl_object_id($this);
+
+        if (isset($done[$id])) {
+            return $done[$id];
         }
 
         $elements = [];
 
         foreach ($this->elements as $key => $element) {
-            $mapped = $element->mapSets($map);
+            $mapped = $element->mapped($map, $done);
 
             if (! $mapped->isEmpty()) {
                 $elements[$key] = $mapped;
             }
         }
 
-        $rest = $this->rest?->mapSets($map);
+        $rest = $this->rest?->mapped($map, $done);
         $own = $map($this->own);
         $keys = $map($this->keys);
 
         if ($own->isEmpty() && $keys->isEmpty() && $elements === [] && ($rest === null || $rest->isEmpty())) {
-            return self::empty();
+            return $done[$id] = self::empty();
         }
 
-        return new self($own, $keys, $elements, $rest === null || $rest->isEmpty() ? null : $rest);
+        return $done[$id] = new self($own, $keys, $elements, $rest === null || $rest->isEmpty() ? null : $rest);
     }
 
     /**
@@ -466,8 +515,26 @@ final class Shape
      */
     public function mapSetsAndOthers(\Closure $map, \Closure $others): self
     {
+        $done = [];
+
+        return $this->mappedAndOthers($map, $others, $done);
+    }
+
+    /**
+     * @param \Closure(TaintSet): TaintSet  $map
+     * @param \Closure(string, self): ?self $others
+     * @param array<int, self>              $done   each part already met, by object id, and what it became
+     */
+    private function mappedAndOthers(\Closure $map, \Closure $others, array &$done): self
+    {
         if ($this->isEmpty()) {
             return $this;
+        }
+
+        $id = spl_object_id($this);
+
+        if (isset($done[$id])) {
+            return $done[$id];
         }
 
         $elements = [];
@@ -484,22 +551,23 @@ final class Shape
                 continue;
             }
 
-            $mapped = $element->mapSetsAndOthers($map, $others);
+            $mapped = $element->mappedAndOthers($map, $others, $done);
 
             if (! $mapped->isEmpty()) {
                 $elements[$key] = $mapped;
             }
         }
 
-        $rest = $this->rest?->mapSetsAndOthers($map, $others);
+        $rest = $this->rest?->mappedAndOthers($map, $others, $done);
         $own = $map($this->own);
         $keys = $map($this->keys);
 
         if ($own->isEmpty() && $keys->isEmpty() && $elements === [] && ($rest === null || $rest->isEmpty())) {
-            return $placed;
+            return $done[$id] = $placed;
         }
 
-        return (new self($own, $keys, $elements, $rest === null || $rest->isEmpty() ? null : $rest))->join($placed);
+        return $done[$id] = (new self($own, $keys, $elements, $rest === null || $rest->isEmpty() ? null : $rest))
+            ->join($placed);
     }
 
     /**
@@ -534,23 +602,39 @@ final class Shape
      */
     public function without(TaintSet $kinds): self
     {
+        $done = [];
+
+        return $this->kept($kinds, $done);
+    }
+
+    /**
+     * @param array<int, self> $done each part already met, by object id, and what it became
+     */
+    private function kept(TaintSet $kinds, array &$done): self
+    {
         if (! $this->flatten()->hasAny($kinds)) {
             return $this;
+        }
+
+        $id = spl_object_id($this);
+
+        if (isset($done[$id])) {
+            return $done[$id];
         }
 
         $elements = [];
 
         foreach ($this->elements as $key => $element) {
-            $kept = $element->without($kinds);
+            $kept = $element->kept($kinds, $done);
 
             if (! $kept->isEmpty()) {
                 $elements[$key] = $kept;
             }
         }
 
-        $rest = $this->rest?->without($kinds);
+        $rest = $this->rest?->kept($kinds, $done);
 
-        return new self(
+        return $done[$id] = new self(
             $this->own->without($kinds),
             $this->keys->without($kinds),
             $elements,
@@ -660,25 +744,52 @@ final class Shape
      */
     public function cut(int $levels): self
     {
+        $done = [];
+
+        return $this->cutTo($levels, $done);
+    }
+
+    /**
+     * @param array<string, self> $done each part already met at a depth, by object id and depth, and what it
+     *                                  became
+     */
+    private function cutTo(int $levels, array &$done): self
+    {
         if ($this->elements === [] && $this->rest === null) {
             return $this;
         }
 
+        // A part met at two depths keeps a different number of levels at each.
+        $id = spl_object_id($this) . ':' . max(0, $levels);
+
+        if (isset($done[$id])) {
+            return $done[$id];
+        }
+
         if ($levels <= 0) {
-            return self::of($this->flatten(), $this->provenance ?? $this->firstProvenance());
+            return $done[$id] = self::of($this->flatten(), $this->provenance ?? $this->firstProvenance());
         }
 
         $elements = [];
+        $same = true;
 
         foreach ($this->elements as $key => $element) {
-            $elements[$key] = $element->cut($levels - 1);
+            $elements[$key] = $element->cutTo($levels - 1, $done);
+            $same = $same && $elements[$key] === $element;
         }
 
-        return new self(
+        $rest = $this->rest?->cutTo($levels - 1, $done);
+
+        // Nothing here was deeper than the levels kept.
+        if ($same && $rest === $this->rest) {
+            return $done[$id] = $this;
+        }
+
+        return $done[$id] = new self(
             $this->own,
             $this->keys,
             $elements,
-            $this->rest?->cut($levels - 1),
+            $rest,
             $this->provenance,
             $this->keysProvenance,
         );

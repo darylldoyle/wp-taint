@@ -126,3 +126,77 @@ it('takes kinds out of every part and drops a part left clean', function (): voi
         ->and($without->restPart()->isEmpty())->toBeTrue()
         ->and($shape->without(TaintSet::of(TaintKind::Sql)))->toBe($shape);
 });
+
+/**
+ * A shape three levels deep with one part shared under ten keys at each
+ * level: 1,000 paths to its leaf, and four distinct parts.
+ */
+function sharedShape(): Shape
+{
+    $level = Shape::of(TaintSet::of(TaintKind::Html));
+
+    for ($depth = 0; $depth < 3; $depth++) {
+        $next = Shape::empty();
+
+        for ($key = 0; $key < 10; $key++) {
+            $next = $next->join(Shape::element('k' . $key, $level));
+        }
+
+        $level = $next;
+    }
+
+    return $level;
+}
+
+/**
+ * How many distinct part objects a shape is made of.
+ */
+function distinctParts(Shape $shape, array &$seen = []): int
+{
+    $seen[spl_object_id($shape)] = true;
+
+    foreach ($shape->elements() as $element) {
+        distinctParts($element, $seen);
+    }
+
+    if (! $shape->restPart()->isEmpty()) {
+        distinctParts($shape->restPart(), $seen);
+    }
+
+    return count($seen);
+}
+
+it('keeps a part shared under many keys shared when it rebuilds the shape', function (): void {
+    // Each rebuild once copied every path to a shared part. Four levels
+    // sharing under ten keys made 10,000 copies of the leaf, and a whole-site
+    // scan ran out of 20GB copying one returned array this way.
+    $shape = sharedShape();
+    $write = new Provenance(TraceVerb::Propagate, null, 'write');
+
+    expect(distinctParts($shape))->toBe(4);
+
+    $named = $shape->withProvenance($write);
+
+    expect(distinctParts($named))->toBe(4)
+        ->and($named->elementAt('k0'))->toBe($named->elementAt('k9'))
+        ->and($named->elementAt('k3')->elementAt('k5')->elementAt('k7')->provenance())->toBe($write)
+        ->and($named->equals($shape))->toBeTrue();
+
+    $mapped = $shape->mapSets(static fn (TaintSet $kinds): TaintSet => $kinds->with(TaintKind::Sql));
+
+    expect(distinctParts($mapped))->toBe(4)
+        ->and($mapped->elementAt('k2')->elementAt('k4')->elementAt('k6')->flatten()->toStrings())
+        ->toBe(['html', 'sql']);
+
+    expect(distinctParts(Shape::element('top', $shape)))->toBe(5)
+        ->and(distinctParts($shape->cut(1)))->toBe(2)
+        ->and(distinctParts($named->without(TaintSet::of(TaintKind::Html))))->toBe(1);
+});
+
+it('hands back a shape whose every part already names its write', function (): void {
+    $first = new Provenance(TraceVerb::Propagate, null, 'first');
+    $named = sharedShape()->withProvenance($first);
+
+    expect($named->withProvenance(new Provenance(TraceVerb::Propagate, null, 'second')))->toBe($named)
+        ->and($named->cut(Shape::DEPTH))->toBe($named);
+});
